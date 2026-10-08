@@ -134,7 +134,7 @@ async function pageOverview() {
     <section class="panel">
       <div class="panel-head"><h2>档案状态</h2>
         <div class="panel-actions">
-          <button id="reindex" class="btn">${icon('refresh')}<span>重建索引</span></button>
+          <button id="reindex" class="btn" title="忽略变化记录，重新读取所有影片">${icon('refresh')}<span>全量重建索引</span></button>
         </div>
       </div>
       ${rows.length ? `
@@ -170,7 +170,7 @@ async function pageLibraries() {
             <td class="mono"><span class="lib-path">${esc(item.Path)}</span></td>
             <td class="num lib-id">${esc(item.Id)}</td>
             <td><div class="row-actions">
-              <button class="btn btn-sm" data-lib-scan="${esc(item.Id)}" title="仅扫描该媒体库">${icon('refresh')}<span>扫描</span></button>
+              <button class="btn btn-sm" data-lib-scan="${esc(item.Id)}" title="仅更新该媒体库中新增或变化的影片">${icon('refresh')}<span>增量扫描</span></button>
               <button class="icon-btn danger" data-lib-delete="${esc(item.Id)}" title="删除媒体库索引（不删文件）">${icon('trash')}</button>
             </div></td>
           </tr>`).join('')}</tbody>
@@ -807,7 +807,8 @@ async function pageSettings() {
     ['监听地址', s.listen],
     ['数据库', s.db_path],
     ['缓存后端', s.cache + (s.redis_addr ? ` · ${s.redis_addr}/${s.redis_db}` : '')],
-    ['Redis 在线', s.redis_online ? '是' : '否']
+    ['Redis 在线', s.redis_online ? '是' : '否'],
+    ['媒体库监控', s.disable_library_monitor ? '已关闭' : s.library_monitor_mode === 'polling' ? '兼容模式（每 30 秒检查文件树）' : '实时监听']
   ];
   content.innerHTML = `
     <section class="panel">
@@ -1253,7 +1254,7 @@ const CRON_PRESETS = [
   ['每周一 04:00', '0 4 * * 1'],
   ['每月 1 日 05:00', '0 5 1 * *']
 ];
-const TASK_TYPE_TEXT = { scan: '扫描媒体库', reindex: '重建索引', probe: '媒体信息探测' };
+const TASK_TYPE_TEXT = { scan: '增量扫描媒体库', watch: '实时局部刷新', poll: '兼容模式局部刷新', reindex: '全量重建索引', probe: '媒体信息探测' };
 const RUN_STATUS_TEXT = { success: '成功', failed: '失败', skipped: '跳过', running: '进行中' };
 
 let scheduledEditId = null; // 正在编辑的任务 id（null = 新建）
@@ -1607,6 +1608,7 @@ function renderScanProgress(p) {
   scanFill.classList.toggle('is-indeterminate', !total && p.running);
   scanFill.style.width = total ? `${Math.min(100, Math.round(done / total * 100))}%` : '100%';
   const parts = [];
+  parts.push(`新增 ${p.added || 0}`, `更新 ${p.updated || 0}`, `跳过 ${p.skipped || 0}`, `删除 ${p.deleted || 0}`);
   if (p.success) parts.push(`可播放 ${p.success}`);
   if (p.pending) parts.push(`待补录 ${p.pending}`);
   if (p.incompatible) parts.push(`不兼容 ${p.incompatible}`);
@@ -1645,7 +1647,7 @@ async function runScan(libraryId) {
   try {
     const url = libraryId ? `/scan?library_id=${encodeURIComponent(libraryId)}` : '/scan';
     const r = await api(url, { method: 'POST' });
-    toast(`扫描完成：${r.success} 可播放 / ${r.pending} 待补录 / ${r.incompatible} 不兼容`);
+    toast(`增量扫描完成：新增 ${r.added || 0} / 更新 ${r.updated || 0} / 跳过 ${r.skipped || 0} / 删除 ${r.deleted || 0} / 失败 ${r.failed || 0}`);
   } catch (e) { toast(e.message, 'error'); }
   try { renderScanProgress(await api('/scan/progress')); } catch { /* ignore */ }
   startScanPolling();

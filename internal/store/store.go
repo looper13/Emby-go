@@ -175,6 +175,8 @@ func (s *Store) init() error {
 CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL, type TEXT DEFAULT 'movies', enabled INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, library_id INTEGER NOT NULL, source_path TEXT UNIQUE NOT NULL, file_size INTEGER DEFAULT 0, file_mtime TEXT, source_protocol TEXT, source_container TEXT, number TEXT, status TEXT NOT NULL, nfo_path TEXT, output_dir TEXT, title TEXT, original_title TEXT, plot TEXT, year INTEGER, premiered TEXT, rating REAL, director TEXT, series TEXT, maker TEXT, label TEXT, collection TEXT, official_rating TEXT, sortname TEXT, taglines TEXT, provider_id TEXT, genres TEXT, tags TEXT, studios TEXT, poster_path TEXT, backdrop_path TEXT, landscape_path TEXT, runtime_seconds INTEGER DEFAULT 0, additional_parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(library_id) REFERENCES libraries(id));
 CREATE TABLE IF NOT EXISTS userdata (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, position_ticks INTEGER DEFAULT 0, play_count INTEGER DEFAULT 0, played INTEGER DEFAULT 0, last_played_at TEXT, last_stopped_ticks INTEGER DEFAULT -1, is_favorite INTEGER NOT NULL DEFAULT 0, likes INTEGER NOT NULL DEFAULT 0, hide_from_resume INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS scan_fingerprints (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_movies_library_directory ON movies(library_id,output_dir);
 CREATE TABLE IF NOT EXISTS api_probe (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT, path TEXT, query TEXT, body_preview TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS actors (name TEXT PRIMARY KEY, avatar_url TEXT, avatar_tag TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
@@ -370,29 +372,30 @@ func (s *Store) SetKV(key, value string) error {
 	return err
 }
 
+const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at RETURNING id`
+
+func movieValues(movie Movie, size int64, mtime time.Time, now string) []any {
+	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now}
+}
+
 func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	q := `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at`
-	tx, err := s.db.Begin()
+	transaction, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	if _, err = tx.Exec(q, m.LibraryID, m.SourcePath, size, mtime.UTC().Format(time.RFC3339), m.SourceProtocol, m.SourceContainer, m.Number, m.Status, m.NFOPath, m.OutputDir, m.Title, m.OriginalTitle, m.Plot, m.Year, m.Premiere, m.Rating, m.Director, m.Series, m.Maker, m.Label, m.Collection, m.OfficialRating, m.SortName, jsonText(m.Taglines), m.ProviderID, jsonText(m.Genres), jsonText(m.Tags), jsonText(m.Studios), m.PosterPath, m.BackdropPath, m.LandscapePath, m.RuntimeSeconds, jsonText(m.AdditionalParts), now, now); err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
+	defer transaction.Rollback()
 	var id int64
-	if err = tx.QueryRow("SELECT id FROM movies WHERE source_path=?", m.SourcePath).Scan(&id); err != nil {
-		_ = tx.Rollback()
+	if err := transaction.QueryRow(upsertMovieSQL, movieValues(m, size, mtime, time.Now().UTC().Format(time.RFC3339))...).Scan(&id); err != nil {
 		return 0, err
 	}
-	// 相似度倒排特征随元数据一起更新（同一事务，避免出现半新半旧的特征）。
-	if err = refreshFeaturesTx(tx, id); err != nil {
-		_ = tx.Rollback()
+	if _, err := transaction.Exec("DELETE FROM scan_fingerprints WHERE movie_id=?", id); err != nil {
 		return 0, err
 	}
-	if err = tx.Commit(); err != nil {
+	if err := refreshFeaturesTx(transaction, id); err != nil {
+		return 0, err
+	}
+	if err := transaction.Commit(); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -1269,8 +1272,18 @@ func (s *Store) ReplaceActors(movieID int64, actors []ActorRef) error {
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec("DELETE FROM movie_actors WHERE movie_id=?", movieID); err != nil {
-		_ = tx.Rollback()
+	defer tx.Rollback()
+	if err := replaceActorsTx(tx, movieID, actors); err != nil {
+		return err
+	}
+	if err := refreshFeaturesTx(tx, movieID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func replaceActorsTx(transaction *sql.Tx, movieID int64, actors []ActorRef) error {
+	if _, err := transaction.Exec("DELETE FROM movie_actors WHERE movie_id=?", movieID); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -1279,25 +1292,18 @@ func (s *Store) ReplaceActors(movieID int64, actors []ActorRef) error {
 		if name == "" {
 			continue
 		}
-		if _, err = tx.Exec(`INSERT INTO actors(name,avatar_url,updated_at) VALUES(?,?,?)
+		if _, err := transaction.Exec(`INSERT INTO actors(name,avatar_url,updated_at) VALUES(?,?,?)
 			ON CONFLICT(name) DO UPDATE SET
 				avatar_url=CASE WHEN excluded.avatar_url<>'' THEN excluded.avatar_url ELSE actors.avatar_url END,
 				updated_at=excluded.updated_at`,
 			name, strings.TrimSpace(actor.AvatarURL), now); err != nil {
-			_ = tx.Rollback()
 			return err
 		}
-		if _, err = tx.Exec("INSERT OR IGNORE INTO movie_actors(movie_id,actor_name) VALUES(?,?)", movieID, name); err != nil {
-			_ = tx.Rollback()
+		if _, err := transaction.Exec("INSERT OR IGNORE INTO movie_actors(movie_id,actor_name) VALUES(?,?)", movieID, name); err != nil {
 			return err
 		}
 	}
-	// 演员是相似度特征之一，关系变了特征也要跟着变（同一事务）。
-	if err = refreshFeaturesTx(tx, movieID); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 // Actors 返回一部影片的演员（含头像索引），按姓名排序。

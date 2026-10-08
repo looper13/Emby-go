@@ -17,6 +17,7 @@ import (
 
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
+	"emby-go/internal/librarywatch"
 	"emby-go/internal/logging"
 	"emby-go/internal/metatube"
 	"emby-go/internal/scheduler"
@@ -75,7 +76,9 @@ type App struct {
 	probeSeen map[string]struct{}
 
 	// 计划任务调度器：定义存 DB，保存后 Reload 即时生效。
-	sched *scheduler.Scheduler
+	sched    *scheduler.Scheduler
+	watchMu  sync.Mutex
+	monitors map[int64]*librarywatch.Monitor
 
 	// nfoGate 是「扫库 / 探测 / 刮削」三者共用的 NFO 写入通道：
 	// 三者都会「读全文 → 改局部 → 原子写」同一批 NFO，并发会互相覆盖；
@@ -104,6 +107,10 @@ type scanStatus struct {
 	Pending      int    `json:"pending"`
 	Incompatible int    `json:"incompatible"`
 	Failed       int    `json:"failed"`
+	Added        int    `json:"added"`
+	Updated      int    `json:"updated"`
+	Skipped      int    `json:"skipped"`
+	Deleted      int    `json:"deleted"`
 	StartedAt    string `json:"started_at,omitempty"`
 	FinishedAt   string `json:"finished_at,omitempty"`
 	Error        string `json:"error,omitempty"`
@@ -132,7 +139,12 @@ func New(cfg config.Config) (*App, error) {
 	if err := redisCache.Ping(); err != nil {
 		return nil, fmt.Errorf("redis 连接失败(%s): %w", cfg.RedisAddr, err)
 	}
-	return newApp(cfg, redisCache)
+	app, err := newApp(cfg, redisCache)
+	if err != nil {
+		return nil, err
+	}
+	app.startLibraryMonitoring()
+	return app, nil
 }
 
 // newApp 供测试注入任意 cache 实现（如内存版），生产路径不走这里。
@@ -235,6 +247,7 @@ func (a *App) Close() {
 	}
 	a.probeTaskMu.Unlock()
 	a.rootCancel()
+	a.closeLibraryMonitors()
 	a.db.Close()
 }
 func (a *App) Handler() http.Handler { return a.router }

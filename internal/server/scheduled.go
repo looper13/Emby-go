@@ -26,8 +26,8 @@ import (
 
 // scheduledTypes 已接入调度器的任务类型。
 var scheduledTypes = map[string]string{
-	"scan":           "扫描媒体库",
-	"reindex":        "重建索引",
+	"scan":           "增量扫描媒体库",
+	"reindex":        "全量重建索引",
 	"probe":          "媒体信息探测",
 	"scrape":         "内置刮削",
 	"scrape_avatars": "演员头像补全",
@@ -67,7 +67,7 @@ func (a *App) runScheduledScan(task scheduler.Task) error {
 		return scheduler.ErrBusy
 	}
 	taskID := a.startTask(task.Type)
-	result, err := a.scanLibraries(libraryID)
+	result, err := a.scanLibrariesWithMode(libraryID, task.Type == "reindex")
 	if errors.Is(err, errScanBusy) {
 		a.finishTaskBusy(taskID, err.Error())
 		return scheduler.ErrBusy
@@ -78,7 +78,8 @@ func (a *App) runScheduledScan(task scheduler.Task) error {
 	}
 	slog.Info("计划任务扫描完成", "task", task.Name, "library_id", libraryID,
 		"success", result.Success, "pending", result.Pending,
-		"incompatible", result.Incompatible, "failed", result.Failed)
+		"incompatible", result.Incompatible, "failed", result.Failed,
+		"added", result.Added, "updated", result.Updated, "skipped", result.Skipped, "deleted", result.Deleted)
 	return nil
 }
 

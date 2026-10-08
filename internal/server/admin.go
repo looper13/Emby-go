@@ -45,7 +45,11 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
+	wasMonitored := a.stopLibraryMonitor(id)
 	if err = a.db.DeleteLibrary(id); err != nil {
+		if wasMonitored {
+			a.startLibraryMonitoring()
+		}
 		if store.NotFound(err) {
 			c.JSON(404, gin.H{"error": "library not found"})
 			return
@@ -70,6 +74,7 @@ func (a *App) adminAddLibrary(c *gin.Context) {
 		c.JSON(400, gin.H{"error": e.Error()})
 		return
 	}
+	a.watchLibrary(v)
 	c.JSON(200, v)
 }
 
@@ -154,6 +159,8 @@ func (a *App) updateScanProgress(p scanner.Progress) {
 	a.scanStatus.Total, a.scanStatus.Done, a.scanStatus.Current = p.Total, p.Done, p.Current
 	a.scanStatus.Success, a.scanStatus.Pending = p.Result.Success, p.Result.Pending
 	a.scanStatus.Incompatible, a.scanStatus.Failed = p.Result.Incompatible, p.Result.Failed
+	a.scanStatus.Added, a.scanStatus.Updated = p.Result.Added, p.Result.Updated
+	a.scanStatus.Skipped, a.scanStatus.Deleted = p.Result.Skipped, p.Result.Deleted
 }
 
 func (a *App) endScan(err error) {
@@ -178,9 +185,11 @@ func (a *App) adminScanProgress(c *gin.Context) {
 	c.JSON(200, status)
 }
 
-// scanLibraries 扫描指定媒体库（libraryID=0 表示全部）。扫描即重建：
-// 逐文件 upsert，收尾按磁盘现状删除失效索引行，再清缓存。
 func (a *App) scanLibraries(libraryID int64) (scanner.Result, error) {
+	return a.scanLibrariesWithMode(libraryID, false)
+}
+
+func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result, error) {
 	libraries, err := a.db.Libraries()
 	if err != nil {
 		return scanner.Result{}, err
@@ -206,7 +215,19 @@ func (a *App) scanLibraries(libraryID int64) (scanner.Result, error) {
 	for index, library := range selected {
 		a.setScanLibrary(index+1, library)
 		slog.Info("正在扫描媒体库", "library_id", library.ID, "name", library.Name, "path", library.Path)
-		current, err := scanner.ScanWithProgress(a.db, library, a.updateScanProgress)
+		scan := scanner.ScanWithProgress
+		if full {
+			scan = scanner.RebuildWithProgress
+		}
+		current, err := scan(a.db, library, a.updateScanProgress)
+		result.Success += current.Success
+		result.Pending += current.Pending
+		result.Incompatible += current.Incompatible
+		result.Failed += current.Failed
+		result.Added += current.Added
+		result.Updated += current.Updated
+		result.Skipped += current.Skipped
+		result.Deleted += current.Deleted
 		if err != nil {
 			slog.Error("媒体库扫描失败", "library", library.Name, "error", err)
 			scanErr = err
@@ -214,14 +235,13 @@ func (a *App) scanLibraries(libraryID int64) (scanner.Result, error) {
 		}
 		slog.Info("媒体库扫描完成", "library", library.Name,
 			"success", current.Success, "pending", current.Pending,
-			"incompatible", current.Incompatible, "failed", current.Failed)
-		result.Success += current.Success
-		result.Pending += current.Pending
-		result.Incompatible += current.Incompatible
-		result.Failed += current.Failed
+			"incompatible", current.Incompatible, "failed", current.Failed,
+			"added", current.Added, "updated", current.Updated, "skipped", current.Skipped, "deleted", current.Deleted)
 	}
 	// endScan 由上面的 defer 负责调用（panic 时也必须释放）。
-	a.cache.Clear()
+	if result.Added+result.Updated+result.Deleted > 0 || scanErr != nil {
+		a.cache.Clear()
+	}
 	return result, scanErr
 }
 
@@ -256,7 +276,6 @@ func (a *App) adminScan(c *gin.Context) {
 	c.JSON(200, result)
 }
 
-// adminReindex 全库重建索引（与扫描同一路径，仅范围是全部媒体库）。
 func (a *App) adminReindex(c *gin.Context) {
 	if a.scanning() {
 		c.JSON(http.StatusConflict, gin.H{"error": errScanBusy.Error()})
@@ -264,7 +283,7 @@ func (a *App) adminReindex(c *gin.Context) {
 	}
 	slog.Info("开始重建索引")
 	taskID := a.startTask("reindex")
-	result, err := a.scanLibraries(0)
+	result, err := a.scanLibrariesWithMode(0, true)
 	a.finishTask(taskID, err)
 	if err != nil {
 		if errors.Is(err, errScanBusy) {
@@ -598,13 +617,15 @@ func (a *App) adminImage(c *gin.Context) {
 
 func (a *App) adminSettings(c *gin.Context) {
 	c.JSON(200, gin.H{
-		"listen":       a.cfg.Addr(),
-		"db_path":      a.cfg.DBPath,
-		"debug":        a.cfg.Debug,
-		"cache":        "redis",
-		"redis_addr":   a.cfg.RedisAddr,
-		"redis_db":     a.cfg.RedisDB,
-		"redis_online": true,
+		"listen":                  a.cfg.Addr(),
+		"db_path":                 a.cfg.DBPath,
+		"debug":                   a.cfg.Debug,
+		"cache":                   "redis",
+		"redis_addr":              a.cfg.RedisAddr,
+		"redis_db":                a.cfg.RedisDB,
+		"redis_online":            true,
+		"library_monitor_mode":    a.cfg.MonitorMode(),
+		"disable_library_monitor": a.cfg.DisableLibraryMonitor,
 	})
 }
 

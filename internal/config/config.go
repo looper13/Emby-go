@@ -18,6 +18,9 @@ type ServerDomain struct {
 }
 
 type Config struct {
+	DisableLibraryMonitor bool   `yaml:"disable_library_monitor"`
+	LibraryMonitorMode    string `yaml:"library_monitor_mode"`
+
 	Port          int            `yaml:"port"` // 监听端口（如 18080）
 	DBPath        string         `yaml:"db_path"`
 	ServerName    string         `yaml:"server_name"` // 对外站点名（System/Info 的 ServerName）
@@ -71,9 +74,16 @@ func (c Config) Addr() string {
 	return fmt.Sprintf(":%d", c.Port)
 }
 
+func (cfg Config) MonitorMode() string {
+	if cfg.LibraryMonitorMode == "" {
+		return "realtime"
+	}
+	return cfg.LibraryMonitorMode
+}
+
 // Redis 为必选缓存后端：服务启动时即连接并 Ping，连不上直接拒绝启动。
 func Load(path string) (Config, error) {
-	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", path: path}
+	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", path: path}
 	if path == "" {
 		return cfg, nil
 	}
@@ -86,6 +96,10 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Port <= 0 {
 		cfg.Port = 18080
+	}
+	cfg.LibraryMonitorMode = cfg.MonitorMode()
+	if cfg.LibraryMonitorMode != "realtime" && cfg.LibraryMonitorMode != "polling" {
+		return cfg, fmt.Errorf("library_monitor_mode 必须为 realtime 或 polling，当前为 %q", cfg.LibraryMonitorMode)
 	}
 	cfg.path = path
 	return cfg, nil

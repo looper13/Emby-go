@@ -3,7 +3,9 @@ package scanner
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,6 +24,21 @@ type Result struct {
 	Pending      int `json:"pending"`
 	Incompatible int `json:"incompatible"`
 	Failed       int `json:"failed"`
+	Added        int `json:"added"`
+	Updated      int `json:"updated"`
+	Skipped      int `json:"skipped"`
+	Deleted      int `json:"deleted"`
+}
+
+func (result *Result) add(other Result) {
+	result.Success += other.Success
+	result.Pending += other.Pending
+	result.Incompatible += other.Incompatible
+	result.Failed += other.Failed
+	result.Added += other.Added
+	result.Updated += other.Updated
+	result.Skipped += other.Skipped
+	result.Deleted += other.Deleted
 }
 
 type candidate struct {
@@ -51,27 +68,97 @@ func Scan(s *store.Store, lib store.Library) (Result, error) {
 
 // ScanWithProgress 与 Scan 相同，但在每个分组处理完后回调进度（可为 nil）。
 func ScanWithProgress(s *store.Store, lib store.Library, onProgress func(Progress)) (Result, error) {
-	var result Result
+	return scanWithProgress(s, lib, false, onProgress)
+}
+
+func RebuildWithProgress(s *store.Store, lib store.Library, onProgress func(Progress)) (Result, error) {
+	return scanWithProgress(s, lib, true, onProgress)
+}
+
+func scanWithProgress(s *store.Store, lib store.Library, full bool, onProgress func(Progress)) (result Result, scanErr error) {
+	return scanDirectory(s, lib, lib.Path, true, full, nil, onProgress)
+}
+
+func RefreshDirectory(s *store.Store, lib store.Library, directory string, recursive bool, onProgress func(Progress)) (Result, error) {
+	root, err := filepath.Abs(lib.Path)
+	if err != nil {
+		return Result{}, err
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return Result{}, err
+	}
+	relative, err := filepath.Rel(root, absolute)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return Result{}, fmt.Errorf("刷新目录不在媒体库内: %s", directory)
+	}
+	return scanDirectory(s, lib, filepath.Join(lib.Path, relative), recursive, false, nil, onProgress)
+}
+
+func RefreshFiles(s *store.Store, lib store.Library, files []string, onProgress func(Progress)) (Result, error) {
+	if len(files) == 0 {
+		return Result{}, nil
+	}
+	root, err := filepath.Abs(lib.Path)
+	if err != nil {
+		return Result{}, err
+	}
+	normalized := make([]string, 0, len(files))
+	directory := ""
+	for _, file := range files {
+		absolute, err := filepath.Abs(file)
+		if err != nil {
+			return Result{}, err
+		}
+		relative, err := filepath.Rel(root, absolute)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return Result{}, fmt.Errorf("刷新文件不在媒体库内: %s", file)
+		}
+		path := filepath.Join(lib.Path, relative)
+		if directory != "" && directory != filepath.Dir(path) {
+			return Result{}, errors.New("局部刷新文件必须位于同一目录")
+		}
+		directory = filepath.Dir(path)
+		normalized = append(normalized, path)
+	}
+	return scanDirectory(s, lib, directory, false, true, normalized, onProgress)
+}
+
+func scanDirectory(s *store.Store, lib store.Library, directory string, recursive, full bool, files []string, onProgress func(Progress)) (result Result, scanErr error) {
+	rootInfo, err := os.Stat(lib.Path)
+	if err != nil {
+		return result, err
+	}
+	if !rootInfo.IsDir() {
+		return result, fmt.Errorf("媒体库路径不是目录: %s", lib.Path)
+	}
 	groups := make(map[string][]candidate)
-	err := filepath.Walk(lib.Path, func(path string, info os.FileInfo, walkErr error) error {
+	err = filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			// 单个目录不可读时跳过该目录，不因此中止整库重建（否则失效索引永远清不掉）。
-			if info != nil && info.IsDir() {
-				return filepath.SkipDir
+			if path == directory && filepath.Clean(directory) != filepath.Clean(lib.Path) && os.IsNotExist(walkErr) {
+				return nil
 			}
+			return walkErr
+		}
+		if path == directory && !entry.IsDir() {
+			return fmt.Errorf("媒体库根目录无法遍历: %s", path)
+		}
+		if entry.IsDir() && path != directory && !recursive {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
 			return nil
 		}
-		if info.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
-			return nil
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
 		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		candidate := candidate{path: path, info: info, base: base}
+		candidate := candidate{path: path, info: info, base: base, groupKey: groupKey(path)}
 		if match := cdPartPattern.FindStringSubmatch(base); match != nil {
 			candidate.base = match[1]
 			candidate.part = parsePart(match[2])
 			candidate.groupKey = filepath.Join(filepath.Dir(path), strings.ToLower(match[1]))
-		} else {
-			candidate.groupKey = path
 		}
 		groups[candidate.groupKey] = append(groups[candidate.groupKey], candidate)
 		return nil
@@ -79,6 +166,35 @@ func ScanWithProgress(s *store.Store, lib store.Library, onProgress func(Progres
 	if err != nil {
 		return result, err
 	}
+	var fingerprints map[string]string
+	if recursive && filepath.Clean(directory) == filepath.Clean(lib.Path) {
+		fingerprints, err = s.ScanFingerprints(lib.ID)
+	} else {
+		fingerprints, err = s.DirectoryScanFingerprints(lib.ID, filepath.Clean(directory), recursive)
+	}
+	if err != nil {
+		return result, err
+	}
+	if len(files) > 0 {
+		keys, all := affectedGroups(files)
+		if !all {
+			for key := range groups {
+				if !keys[key] {
+					delete(groups, key)
+				}
+			}
+			for path := range fingerprints {
+				if !keys[groupKey(path)] {
+					delete(fingerprints, path)
+				}
+			}
+		}
+	}
+	defer func() {
+		if result.Added+result.Updated+result.Deleted > 0 || scanErr != nil {
+			scanErr = errors.Join(scanErr, s.BumpVersion(lib.ID))
+		}
+	}()
 
 	total := len(groups)
 	report := func(done int, current string) {
@@ -89,6 +205,55 @@ func ScanWithProgress(s *store.Store, lib store.Library, onProgress func(Progres
 	report(0, "")
 
 	paths := make(map[string]struct{})
+	const batchSize = 100
+	batch := make([]store.ScannedMovie, 0, batchSize)
+	batchResult := Result{}
+	lastFlush := time.Now()
+	flush := func() error {
+		if err := s.SaveScannedMovies(batch); err != nil {
+			return err
+		}
+		result.add(batchResult)
+		clear(batch)
+		batch = batch[:0]
+		batchResult = Result{}
+		lastFlush = time.Now()
+		return nil
+	}
+	images := &imageDirectory{}
+	process := func(item candidate, parts []string, fallbackNFO string) error {
+		paths[item.path] = struct{}{}
+		before, err := readSourceState(item.path, parts, fallbackNFO, images)
+		if err != nil {
+			result.Failed++
+			return nil
+		}
+		previous, exists := fingerprints[item.path]
+		if !full && previous == before.Fingerprint {
+			result.Skipped++
+			return nil
+		}
+		item.info = before.Info
+		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO, before.Images)
+		if outcome.Failed != 0 {
+			result.add(outcome)
+			return nil
+		}
+		if exists {
+			outcome.Updated++
+		} else {
+			outcome.Added++
+		}
+		if after, err := readSourceState(item.path, parts, fallbackNFO, images); err == nil && after.Fingerprint == before.Fingerprint {
+			entry.Fingerprint = before.Fingerprint
+		}
+		batch = append(batch, entry)
+		batchResult.add(outcome)
+		if len(batch) >= batchSize || time.Since(lastFlush) >= 500*time.Millisecond {
+			return flush()
+		}
+		return nil
+	}
 	groupKeys := make([]string, 0, len(groups))
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
@@ -100,7 +265,7 @@ func ScanWithProgress(s *store.Store, lib store.Library, onProgress func(Progres
 		primary, parts, ok := stackedGroup(group)
 		if !ok {
 			for _, item := range group {
-				if err := scanCandidate(s, lib, item, nil, "", &result, paths); err != nil {
+				if err := process(item, nil, ""); err != nil {
 					return result, err
 				}
 			}
@@ -110,18 +275,36 @@ func ScanWithProgress(s *store.Store, lib store.Library, onProgress func(Progres
 				partPaths = append(partPaths, part.path)
 			}
 			fallbackNFO := filepath.Join(filepath.Dir(primary.path), primary.base+".nfo")
-			if err := scanCandidate(s, lib, primary, partPaths, fallbackNFO, &result, paths); err != nil {
+			if err := process(primary, partPaths, fallbackNFO); err != nil {
 				return result, err
 			}
 		}
 		done++
+		if len(batch) > 0 && time.Since(lastFlush) >= 500*time.Millisecond {
+			if err := flush(); err != nil {
+				return result, err
+			}
+		}
 		report(done, key)
 	}
-
-	if err := s.DeleteMissingSources(lib.ID, paths); err != nil {
+	if err := flush(); err != nil {
 		return result, err
 	}
-	return result, s.BumpVersion(lib.ID)
+
+	if result.Failed == 0 {
+		var missing []string
+		for path := range fingerprints {
+			if _, exists := paths[path]; !exists {
+				missing = append(missing, path)
+			}
+		}
+		result.Deleted, err = s.DeleteScannedSources(lib.ID, missing)
+		if err != nil {
+			return result, err
+		}
+	}
+	report(done, "")
+	return result, nil
 }
 
 // RescanOne 只重扫一个 .strm，用于单条刮削/编辑后立即刷新索引。
@@ -229,11 +412,27 @@ func stackedGroup(group []candidate) (candidate, []candidate, bool) {
 
 func scanCandidate(s *store.Store, lib store.Library, item candidate, additionalParts []string, fallbackNFO string, result *Result, paths map[string]struct{}) error {
 	paths[item.path] = struct{}{}
+	images := imageutil.FindImages(filepath.Dir(item.path), func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	})
+	entry, outcome := prepareCandidate(lib, item, additionalParts, fallbackNFO, images)
+	if outcome.Failed == 0 {
+		if err := s.SaveScannedMovies([]store.ScannedMovie{entry}); err != nil {
+			return err
+		}
+	}
+	result.add(outcome)
+	return nil
+}
+
+func prepareCandidate(lib store.Library, item candidate, additionalParts []string, fallbackNFO string, images imageutil.ImagePaths) (store.ScannedMovie, Result) {
+	result := Result{}
 	movie := store.Movie{LibraryID: lib.ID, SourcePath: item.path, OutputDir: filepath.Dir(item.path), Status: "pending", AdditionalParts: additionalParts}
 	line, err := ReadSource(item.path)
 	if err != nil {
 		result.Failed++
-		return nil
+		return store.ScannedMovie{}, result
 	}
 	setSource(&movie, line)
 	var actors []store.ActorRef
@@ -244,6 +443,11 @@ func scanCandidate(s *store.Store, lib store.Library, item candidate, additional
 			nfoPath = fallbackNFO
 			meta, nfoErr = nfo.Read(fallbackNFO)
 		}
+		var pathErr *os.PathError
+		if errors.As(nfoErr, &pathErr) && !os.IsNotExist(nfoErr) {
+			result.Failed++
+			return store.ScannedMovie{}, result
+		}
 		if nfoErr == nil {
 			applyMeta(&movie, meta, nfoPath)
 			// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
@@ -251,9 +455,9 @@ func scanCandidate(s *store.Store, lib store.Library, item candidate, additional
 				actors = append(actors, store.ActorRef{Name: actor.Name, AvatarURL: strings.TrimSpace(actor.Thumb)})
 			}
 			// 图片与元数据同一趟写入，避免成功影片入库两次。
-			movie.PosterPath = imageutil.FindPoster(movie.OutputDir)
-			movie.BackdropPath = imageutil.FindImage(movie.OutputDir, "fanart")
-			movie.LandscapePath = imageutil.FindImage(movie.OutputDir, "landscape")
+			movie.PosterPath = images.Poster
+			movie.BackdropPath = images.Backdrop
+			movie.LandscapePath = images.Landscape
 			result.Success++
 		} else {
 			result.Pending++
@@ -262,11 +466,7 @@ func scanCandidate(s *store.Store, lib store.Library, item candidate, additional
 		movie.Status = "incompatible"
 		result.Incompatible++
 	}
-	id, err := s.UpsertMovie(movie, item.info.Size(), item.info.ModTime())
-	if err != nil {
-		return err
-	}
-	return s.ReplaceActors(id, actors)
+	return store.ScannedMovie{Movie: movie, Size: item.info.Size(), ModTime: item.info.ModTime(), Actors: actors}, result
 }
 
 func applyMeta(movie *store.Movie, meta nfo.MovieMeta, nfoPath string) {

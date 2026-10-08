@@ -93,3 +93,40 @@ func TestProbeConfigFromYAML(t *testing.T) {
 		t.Errorf("探测配置 = %v/%d", cfg.ProbeTimeout(), cfg.ProbeWorkers())
 	}
 }
+
+func TestLibraryMonitorConfig(suite *testing.T) {
+	if mode := (Config{}).MonitorMode(); mode != "realtime" {
+		suite.Fatalf("default mode = %q", mode)
+	}
+	for _, test := range []struct {
+		name     string
+		body     string
+		mode     string
+		disabled bool
+		invalid  bool
+	}{
+		{name: "default", mode: "realtime"},
+		{name: "empty", body: "library_monitor_mode: ''", mode: "realtime"},
+		{name: "realtime", body: "library_monitor_mode: realtime", mode: "realtime"},
+		{name: "polling", body: "library_monitor_mode: polling", mode: "polling"},
+		{name: "disabled", body: "library_monitor_mode: polling\ndisable_library_monitor: true", mode: "polling", disabled: true},
+		{name: "invalid", body: "library_monitor_mode: typo", invalid: true},
+	} {
+		suite.Run(test.name, func(suite *testing.T) {
+			path := filepath.Join(suite.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(test.body), 0644); err != nil {
+				suite.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if test.invalid {
+				if err == nil || !strings.Contains(err.Error(), "library_monitor_mode") {
+					suite.Fatalf("invalid monitor mode was not rejected: %v", err)
+				}
+				return
+			}
+			if err != nil || cfg.MonitorMode() != test.mode || cfg.DisableLibraryMonitor != test.disabled {
+				suite.Fatalf("mode=%q disabled=%v err=%v", cfg.MonitorMode(), cfg.DisableLibraryMonitor, err)
+			}
+		})
+	}
+}

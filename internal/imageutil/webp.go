@@ -144,9 +144,18 @@ var imageExts = []string{".webp", ".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PN
 
 // findImage 返回 dir 下 base.<ext> 中第一个已存在的图片路径；不转换、不生成、不删除源文件。
 func findImage(dir, base string) string {
+	return findImageWith(dir, base, imageExists)
+}
+
+func imageExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func findImageWith(directory, base string, exists func(string) bool) string {
 	for _, ext := range imageExts {
-		path := filepath.Join(dir, base+ext)
-		if _, err := os.Stat(path); err == nil {
+		path := filepath.Join(directory, base+ext)
+		if exists(path) {
 			return path
 		}
 	}
@@ -156,8 +165,12 @@ func findImage(dir, base string) string {
 // FindPoster 返回目录中可作主海报的已有图片（poster→folder→cover→default，按此顺序）。
 // 找不到返回空串。不做 webp 转换，也不删除任何源文件。
 func FindPoster(dir string) string {
+	return findPosterWith(dir, imageExists)
+}
+
+func findPosterWith(directory string, exists func(string) bool) string {
 	for _, base := range []string{"poster", "folder", "cover", "default"} {
-		if path := findImage(dir, base); path != "" {
+		if path := findImageWith(directory, base, exists); path != "" {
 			return path
 		}
 	}
@@ -167,6 +180,20 @@ func FindPoster(dir string) string {
 // FindImage 返回目录中指定命名（如 fanart / landscape）的已有图片；找不到返回空串。
 func FindImage(dir, base string) string {
 	return findImage(dir, base)
+}
+
+type ImagePaths struct {
+	Poster    string
+	Backdrop  string
+	Landscape string
+}
+
+func FindImages(directory string, exists func(string) bool) ImagePaths {
+	return ImagePaths{
+		Poster:    findPosterWith(directory, exists),
+		Backdrop:  findImageWith(directory, "fanart", exists),
+		Landscape: findImageWith(directory, "landscape", exists),
+	}
 }
 
 // AspectRatio 读取图片真实宽高比（宽/高）。jpg/jpeg/png/webp 均可；
