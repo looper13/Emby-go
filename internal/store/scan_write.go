@@ -15,76 +15,117 @@ type ScannedMovie struct {
 }
 
 func (database *Store) SaveScannedMovies(movies []ScannedMovie) error {
+	_, err := database.SaveScannedMoviesWithStats(movies)
+	return err
+}
+
+// ScanWriteStats measures wall time, including any connection/lock waits inside
+// database calls. Begin and the first upsert cannot identify lock waits alone.
+type ScanWriteStats struct {
+	Total, Begin, Prepare, Movie, Actors, Features, Fingerprint, Commit time.Duration
+}
+
+func (database *Store) SaveScannedMoviesWithStats(movies []ScannedMovie) (stats ScanWriteStats, err error) {
 	if len(movies) == 0 {
-		return nil
+		return stats, nil
 	}
+	started := time.Now()
+	defer func() { stats.Total = time.Since(started) }()
+	stage := time.Now()
 	transaction, err := database.db.Begin()
+	stats.Begin = time.Since(stage)
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer transaction.Rollback()
+	stage = time.Now()
+	prepareStarted := stage
+	preparing := true
+	// Record partially completed preparation even if a statement fails.
+	defer func() {
+		if preparing {
+			stats.Prepare = time.Since(prepareStarted)
+		}
+	}()
 	upsert, err := transaction.Prepare(upsertMovieSQL)
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer upsert.Close()
 	fingerprint, err := transaction.Prepare(`INSERT INTO scan_fingerprints(movie_id, fingerprint) VALUES(?,?)
 ON CONFLICT(movie_id) DO UPDATE SET fingerprint=excluded.fingerprint`)
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer fingerprint.Close()
 	actorUpsert, err := transaction.Prepare(`INSERT INTO actors(name,avatar_url,updated_at) VALUES(?,?,?)
  ON CONFLICT(name) DO UPDATE SET avatar_url=CASE WHEN excluded.avatar_url<>'' THEN excluded.avatar_url ELSE actors.avatar_url END, updated_at=excluded.updated_at`)
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer actorUpsert.Close()
 	actorInsert, err := transaction.Prepare("INSERT OR IGNORE INTO movie_actors(movie_id,actor_name) VALUES(?,?)")
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer actorInsert.Close()
 	actorDelete, err := transaction.Prepare("DELETE FROM movie_actors WHERE movie_id=?")
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer actorDelete.Close()
 	actorSelect, err := transaction.Prepare("SELECT actor_name FROM movie_actors WHERE movie_id=?")
 	if err != nil {
-		return err
+		return stats, err
 	}
 	defer actorSelect.Close()
+	stats.Prepare = time.Since(stage)
+	preparing = false
 	ids := make([]int64, 0, len(movies))
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, entry := range movies {
 		var movieID int64
-		if err := upsert.QueryRow(movieValues(entry.Movie, entry.Size, entry.ModTime, now)...).Scan(&movieID); err != nil {
-			return err
+		stage = time.Now()
+		err = upsert.QueryRow(movieValues(entry.Movie, entry.Size, entry.ModTime, now)...).Scan(&movieID)
+		stats.Movie += time.Since(stage)
+		if err != nil {
+			return stats, err
 		}
 		ids = append(ids, movieID)
-		if err := saveScanActors(movieID, entry.Actors, now, actorSelect, actorDelete, actorUpsert, actorInsert); err != nil {
-			return err
+		stage = time.Now()
+		err = saveScanActors(movieID, entry.Actors, now, actorSelect, actorDelete, actorUpsert, actorInsert)
+		stats.Actors += time.Since(stage)
+		if err != nil {
+			return stats, err
 		}
-		if err := saveFeatureValuesTx(transaction, movieID, movieFeatureValues(entry.Movie, entry.Actors)); err != nil {
-			return err
+		stage = time.Now()
+		err = saveFeatureValuesTx(transaction, movieID, movieFeatureValues(entry.Movie, entry.Actors))
+		stats.Features += time.Since(stage)
+		if err != nil {
+			return stats, err
 		}
+		stage = time.Now()
 		if entry.Fingerprint == "" {
-			if _, err := transaction.Exec("DELETE FROM scan_fingerprints WHERE movie_id=?", movieID); err != nil {
-				return err
-			}
-		} else if _, err := fingerprint.Exec(movieID, entry.Fingerprint); err != nil {
-			return err
+			_, err = transaction.Exec("DELETE FROM scan_fingerprints WHERE movie_id=?", movieID)
+		} else {
+			_, err = fingerprint.Exec(movieID, entry.Fingerprint)
+		}
+		stats.Fingerprint += time.Since(stage)
+		if err != nil {
+			return stats, err
 		}
 	}
-	if err := transaction.Commit(); err != nil {
-		return err
+	stage = time.Now()
+	err = transaction.Commit()
+	stats.Commit = time.Since(stage)
+	if err != nil {
+		return stats, err
 	}
 	for index, id := range ids {
 		database.movieLibraries.Store(id, movies[index].Movie.LibraryID)
 		database.TouchMovie(id)
 	}
-	return nil
+	return stats, nil
 }
 
 func saveScanActors(movieID int64, actors []ActorRef, now string, selectNames, deleteNames, upsert, insert *sql.Stmt) error {

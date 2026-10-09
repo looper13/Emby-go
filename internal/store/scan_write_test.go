@@ -13,8 +13,13 @@ func TestSaveScannedMoviesAtomicAndComplete(test *testing.T) {
 		Actors: []ActorRef{{Name: "Actor", AvatarURL: "https://example.test/actor.jpg"}},
 		Size:   10, ModTime: time.Unix(1700000000, 0), Fingerprint: "v1:initial",
 	}
-	if err := database.SaveScannedMovies([]ScannedMovie{entry}); err != nil {
+	stats, err := database.SaveScannedMoviesWithStats([]ScannedMovie{entry})
+	if err != nil {
 		test.Fatal(err)
+	}
+	stages := stats.Begin + stats.Prepare + stats.Movie + stats.Actors + stats.Features + stats.Fingerprint + stats.Commit
+	if stats.Total <= 0 || stats.Total < stages {
+		test.Fatalf("committed batch timing does not cover its stages: %+v", stats)
 	}
 	id, err := database.MovieIDByPath(entry.Movie.SourcePath)
 	if err != nil {
@@ -52,8 +57,12 @@ func TestSaveScannedMoviesAtomicAndComplete(test *testing.T) {
 	invalid := entry
 	invalid.Movie.SourcePath = "/tmp/av/invalid.strm"
 	invalid.Movie.LibraryID = libraryID + 999
-	if err := database.SaveScannedMovies([]ScannedMovie{entry, invalid}); err == nil {
+	stats, err = database.SaveScannedMoviesWithStats([]ScannedMovie{entry, invalid})
+	if err == nil {
 		test.Fatal("invalid batch should fail")
+	}
+	if stats.Total < stats.Movie || stats.Commit != 0 {
+		test.Fatalf("failed batch timing omitted SQL failure or reported a commit: %+v", stats)
 	}
 	after, err = database.Movie(id)
 	fingerprints, fingerprintErr := database.ScanFingerprints(libraryID)

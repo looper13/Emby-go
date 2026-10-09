@@ -141,10 +141,14 @@ func RefreshFiles(ctx context.Context, s *store.Store, lib store.Library, files 
 }
 
 func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive, full bool, files []string, onProgress func(Progress)) (result Result, scanErr error) {
+	perf := newScanPerformance(lib, directory, recursive, full)
+	defer func() { perf.finish(result, scanErr) }()
+	walkStarted := time.Now()
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 	rootInfo, err := os.Stat(lib.Path)
+	perf.walk = time.Since(walkStarted)
 	if err != nil {
 		return result, err
 	}
@@ -173,6 +177,9 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		}
 		if time.Since(lastWalkReport) >= walkProgressInterval {
 			lastWalkReport = time.Now()
+			perf.walk = time.Since(walkStarted)
+			perf.candidates = len(groups)
+			perf.report(PhaseWalk, result)
 			reportWalk(path)
 		}
 		if walkErr != nil {
@@ -220,10 +227,14 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		groups[candidate.groupKey] = append(groups[candidate.groupKey], candidate)
 		return nil
 	})
+	perf.walk = time.Since(walkStarted)
+	perf.candidates = len(groups)
 	if err != nil {
 		return result, err
 	}
 	var fingerprints map[string]string
+	perf.phase("index")
+	stageStarted := time.Now()
 	if targeted {
 		prefixes := make([]string, 0, len(keys))
 		for key := range keys {
@@ -235,6 +246,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	} else {
 		fingerprints, err = s.DirectoryScanFingerprints(lib.ID, filepath.Clean(directory), recursive)
 	}
+	perf.index = time.Since(stageStarted)
 	if err != nil {
 		return result, err
 	}
@@ -247,7 +259,9 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	}
 	defer func() {
 		if result.Added+result.Updated+result.Deleted > 0 || scanErr != nil {
+			started := time.Now()
 			scanErr = errors.Join(scanErr, s.BumpVersion(lib.ID))
+			perf.version += time.Since(started)
 		}
 	}()
 
@@ -256,6 +270,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	}
 
 	total := len(groups)
+	perf.phase(PhaseProcess)
 	report := func(done int, current string) {
 		if onProgress != nil {
 			onProgress(Progress{LibraryID: lib.ID, LibraryName: lib.Name, Phase: PhaseProcess, Total: total, Done: done, Current: current, Result: result})
@@ -270,6 +285,10 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	lastFlush := time.Now()
 	largeSnapshots := make(map[string][]string)
 	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		started := time.Now()
 		// Large directories share the artwork catalog, but certify membership
 		// once per batch so new/deleted numbered images cannot leave a stale
 		// fingerprint that would prevent a subsequent scan from correcting it.
@@ -284,7 +303,10 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			}
 		}
 		clear(largeSnapshots)
-		if err := s.SaveScannedMovies(batch); err != nil {
+		perf.verify += time.Since(started)
+		stats, err := s.SaveScannedMoviesWithStats(batch)
+		perf.addWrite(stats, len(batch), err)
+		if err != nil {
 			return err
 		}
 		result.add(batchResult)
@@ -296,14 +318,23 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	}
 	images := &imageDirectory{reuse: true}
 	if !recursive {
-		if err := walkImages.loadArtwork(artworkEntries); err != nil {
+		started := time.Now()
+		err := walkImages.loadArtwork(artworkEntries)
+		perf.source += time.Since(started)
+		if err != nil {
 			return result, err
 		}
 		images = walkImages
 	}
 	process := func(item candidate, parts []string, fallbackNFO string) error {
+		defer func() {
+			perf.processed++
+			perf.report(PhaseProcess, result)
+		}()
 		paths[item.path] = struct{}{}
+		started := time.Now()
 		before, err := readSourceState(item.path, parts, fallbackNFO, images)
+		perf.source += time.Since(started)
 		if err != nil {
 			result.Failed++
 			return nil
@@ -314,7 +345,9 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			return nil
 		}
 		item.info = before.Info
+		started = time.Now()
 		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO, before.Images)
+		perf.prepare += time.Since(started)
 		if outcome.Failed != 0 {
 			result.add(outcome)
 			return nil
@@ -325,6 +358,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			outcome.Added++
 		}
 		// Cached image selection must never certify stability.
+		started = time.Now()
 		freshImages := &imageDirectory{}
 		if images.large {
 			// 大目录复用已有的目录清单：statOnly 的 imageDirectory 若没有 names，
@@ -350,6 +384,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		} else {
 			images = &imageDirectory{reuse: true}
 		}
+		perf.verify += time.Since(started)
 		batch = append(batch, entry)
 		batchResult.add(outcome)
 		if len(batch) >= batchSize || time.Since(lastFlush) >= 500*time.Millisecond {
@@ -406,6 +441,8 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	}
 
 	if result.Failed == 0 {
+		perf.phase("cleanup")
+		started := time.Now()
 		var missing []string
 		for path := range fingerprints {
 			if _, exists := paths[path]; !exists {
@@ -413,6 +450,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			}
 		}
 		result.Deleted, err = s.DeleteScannedSources(lib.ID, missing)
+		perf.cleanup += time.Since(started)
 		if err != nil {
 			return result, err
 		}
