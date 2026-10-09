@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,8 +19,18 @@ import (
 // Store 的 gversion 是 kv 中 'g:version' 的进程内镜像：列表/详情缓存键都含该值，
 // 每个请求都要读一次，走内存可免去单连接 SQLite 的串行查询。
 type Store struct {
-	db       *sql.DB
-	gversion atomic.Int64
+	db                   *sql.DB
+	gversion             atomic.Int64
+	movieVersions        sync.Map
+	userDataVersions     sync.Map
+	movieLibraries       sync.Map
+	libraryMovieVersions sync.Map
+	scrapeVersions       sync.Map
+	scrapeVersion        atomic.Uint64
+	movieEpoch           string
+	actorVersion         atomic.Uint64
+	versionMu            sync.RWMutex
+	libraryVersions      map[string]int64
 	// featuresReady 在首次倒排特征回填结束时关闭（见 Open）。
 	featuresReady chan struct{}
 	// visibleCount/visibleVersion 可见影片数缓存（见 visibleMovieCount）。
@@ -63,6 +74,7 @@ type Movie struct {
 	ProviderID      string `json:"provider_id"`     // NFO uniqueid type=metatube
 	PosterPath      string
 	BackdropPath    string
+	BackdropPaths   []string
 	LandscapePath   string
 	RuntimeSeconds  int64
 	AdditionalParts []string
@@ -110,7 +122,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db}
+	var cacheID [16]byte
+	if _, err := rand.Read(cacheID[:]); err != nil {
+		db.Close()
+		return nil, err
+	}
+	s := &Store{db: db, movieEpoch: hex.EncodeToString(cacheID[:]), libraryVersions: make(map[string]int64)}
 	if err := s.init(); err != nil {
 		db.Close()
 		return nil, err
@@ -120,6 +137,7 @@ func Open(path string) (*Store, error) {
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN likes INTEGER NOT NULL DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN hide_from_resume INTEGER NOT NULL DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN landscape_path TEXT")
+	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN backdrop_paths TEXT NOT NULL DEFAULT '[]'")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN collection TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN official_rating TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN sortname TEXT")
@@ -142,6 +160,27 @@ func Open(path string) (*Store, error) {
 	_ = db.QueryRow("SELECT value FROM kv WHERE key='g:version'").Scan(&version)
 	if n, err := strconv.ParseInt(version, 10, 64); err == nil {
 		s.gversion.Store(n)
+	}
+	rows, err := db.Query("SELECT key,value FROM kv WHERE key LIKE 'lib:%:version'")
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			rows.Close()
+			db.Close()
+			return nil, err
+		}
+		n, _ := strconv.ParseInt(value, 10, 64)
+		s.libraryVersions[key] = n
+	}
+	loadErr := rows.Err()
+	rows.Close()
+	if loadErr != nil {
+		db.Close()
+		return nil, loadErr
 	}
 	// 存量库回填相似度倒排特征（此后由 UpsertMovie / ReplaceActors 增量维护）。
 	// 放后台跑：两万部的库回填要十几秒，不能让启动卡在这里；回填期间相似推荐
@@ -348,35 +387,16 @@ func parseStrings(v string) []string {
 	return out
 }
 
-func (s *Store) BumpVersion(libraryID int64) error {
-	_, err := s.db.Exec(`INSERT INTO kv(key,value) VALUES('g:version','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1`)
-	if err != nil {
-		return err
-	}
-	s.gversion.Add(1)
-	_, err = s.db.Exec(`INSERT INTO kv(key,value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1`, "lib:"+strconv.FormatInt(libraryID, 10)+":version")
-	return err
-}
-func (s *Store) Version(key string) string {
-	if key == "g:version" {
-		return strconv.FormatInt(s.gversion.Load(), 10)
-	}
-	var value string
-	_ = s.db.QueryRow("SELECT value FROM kv WHERE key=?", key).Scan(&value)
-	return value
-}
-
-// SetKV 写一条 kv（服务身份等长期配置用）。
 func (s *Store) SetKV(key, value string) error {
 	_, err := s.db.Exec(`INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
 
-const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at RETURNING id`
+const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at,backdrop_paths)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at,backdrop_paths=excluded.backdrop_paths RETURNING id`
 
 func movieValues(movie Movie, size int64, mtime time.Time, now string) []any {
-	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now}
+	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops())}
 }
 
 func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error) {
@@ -398,6 +418,8 @@ func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error)
 	if err := transaction.Commit(); err != nil {
 		return 0, err
 	}
+	s.movieLibraries.Store(id, m.LibraryID)
+	s.TouchMovie(id)
 	return id, nil
 }
 
@@ -518,29 +540,7 @@ func refreshFeaturesTx(tx *sql.Tx, movieID int64) error {
 	if err != nil {
 		return err
 	}
-	type feature struct {
-		kind   string
-		value  string
-		weight int
-	}
-	features := make([]feature, 0, 32)
-	add := func(kind, value string, weight int) {
-		if value = strings.TrimSpace(value); value != "" {
-			features = append(features, feature{kind: kind, value: value, weight: weight})
-		}
-	}
-	addList := func(kind string, raw string, weight int) {
-		for _, value := range parseStrings(raw) {
-			add(kind, value, weight)
-		}
-	}
-	addList(FeatureGenre, genres, WeightGenre)
-	addList(FeatureTag, tags, WeightTag)
-	addList(FeatureStudio, studios, WeightStudio)
-	add(FeatureDirector, director, WeightDirector)
-	// 系列取 <set><name>（collection），没有 set 时退回 <series>。
-	add(FeatureSeries, firstNonEmptyValue(collection, series), WeightSeries)
-
+	actors := []ActorRef{}
 	actorRows, err := tx.Query("SELECT actor_name FROM movie_actors WHERE movie_id=?", movieID)
 	if err != nil {
 		return err
@@ -551,20 +551,43 @@ func refreshFeaturesTx(tx *sql.Tx, movieID int64) error {
 			actorRows.Close()
 			return err
 		}
-		add(FeatureActor, name, WeightActor)
+		actors = append(actors, ActorRef{Name: name})
 	}
 	actorRows.Close()
 	if err = actorRows.Err(); err != nil {
 		return err
 	}
 
-	// 去重后与现有特征比对：一致就什么都不写。
-	// 扫库会对每部影片都走一遍 UpsertMovie，逐部无脑重写特征会让一次全库扫描多出
-	// 几十万条写语句；比对只需一次读。
-	next := make(map[string]int, len(features))
-	for _, item := range features {
-		next[item.kind+"\x00"+item.value] = item.weight
+	movie := Movie{Genres: parseStrings(genres), Tags: parseStrings(tags), Studios: parseStrings(studios), Director: director, Series: series, Collection: collection}
+	return saveFeatureValuesTx(tx, movieID, movieFeatureValues(movie, actors))
+}
+
+// Parsed scan data already contains every feature; do not read it back from SQLite.
+func movieFeatureValues(movie Movie, actors []ActorRef) map[string]int {
+	values := make(map[string]int)
+	add := func(kind, value string, weight int) {
+		if value = strings.TrimSpace(value); value != "" {
+			values[kind+"\x00"+value] = weight
+		}
 	}
+	for _, value := range movie.Genres {
+		add(FeatureGenre, value, WeightGenre)
+	}
+	for _, value := range movie.Tags {
+		add(FeatureTag, value, WeightTag)
+	}
+	for _, value := range movie.Studios {
+		add(FeatureStudio, value, WeightStudio)
+	}
+	add(FeatureDirector, movie.Director, WeightDirector)
+	add(FeatureSeries, firstNonEmptyValue(movie.Collection, movie.Series), WeightSeries)
+	for _, actor := range actors {
+		add(FeatureActor, actor.Name, WeightActor)
+	}
+	return values
+}
+
+func saveFeatureValuesTx(tx *sql.Tx, movieID int64, next map[string]int) error {
 	existing := make(map[string]int, len(next))
 	rows, err := tx.Query("SELECT kind, value, weight FROM movie_features WHERE movie_id=?", movieID)
 	if err != nil {
@@ -748,27 +771,33 @@ func (s *Store) visibleMovieCount() int {
 // MoviesByIDs 批量取影片（按 id 集合，返回 id→影片映射）。
 func (s *Store) MoviesByIDs(ids []int64) (map[int64]Movie, error) {
 	out := make(map[int64]Movie, len(ids))
-	if len(ids) == 0 {
-		return out, nil
-	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	rows, err := s.db.Query("SELECT "+movieCols+" FROM movies WHERE id IN ("+placeholders+")", args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		movie, err := movieScan(rows)
+	const batchSize = 500
+	for start := 0; start < len(ids); start += batchSize {
+		batch := ids[start:min(start+batchSize, len(ids))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, len(batch))
+		for index, id := range batch {
+			args[index] = id
+		}
+		rows, err := s.db.Query("SELECT "+movieCols+" FROM movies WHERE id IN ("+placeholders+")", args...)
 		if err != nil {
 			return nil, err
 		}
-		out[movie.ID] = movie
+		for rows.Next() {
+			movie, err := movieScan(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[movie.ID] = movie
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) MovieIDByPath(path string) (int64, error) {
@@ -789,6 +818,7 @@ func (s *Store) DeleteMovie(id int64) error {
 	if count == 0 {
 		return sql.ErrNoRows
 	}
+	s.TouchMovie(id)
 	return nil
 }
 
@@ -798,6 +828,27 @@ func (s *Store) DeleteLibrary(id int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
+	}
+	ids := []int64{}
+	rows, err := tx.Query("SELECT id FROM movies WHERE library_id=?", id)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	for rows.Next() {
+		var movieID int64
+		if err := rows.Scan(&movieID); err != nil {
+			rows.Close()
+			tx.Rollback()
+			return err
+		}
+		ids = append(ids, movieID)
+	}
+	readErr := rows.Err()
+	rows.Close()
+	if readErr != nil {
+		tx.Rollback()
+		return readErr
 	}
 	if _, err = tx.Exec("DELETE FROM movies WHERE library_id=?", id); err != nil {
 		_ = tx.Rollback()
@@ -817,7 +868,13 @@ func (s *Store) DeleteLibrary(id int64) error {
 		_ = tx.Rollback()
 		return sql.ErrNoRows
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for _, movieID := range ids {
+		s.TouchMovie(movieID)
+	}
+	return nil
 }
 
 func (s *Store) DeleteMissingSources(libraryID int64, paths map[string]struct{}) error {
@@ -839,18 +896,15 @@ func (s *Store) DeleteMissingSources(libraryID int64, paths map[string]struct{})
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, path := range missing {
-		if _, err := s.db.Exec("DELETE FROM movies WHERE library_id=? AND source_path=?", libraryID, path); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = s.DeleteScannedSources(libraryID, missing)
+	return err
 }
 
 func movieScan(row *sql.Rows) (Movie, error) {
 	var m Movie
-	var genres, tags, studios, taglines, parts, mt string
-	err := row.Scan(&m.ID, &m.LibraryID, &m.SourcePath, &mt, &m.SourceProtocol, &m.SourceContainer, &m.Number, &m.Status, &m.NFOPath, &m.OutputDir, &m.Title, &m.OriginalTitle, &m.Plot, &m.Year, &m.Premiere, &m.Rating, &m.Director, &m.Series, &m.Maker, &m.Label, &m.Collection, &m.OfficialRating, &m.SortName, &taglines, &m.ProviderID, &genres, &tags, &studios, &m.PosterPath, &m.BackdropPath, &m.LandscapePath, &m.RuntimeSeconds, &parts, &m.CreatedAt, &m.UpdatedAt, &m.LastScrapeAt, &m.LastScrapeError)
+	var genres, tags, studios, taglines, parts, mt, backdrops string
+	err := row.Scan(&m.ID, &m.LibraryID, &m.SourcePath, &mt, &m.SourceProtocol, &m.SourceContainer, &m.Number, &m.Status, &m.NFOPath, &m.OutputDir, &m.Title, &m.OriginalTitle, &m.Plot, &m.Year, &m.Premiere, &m.Rating, &m.Director, &m.Series, &m.Maker, &m.Label, &m.Collection, &m.OfficialRating, &m.SortName, &taglines, &m.ProviderID, &genres, &tags, &studios, &m.PosterPath, &m.BackdropPath, &m.LandscapePath, &m.RuntimeSeconds, &parts, &m.CreatedAt, &m.UpdatedAt, &m.LastScrapeAt, &m.LastScrapeError, &backdrops)
+	m.BackdropPaths = parseStrings(backdrops)
 	m.Genres = parseStrings(genres)
 	m.Tags = parseStrings(tags)
 	m.Studios = parseStrings(studios)
@@ -859,7 +913,7 @@ func movieScan(row *sql.Rows) (Movie, error) {
 	return m, err
 }
 
-const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,'')"
+const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]')"
 
 func (s *Store) Movie(id int64) (Movie, error) {
 	row, err := s.db.Query("SELECT "+movieCols+" FROM movies WHERE id=?", id)
@@ -1194,6 +1248,9 @@ func (s *Store) SetActorAvatar(name, url, tag string) error {
 			avatar_url=CASE WHEN excluded.avatar_url<>'' THEN excluded.avatar_url ELSE actors.avatar_url END,
 			avatar_tag=CASE WHEN excluded.avatar_tag<>'' THEN excluded.avatar_tag ELSE actors.avatar_tag END`,
 		name, url, tag, time.Now().UTC().Format(time.RFC3339))
+	if err == nil {
+		s.actorVersion.Add(1)
+	}
 	return err
 }
 
@@ -1213,6 +1270,9 @@ func (s *Store) SavePlayback(id int64, positionTicks, playCount int64, lastPlaye
 		ON CONFLICT(movie_id) DO UPDATE SET position_ticks=excluded.position_ticks,play_count=excluded.play_count,
 		last_played_at=excluded.last_played_at,last_stopped_ticks=excluded.last_stopped_ticks`,
 		id, positionTicks, playCount, lastPlayedAt, stoppedTicks)
+	if err == nil {
+		s.touchUserData(id)
+	}
 	return err
 }
 
@@ -1220,6 +1280,9 @@ func (s *Store) SavePlayback(id int64, positionTicks, playCount int64, lastPlaye
 func (s *Store) SetPlayed(id int64, played bool) error {
 	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,played) VALUES(?,?)
 		ON CONFLICT(movie_id) DO UPDATE SET played=excluded.played`, id, b2i(played))
+	if err == nil {
+		s.touchUserData(id)
+	}
 	return err
 }
 
@@ -1227,6 +1290,9 @@ func (s *Store) SetPlayed(id int64, played bool) error {
 func (s *Store) SetFavorite(id int64, favorite bool) error {
 	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,is_favorite) VALUES(?,?)
 		ON CONFLICT(movie_id) DO UPDATE SET is_favorite=excluded.is_favorite`, id, b2i(favorite))
+	if err == nil {
+		s.touchUserData(id)
+	}
 	return err
 }
 
@@ -1234,6 +1300,9 @@ func (s *Store) SetFavorite(id int64, favorite bool) error {
 func (s *Store) SetLikes(id int64, likes int) error {
 	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,likes) VALUES(?,?)
 		ON CONFLICT(movie_id) DO UPDATE SET likes=excluded.likes`, id, likes)
+	if err == nil {
+		s.touchUserData(id)
+	}
 	return err
 }
 
@@ -1241,6 +1310,9 @@ func (s *Store) SetLikes(id int64, likes int) error {
 func (s *Store) SetHideFromResume(id int64, hidden bool) error {
 	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,hide_from_resume) VALUES(?,?)
 		ON CONFLICT(movie_id) DO UPDATE SET hide_from_resume=excluded.hide_from_resume`, id, b2i(hidden))
+	if err == nil {
+		s.touchUserData(id)
+	}
 	return err
 }
 func (s *Store) Probe(method, path, query, body string) error {
@@ -1279,7 +1351,11 @@ func (s *Store) ReplaceActors(movieID int64, actors []ActorRef) error {
 	if err := refreshFeaturesTx(tx, movieID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.TouchMovie(movieID)
+	return nil
 }
 
 func replaceActorsTx(transaction *sql.Tx, movieID int64, actors []ActorRef) error {
@@ -1962,8 +2038,17 @@ func (s *Store) CountMoviesForScrape(libraryID int64, onlyMissing bool) (int, er
 
 // SetScrapeResult 记录一次刮削的结束状态。message 为空表示成功（清空上次的错误）。
 func (s *Store) SetScrapeResult(movieID int64, message string) error {
-	_, err := s.db.Exec("UPDATE movies SET last_scrape_at=?, last_scrape_error=? WHERE id=?",
-		time.Now().UTC().Format(time.RFC3339), message, movieID)
+	var libraryID int64
+	err := s.db.QueryRow("UPDATE movies SET last_scrape_at=?,last_scrape_error=? WHERE id=? RETURNING library_id", time.Now().UTC().Format(time.RFC3339), message, movieID).Scan(&libraryID)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err == nil {
+		s.TouchMovie(movieID)
+		s.scrapeVersion.Add(1)
+		v, _ := s.scrapeVersions.LoadOrStore(libraryID, &atomic.Uint64{})
+		v.(*atomic.Uint64).Add(1)
+	}
 	return err
 }
 

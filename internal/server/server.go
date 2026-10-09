@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,24 +26,27 @@ import (
 )
 
 type App struct {
-	cfg        config.Config
-	db         *store.Store
-	router     *gin.Engine
-	cache      cache.Cache
-	adminMu    sync.RWMutex // 保护 adminName：初始化/登录写，其它 handler 并发读
-	adminName  string
-	serverID   string
-	serverName string
-	taskMu     sync.Mutex
-	tasks      []task
-	nextTaskID int64
+	cfg             config.Config
+	db              *store.Store
+	router          *gin.Engine
+	cache           *cache.Managed
+	scopeVersions   sync.Map
+	allScopeVersion atomic.Uint64
+	adminMu         sync.RWMutex // 保护 adminName：初始化/登录写，其它 handler 并发读
+	adminName       string
+	serverID        string
+	serverName      string
+	taskMu          sync.Mutex
+	tasks           []task
+	nextTaskID      int64
 
 	// 进程内短缓存：图片 mtime tag 与 NFO 流信息解析结果，
 	// 避免列表/详情请求对媒体盘反复 stat / XML 解析（媒体盘可能较慢）。
-	tagMu sync.Mutex
-	tags  map[string]tagEntry
-	nfoMu sync.Mutex
-	nfos  map[string]nfoCacheEntry
+	tagMu        sync.Mutex
+	tags         map[string]tagEntry
+	diskVersions map[string]uint64
+	nfoMu        sync.Mutex
+	nfos         map[string]nfoCacheEntry
 
 	// 图片链路的进程内缓存：imgMeta 存「影片 id → 图片路径」「演员名 → 头像路径」
 	// 这类每次请求都要的元信息（原本每张图一次 DB 查询，单连接下会串行排队）；
@@ -118,9 +122,10 @@ type scanStatus struct {
 
 // tagEntry / nfoCacheEntry 为上述短缓存的条目（neg 表示负缓存，TTL 更短）。
 type tagEntry struct {
-	tag string
-	ts  time.Time
-	neg bool
+	tag     string
+	ts      time.Time
+	neg     bool
+	version uint64
 }
 type nfoCacheEntry struct {
 	streams []gin.H
@@ -154,7 +159,7 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		return nil, err
 	}
 	a := &App{
-		cfg: cfg, db: db, cache: cacheStore,
+		cfg: cfg, db: db, cache: cache.NewManaged(cacheStore),
 		tags: make(map[string]tagEntry), nfos: make(map[string]nfoCacheEntry), probeSeen: make(map[string]struct{}),
 		imgMeta: cache.NewMemory(imageMetaCacheSize), imgThumb: cache.NewMemory(imageThumbCacheSize),
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
@@ -203,7 +208,7 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	}
 	// 恢复中间件在 panic 时打印堆栈，写入程序日志出口（同时保留控制台），
 	// 否则崩溃信息只会留在终端、落不进日志文件。
-	middlewares = append(middlewares, gin.RecoveryWithWriter(logging.AppWriter()))
+	middlewares = append(middlewares, requestRecoveryTo(logging.AppWriter()))
 	r.Use(middlewares...)
 	a.router = r
 	a.routes()

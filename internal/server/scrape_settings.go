@@ -216,6 +216,10 @@ func (a *App) adminSaveScrapeSettings(c *gin.Context) {
 			return
 		}
 	}
+	if len(writes) > 0 {
+		a.cache.Clear()
+		a.imgMeta.Clear()
+	}
 	a.adminScrapeSettings(c)
 }
 

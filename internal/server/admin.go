@@ -6,6 +6,7 @@ import (
 	"emby-go/internal/nfo"
 	"emby-go/internal/scanner"
 	"emby-go/internal/store"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"mime/multipart"
@@ -58,7 +59,7 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 		return
 	}
 	_ = a.db.BumpVersion(id)
-	a.cache.Clear()
+
 	slog.Info("删除媒体库", "library_id", id)
 	c.Status(http.StatusNoContent)
 }
@@ -220,6 +221,11 @@ func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result,
 			scan = scanner.RebuildWithProgress
 		}
 		current, err := scan(a.db, library, a.updateScanProgress)
+		if current.Added+current.Updated+current.Deleted > 0 || err != nil {
+			a.invalidateDiskPaths([]string{library.Path}, true)
+			a.db.InvalidateLibraryMovies(library.ID)
+			a.finishLibraryCacheRefresh(library.ID)
+		}
 		result.Success += current.Success
 		result.Pending += current.Pending
 		result.Incompatible += current.Incompatible
@@ -240,7 +246,7 @@ func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result,
 	}
 	// endScan 由上面的 defer 负责调用（panic 时也必须释放）。
 	if result.Added+result.Updated+result.Deleted > 0 || scanErr != nil {
-		a.cache.Clear()
+
 	}
 	return result, scanErr
 }
@@ -319,8 +325,7 @@ func (a *App) adminItems(c *gin.Context) {
 	if c.Query("scrape") != "" && status == "" {
 		status = store.StatusAll
 	}
-	// genre/tag/studio/person/collection 来自详情抽屉的实体跳转（点演员/类型/厂商/合集）。
-	ms, total, err := a.db.SearchAdmin(store.AdminQuery{
+	query := store.AdminQuery{
 		LibraryID:  libraryID,
 		Term:       c.Query("search"),
 		Status:     status,
@@ -335,25 +340,31 @@ func (a *App) adminItems(c *gin.Context) {
 		Desc:       strings.EqualFold(c.Query("order"), "desc"),
 		Limit:      limit,
 		Offset:     offset,
-	})
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
 	}
-	// 媒体墙需要观看状态（已看/收藏/进度）做角标与进度条。
-	ids := make([]int64, 0, len(ms))
-	for _, movie := range ms {
-		ids = append(ids, movie.ID)
-	}
-	dataMap, _ := a.db.DataFor(ids)
-	userData := make(map[string]gin.H, len(dataMap))
-	for id, data := range dataMap {
-		userData[strconv.FormatInt(id, 10)] = gin.H{
-			"played": data.Played, "favorite": data.IsFavorite,
-			"position_ticks": data.PositionTicks, "play_count": data.PlayCount,
+	key := responseKey("adminitems", a.cacheScope(libraryID), a.db.ScrapeVersion(libraryID), query)
+	a.cachedResponse(c, key, 5*time.Second, func() ([]byte, error) {
+		ms, total, err := a.db.SearchAdmin(query)
+		if err != nil {
+			return nil, err
 		}
-	}
-	c.JSON(200, gin.H{"items": ms, "total": total, "limit": limit, "offset": offset, "userdata": userData})
+		// 媒体墙需要观看状态（已看/收藏/进度）做角标与进度条。
+		ids := make([]int64, 0, len(ms))
+		for _, movie := range ms {
+			ids = append(ids, movie.ID)
+		}
+		dataMap, err := a.db.DataFor(ids)
+		if err != nil {
+			return nil, err
+		}
+		userData := make(map[string]gin.H, len(dataMap))
+		for id, data := range dataMap {
+			userData[strconv.FormatInt(id, 10)] = gin.H{
+				"played": data.Played, "favorite": data.IsFavorite,
+				"position_ticks": data.PositionTicks, "play_count": data.PlayCount,
+			}
+		}
+		return json.Marshal(gin.H{"items": ms, "total": total, "limit": limit, "offset": offset, "userdata": userData})
+	})
 }
 
 func (a *App) adminDelete(c *gin.Context) {
@@ -372,11 +383,15 @@ func (a *App) adminDelete(c *gin.Context) {
 		return
 	}
 	_ = a.db.BumpVersion(movie.LibraryID)
-	a.cache.Clear()
+
 	c.Status(http.StatusNoContent)
 }
 
 func (a *App) adminManual(c *gin.Context) {
+	if !a.claimNFORequest(c, "manual") {
+		return
+	}
+	defer a.releaseNFO("manual")
 	var req struct {
 		LibraryID     int64    `json:"library_id"`
 		SourcePath    string   `json:"source_path"`
@@ -433,11 +448,12 @@ func (a *App) adminManual(c *gin.Context) {
 	size, mtime := scanner.SourceStat(req.SourcePath)
 	u, _ := url.Parse(req.SourceURL)
 	m := store.Movie{LibraryID: req.LibraryID, SourcePath: req.SourcePath, SourceProtocol: strings.ToLower(u.Scheme), SourceContainer: strings.TrimPrefix(strings.ToLower(filepath.Ext(u.Path)), "."), Status: "manual", NFOPath: nfoPath, OutputDir: filepath.Dir(req.SourcePath), Number: req.Number, Title: req.Title, OriginalTitle: req.OriginalTitle, Year: req.Year, Plot: req.Plot, Director: req.Director, Series: req.Series, Maker: req.Maker, Label: req.Label, Genres: req.Genres, Tags: req.Tags, Studios: req.Studios, PosterPath: req.PosterPath, BackdropPath: req.BackdropPath}
+	a.invalidateDiskPaths([]string{m.SourcePath, m.NFOPath, m.PosterPath, m.BackdropPath, m.LandscapePath}, false)
 	id, err := a.db.UpsertMovie(m, size, mtime)
 	if err == nil {
 		err = a.db.BumpVersion(req.LibraryID)
 	}
-	a.cache.Clear()
+
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -447,6 +463,10 @@ func (a *App) adminManual(c *gin.Context) {
 }
 
 func (a *App) adminEdit(c *gin.Context) {
+	if !a.claimNFORequest(c, "edit") {
+		return
+	}
+	defer a.releaseNFO("edit")
 	id, e := strconv.ParseInt(c.Param("id"), 10, 64)
 	if e != nil {
 		c.JSON(404, gin.H{"error": "not found"})
@@ -501,11 +521,12 @@ func (a *App) adminEdit(c *gin.Context) {
 		m.Year = fields.Year
 	}
 	size, mtime := scanner.SourceStat(m.SourcePath)
+	a.invalidateMovieDisk(m.ID)
 	_, e = a.db.UpsertMovie(m, size, mtime)
 	if e == nil {
 		e = a.db.BumpVersion(m.LibraryID)
 	}
-	a.cache.Clear()
+
 	if e != nil {
 		c.JSON(500, gin.H{"error": e.Error()})
 		return
@@ -514,6 +535,10 @@ func (a *App) adminEdit(c *gin.Context) {
 }
 
 func (a *App) adminReread(c *gin.Context) {
+	if !a.claimNFORequest(c, "reread") {
+		return
+	}
+	defer a.releaseNFO("reread")
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "not found"})
@@ -542,16 +567,18 @@ func (a *App) adminReread(c *gin.Context) {
 	}
 	// 单文件重扫：整库重扫在「点一条重读源」这种场景下代价过高，
 	// 且会顺带触发 DeleteMissingSources，风险与收益不成比例。
+	a.invalidateMovieDisk(id)
 	if _, err = scanner.RescanOne(a.db, library, movie.SourcePath); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
+	a.invalidateMovieDisk(id)
 	movie, err = a.db.Movie(id)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "source no longer indexed"})
 		return
 	}
-	a.cache.Clear()
+
 	c.JSON(200, gin.H{"status": movie.Status, "protocol": movie.SourceProtocol})
 }
 
@@ -565,6 +592,10 @@ func saveUploadedWebP(header *multipart.FileHeader, destination string) error {
 }
 
 func (a *App) adminImage(c *gin.Context) {
+	if !a.claimNFORequest(c, "image") {
+		return
+	}
+	defer a.releaseNFO("image")
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	m, e := a.db.Movie(id)
 	if e != nil {
@@ -583,7 +614,7 @@ func (a *App) adminImage(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "unsupported image kind"})
 		return
 	}
-	dest := filepath.Join(m.OutputDir, name)
+	dest := imageutil.MovieImageDestination(m.SourcePath, m.OutputDir, strings.TrimSuffix(name, ".webp"))
 	if e = saveUploadedWebP(f, dest); e != nil {
 		c.JSON(500, gin.H{"error": e.Error()})
 		return
@@ -597,17 +628,22 @@ func (a *App) adminImage(c *gin.Context) {
 		m.PosterPath = dest
 	case "backdrop", "fanart":
 		m.BackdropPath = dest
+		m.BackdropPaths = imageutil.FindMovieImages(m.SourcePath, m.OutputDir, func(path string) bool {
+			info, err := os.Stat(path)
+			return err == nil && !info.IsDir()
+		}).Backdrops
 	case "landscape":
 		m.LandscapePath = dest
 	}
 	// 同名图片被覆盖，立即失效它的 tag 缓存，否则客户端几分钟内仍拿旧图。
 	a.invalidateImageTag(dest)
 	size, mtime := scanner.SourceStat(m.SourcePath)
+	a.invalidateMovieDisk(m.ID)
 	_, e = a.db.UpsertMovie(m, size, mtime)
 	if e == nil {
 		e = a.db.BumpVersion(m.LibraryID)
 	}
-	a.cache.Clear()
+
 	if e != nil {
 		c.JSON(500, gin.H{"error": e.Error()})
 		return
@@ -624,6 +660,7 @@ func (a *App) adminSettings(c *gin.Context) {
 		"redis_addr":              a.cfg.RedisAddr,
 		"redis_db":                a.cfg.RedisDB,
 		"redis_online":            true,
+		"cache_stats":             a.cache.Stats(),
 		"library_monitor_mode":    a.cfg.MonitorMode(),
 		"disable_library_monitor": a.cfg.DisableLibraryMonitor,
 	})

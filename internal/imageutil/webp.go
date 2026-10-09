@@ -8,7 +8,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
+	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 
@@ -140,7 +143,14 @@ func toRGBA(src image.Image) *image.RGBA {
 
 // imageExts 目录里认可的目标图片扩展名。含 webp：兼容旧版本扫描已生成的
 // poster.webp/fanart.webp/landscape.webp，重扫时不丢封面。
-var imageExts = []string{".webp", ".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG", ".WebP", ".WEBP"}
+var imageExts = func() []string {
+	extensions := []string{".webp", ".jpg", ".jpeg", ".png", ".gif", ".tbn"}
+	// Windows resolves these case variants to the same path; avoid duplicate stats.
+	if runtime.GOOS != "windows" {
+		extensions = append(extensions, ".JPG", ".JPEG", ".PNG", ".WebP", ".WEBP", ".GIF", ".TBN")
+	}
+	return extensions
+}()
 
 // findImage 返回 dir 下 base.<ext> 中第一个已存在的图片路径；不转换、不生成、不删除源文件。
 func findImage(dir, base string) string {
@@ -185,6 +195,7 @@ func FindImage(dir, base string) string {
 type ImagePaths struct {
 	Poster    string
 	Backdrop  string
+	Backdrops []string
 	Landscape string
 }
 
@@ -194,6 +205,33 @@ func FindImages(directory string, exists func(string) bool) ImagePaths {
 		Backdrop:  findImageWith(directory, "fanart", exists),
 		Landscape: findImageWith(directory, "landscape", exists),
 	}
+}
+
+// MovieImageDestination gives each source its own images, including version/CD suffixes.
+func MovieImageDestination(source, directory, kind string) string {
+	if directory == "" {
+		directory = filepath.Dir(source)
+	}
+	base := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
+	return filepath.Join(directory, base+"-"+kind+".webp")
+}
+
+// FindMovieImages prefers source-specific images and retains legacy directory art as fallback.
+func FindMovieImages(source, directory string, exists func(string) bool) ImagePaths {
+	names, _ := ArtworkNames(directory)
+	return FindMovieImagesWithNames(source, directory, exists, names)
+}
+
+// MovieImageSource returns the source stem for an image created by this service.
+func MovieImageSource(path string) (string, bool) {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	for _, kind := range []string{"poster", "cover", "default", "movie", "fanart", "thumb", "landscape"} {
+		suffix := "-" + kind
+		if strings.HasSuffix(strings.ToLower(base), suffix) && len(base) > len(suffix) {
+			return filepath.Join(filepath.Dir(path), base[:len(base)-len(suffix)]), true
+		}
+	}
+	return "", false
 }
 
 // AspectRatio 读取图片真实宽高比（宽/高）。jpg/jpeg/png/webp 均可；

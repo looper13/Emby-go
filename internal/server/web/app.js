@@ -587,6 +587,8 @@ async function openDetail(item) {
   const playable = st === 'success' || st === 'manual';
   const poster = m.PosterPath ? `/Items/${m.id}/Images/Primary` : '';
   const backdrop = m.BackdropPath ? `/Items/${m.id}/Images/Backdrop` : (m.LandscapePath ? `/Items/${m.id}/Images/Thumb` : poster);
+  const backdrops = (data.images || []).filter(image => image.ImageType === 'Backdrop');
+  const artworkUrl = image => `/Items/${m.id}/Images/Backdrop/${image.ImageIndex}?tag=${encodeURIComponent(image.ImageTag || '')}`;
   const head = [numberUnlessInTitle(title, m.Number), m.Year, fmtDuration(m.RuntimeSeconds), m.Rating ? `★ ${m.Rating}` : ''].filter(Boolean).join(' · ');
   const actors = data.actors || [];
 
@@ -614,6 +616,10 @@ async function openDetail(item) {
       </div>
 
       ${m.Plot ? `<section class="detail-section"><h3>简介</h3><p class="detail-plot">${esc(m.Plot)}</p></section>` : ''}
+
+      ${backdrops.length ? `<section class="detail-section"><h3>剧照 <small>${backdrops.length}</small></h3>
+        <div class="detail-artwork-grid">${backdrops.map((image, index) => `<a href="${esc(artworkUrl(image))}" target="_blank" rel="noopener"><img loading="lazy" src="${esc(artworkUrl(image))}&amp;maxWidth=480" alt="剧照 ${index + 1}"></a>`).join('')}</div>
+      </section>` : ''}
 
       <section class="detail-section"><h3>元数据</h3>
         <dl class="detail-meta">
@@ -803,11 +809,17 @@ async function pageManual() {
 /* ---------------------------------------------------------------- 设置 */
 async function pageSettings() {
   const s = await api('/settings');
+  const cacheStats = Object.entries(s.cache_stats || {}).filter(([kind]) => kind !== 'token' && kind !== 'apikey').map(([, value]) => value);
+  const hits = cacheStats.reduce((sum, v) => sum + (v.hits || 0), 0);
+  const misses = cacheStats.reduce((sum, v) => sum + (v.misses || 0), 0);
+  const shared = cacheStats.reduce((sum, v) => sum + (v.shared || 0), 0);
   const fields = [
     ['监听地址', s.listen],
     ['数据库', s.db_path],
     ['缓存后端', s.cache + (s.redis_addr ? ` · ${s.redis_addr}/${s.redis_db}` : '')],
     ['Redis 在线', s.redis_online ? '是' : '否'],
+    ['响应缓存命中率', hits + misses ? `${(hits / (hits + misses) * 100).toFixed(1)}% · 命中 ${hits} / 未命中 ${misses}` : '暂无请求'],
+    ['合并重复加载', `${shared} 次（统计自本次启动）`],
     ['媒体库监控', s.disable_library_monitor ? '已关闭' : s.library_monitor_mode === 'polling' ? '兼容模式（每 30 秒检查文件树）' : '实时监听']
   ];
   content.innerHTML = `

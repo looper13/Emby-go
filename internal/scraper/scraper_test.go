@@ -367,7 +367,7 @@ func TestApplyWritesNFOAndImages(t *testing.T) {
 		}
 	}
 	// 三张图都落盘为 webp。
-	for _, name := range []string{"poster.webp", "fanart.webp", "landscape.webp"} {
+	for _, name := range []string{"ABF-018-poster.webp", "ABF-018-fanart.webp", "ABF-018-landscape.webp"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || info.Size() == 0 {
 			t.Errorf("%s 未落盘: %v", name, err)

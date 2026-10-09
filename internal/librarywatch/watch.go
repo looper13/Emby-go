@@ -2,6 +2,7 @@ package librarywatch
 
 import (
 	"context"
+	"emby-go/internal/imageutil"
 	"errors"
 	"fmt"
 	"os"
@@ -89,14 +90,7 @@ func relevant(path string) bool {
 	if extension == ".strm" || extension == ".nfo" {
 		return true
 	}
-	if extension != ".jpg" && extension != ".jpeg" && extension != ".png" && extension != ".webp" {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))) {
-	case "poster", "folder", "cover", "default", "fanart", "landscape":
-		return true
-	}
-	return false
+	return imageutil.IsLocalArtwork(path)
 }
 
 func merge(pending map[string]Change, change Change) {

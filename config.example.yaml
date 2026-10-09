@@ -8,7 +8,7 @@
 # 监听端口
 port: 18080
 
-# 调试模式：true 时启用 gin 调试模式并在控制台打印详细请求体日志
+# 调试模式：true 时启用 gin 调试及脱敏请求头日志，不记录请求正文
 debug: false
 
 disable_library_monitor: false

@@ -18,7 +18,8 @@ func TestPollingSnapshotTracksOnlyRelevantChanges(test *testing.T) {
 	movie := filepath.Join(root, "movie.STRM")
 	nfo := filepath.Join(root, "movie.nfo")
 	poster := filepath.Join(root, "poster.jpg")
-	for _, path := range []string{movie, nfo, poster} {
+	privatePoster := filepath.Join(root, "movie-poster.webp")
+	for _, path := range []string{movie, nfo, poster, privatePoster} {
 		writeWatchFile(test, path)
 	}
 	before, err := readTreeSnapshot(context.Background(), root)
@@ -45,6 +46,9 @@ func TestPollingSnapshotTracksOnlyRelevantChanges(test *testing.T) {
 	if err := os.Remove(poster); err != nil {
 		test.Fatal(err)
 	}
+	if err := os.Remove(privatePoster); err != nil {
+		test.Fatal(err)
+	}
 	directory := filepath.Join(root, "new")
 	if err := os.Mkdir(directory, 0755); err != nil {
 		test.Fatal(err)
@@ -59,7 +63,7 @@ func TestPollingSnapshotTracksOnlyRelevantChanges(test *testing.T) {
 	for _, event := range diffTreeSnapshots(before, after) {
 		operations[event.Name] = event.Op
 	}
-	want := map[string]fsnotify.Op{movie: fsnotify.Write, nfo: fsnotify.Write, poster: fsnotify.Remove, directory: fsnotify.Create, nested: fsnotify.Create}
+	want := map[string]fsnotify.Op{movie: fsnotify.Write, nfo: fsnotify.Write, poster: fsnotify.Remove, privatePoster: fsnotify.Remove, directory: fsnotify.Create, nested: fsnotify.Create}
 	if !reflect.DeepEqual(operations, want) {
 		test.Fatalf("snapshot changes = %+v, want %+v", operations, want)
 	}

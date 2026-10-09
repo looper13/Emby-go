@@ -105,6 +105,7 @@ func (a *App) adminItemDetail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"movie":        movie,
+		"images":       a.movieImageInfo(movie),
 		"library_name": libraryName,
 		"userdata":     userData,
 		"has_userdata": hasUserData,

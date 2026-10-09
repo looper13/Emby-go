@@ -6,6 +6,36 @@ import (
 	"testing"
 )
 
+func TestRefreshFilesUnicodeCDAndLiteralPrefixDeletion(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"ÄMovie-CD1", "ÄMovie-CD2", "Other", "a_b", "axb", "a%b", "azb", "bang!a"} {
+		writeScanFile(t, root, name+".strm", "http://media.test/movie.mp4")
+		writeScanFile(t, root, name+".nfo", "<movie><title>Old</title></movie>")
+	}
+	database, library := scanLibrary(t, root)
+	requireScan(t, database, library, Result{Added: 7, Success: 7})
+	if err := os.Remove(filepath.Join(root, "ÄMovie-CD1.strm")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RefreshFiles(database, library, []string{filepath.Join(root, "ÄMovie-CD1.strm")}, nil)
+	if err != nil || result != (Result{Added: 1, Deleted: 1, Success: 1}) {
+		t.Fatalf("Unicode CD refresh: %+v %v", result, err)
+	}
+	for _, name := range []string{"a_b", "a%b", "bang!a"} {
+		path := filepath.Join(root, name+".strm")
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		result, err := RefreshFiles(database, library, []string{path}, nil)
+		if err != nil || result != (Result{Deleted: 1}) {
+			t.Fatalf("literal deletion %q: %+v %v", name, result, err)
+		}
+	}
+	if len(visible(t, database)) != 4 {
+		t.Fatal("targeted refresh removed an unrelated source")
+	}
+}
+
 func TestRefreshFilesIsLocalAndHonorsEvents(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"a", "b", "child/c"} {

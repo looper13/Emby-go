@@ -1,10 +1,68 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestSourcePrefixFingerprintsEscapeLiteralNames(t *testing.T) {
+	database, libraryID := newFeatureStore(t)
+	directory := filepath.Clean("/tmp/av")
+	for _, name := range []string{"a_b", "axb", "a%b", "azb", "bang!a", "unrelated"} {
+		path := filepath.Join(directory, name+".strm")
+		upsertFixtureMovie(t, database, libraryID, Movie{LibraryID: libraryID, SourcePath: path, OutputDir: directory, Status: "success"})
+		if err := database.SaveScanFingerprint(libraryID, path, "v1:"+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"a_b", "a%b", "bang!a"} {
+		fingerprints, err := database.SourcePrefixScanFingerprints(libraryID, directory, []string{filepath.Join(directory, name)})
+		if err != nil || len(fingerprints) != 1 || fingerprints[filepath.Join(directory, name+".strm")] != "v1:"+name {
+			t.Fatalf("literal prefix %q: %v %v", name, fingerprints, err)
+		}
+	}
+}
+
+func TestMoviesByIDsBatchesAndPreservesPendingMovies(t *testing.T) {
+	database, libraryID := newFeatureStore(t)
+	entries := make([]ScannedMovie, 505)
+	for index := range entries {
+		entries[index].Movie = Movie{LibraryID: libraryID, SourcePath: fmt.Sprintf("/tmp/av/batch-%d.strm", index), Status: "pending"}
+	}
+	if err := database.SaveScannedMovies(entries); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.db.Query("SELECT id FROM movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = append(ids, ids[0], 9999999)
+	movies, err := database.MoviesByIDs(ids)
+	if err != nil || len(movies) != len(entries) {
+		t.Fatalf("batched read: %d movies, %v", len(movies), err)
+	}
+	for _, movie := range movies {
+		if movie.Status != "pending" {
+			t.Fatal("pending movie was omitted or changed")
+		}
+	}
+}
 
 func TestScanFingerprintLifecycle(t *testing.T) {
 	database, libraryID := newFeatureStore(t)

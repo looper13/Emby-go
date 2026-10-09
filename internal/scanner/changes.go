@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"emby-go/internal/imageutil"
 	"path/filepath"
 	"strings"
 )
@@ -24,7 +25,11 @@ func affectedGroups(files []string) (map[string]bool, bool) {
 			base := strings.TrimSuffix(path, filepath.Ext(path))
 			keys[groupKey(base+".strm")] = true
 			keys[filepath.Join(filepath.Dir(path), strings.ToLower(filepath.Base(base)))] = true
-		case ".jpg", ".jpeg", ".png", ".webp":
+		case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".tbn":
+			if source, ok := imageutil.MovieImageSource(path); ok {
+				keys[groupKey(source+".strm")] = true
+				continue
+			}
 			return keys, true
 		}
 	}

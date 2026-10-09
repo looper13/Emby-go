@@ -2,7 +2,11 @@ package server
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httputil"
+	"net/url"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -13,10 +17,59 @@ import (
 // requestLogger 构造请求日志中间件：输出到请求日志文件（同时保留控制台），
 // 并跳过静态资源/流/图片的 2xx 请求。
 func requestLogger() gin.HandlerFunc {
+	return requestLoggerTo(logging.RequestWriter())
+}
+
+func requestLoggerTo(output io.Writer) gin.HandlerFunc {
 	return gin.LoggerWithConfig(gin.LoggerConfig{
-		Output: logging.RequestWriter(),
+		Output: output,
 		Skip:   skipRequestLog,
+		Formatter: func(param gin.LogFormatterParams) string {
+			return fmt.Sprintf("[GIN] %s | %3d | %13v | %15s | %-7s %q\n",
+				param.TimeStamp.Format("2006/01/02 - 15:04:05"), param.StatusCode, param.Latency,
+				param.ClientIP, param.Method, redactRequestTarget(param.Path))
+		},
 	})
+}
+
+func sensitiveRequestField(key string) bool {
+	key = strings.ToLower(key)
+	key = strings.NewReplacer("-", "", "_", "", ".", "", " ", "").Replace(key)
+	return key == "pw" || strings.Contains(key, "password") || strings.HasSuffix(key, "token") ||
+		strings.HasSuffix(key, "apikey") || strings.Contains(key, "authorization") ||
+		key == "cookie" || key == "setcookie" || key == "secret" || key == "clientsecret"
+}
+
+func redactRequestTarget(target string) string {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return strings.SplitN(target, "?", 2)[0]
+	}
+	parsed.User = nil
+	query := parsed.Query()
+	for key := range query {
+		if sensitiveRequestField(key) {
+			query.Set(key, "[REDACTED]")
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+// Log a detached header snapshot. Never consume or persist request bodies:
+// passwords and provider credentials may occur in JSON, forms or uploads.
+func redactedRequestDump(request *http.Request) ([]byte, error) {
+	copy := request.Clone(request.Context())
+	copy.URL.User = nil
+	_, copy.URL.RawQuery, _ = strings.Cut(redactRequestTarget("/?"+request.URL.RawQuery), "?")
+	copy.RequestURI = redactRequestTarget(request.RequestURI)
+	copy.Body = nil
+	for key := range copy.Header {
+		if sensitiveRequestField(key) {
+			copy.Header.Set(key, "[REDACTED]")
+		}
+	}
+	return httputil.DumpRequest(copy, false)
 }
 
 // skipRequestLog 判断该请求是否不记入请求日志。
@@ -51,13 +104,27 @@ func quietPath(path string) bool {
 	return false
 }
 
-// requestContentLogger debug 模式下把完整请求（含 body 与头）转储到请求日志文件。
+// requestContentLogger debug 模式只记录脱敏请求头，不记录正文。
 func requestContentLogger() gin.HandlerFunc {
+	return requestContentLoggerTo(logging.RequestWriter())
+}
+
+func requestContentLoggerTo(output io.Writer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		request, err := httputil.DumpRequest(c.Request, true)
+		request, err := redactedRequestDump(c.Request)
 		if err == nil {
-			fmt.Fprintf(logging.RequestWriter(), "[API REQUEST]\n%s\n", string(request))
+			fmt.Fprintf(output, "[API REQUEST]\n%s\n[body omitted]\n", string(request))
 		}
 		c.Next()
 	}
+}
+
+// Gin's default recovery dumps raw query strings and authentication headers.
+// Retain stack diagnostics using the same redacted snapshot as request logging.
+func requestRecoveryTo(output io.Writer) gin.HandlerFunc {
+	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, recovered any) {
+		request, _ := redactedRequestDump(c.Request)
+		fmt.Fprintf(output, "[API PANIC] type=%T\n%s\n%s\n", recovered, request, debug.Stack())
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
 }

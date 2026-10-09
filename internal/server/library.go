@@ -1,7 +1,10 @@
 package server
 
 import (
+	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -41,7 +44,7 @@ func (a *App) personAvatar(name string) (string, string) {
 	if name == "" {
 		return "", ""
 	}
-	key := "av:" + name
+	key := "av:" + a.db.ActorVersion() + ":" + name
 	if raw, ok := a.imgMeta.Get(key); ok {
 		path, tag, _ := strings.Cut(string(raw), "\n")
 		return path, tag
@@ -78,7 +81,7 @@ func (a *App) loadPersonAvatar(name string) (string, string) {
 // 缓存走进程内而不是 Redis：实体网格一页就是上百个实体，一个实体一次 Redis GET
 // 意味着一个请求上百次网络往返。结果只依赖库内容，本进程缓存即可。
 func (a *App) entityPosterPath(kind, name string) string {
-	key := "ep:" + kind + ":" + name
+	key := "ep:" + a.cacheScope(0) + ":" + kind + ":" + name
 	if raw, ok := a.imgMeta.Get(key); ok {
 		return string(raw)
 	}
@@ -182,10 +185,12 @@ func artRatio(path string) float64 {
 	return 2.0 / 3.0
 }
 
-// posterTag 用海报文件 mtime 生成稳定缓存标签，文件被替换后 tag 变化触发客户端刷新。
+// posterTag combines mtime and explicit disk invalidation so preserved timestamps
+// still change client ImageTags and conditional-request validators.
 // 结果做进程内短缓存，避免列表/图片请求对（可能较慢的）媒体盘反复 stat。
 func (a *App) posterTag(path string) string {
 	now := time.Now()
+	version := a.diskVersion(path)
 	a.tagMu.Lock()
 	if a.tags == nil {
 		a.tags = make(map[string]tagEntry)
@@ -195,7 +200,7 @@ func (a *App) posterTag(path string) string {
 		if e.neg {
 			ttl = 30 * time.Second
 		}
-		if now.Sub(e.ts) < ttl {
+		if e.version == version && now.Sub(e.ts) < ttl {
 			a.tagMu.Unlock()
 			return e.tag
 		}
@@ -204,29 +209,29 @@ func (a *App) posterTag(path string) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		a.tagMu.Lock()
-		a.tags[path] = tagEntry{tag: "0", ts: now, neg: true}
+		if a.diskVersions[cachePathKey(path)] == version {
+			a.tags[path] = tagEntry{tag: "0", ts: now, neg: true, version: version}
+		}
 		a.tagMu.Unlock()
 		return "0"
 	}
-	tag := strconv.FormatInt(info.ModTime().UnixNano(), 36)
+	stamp := strconv.FormatInt(info.ModTime().UnixNano(), 36) + ":" + strconv.FormatUint(version, 36)
+	digest := sha256.Sum256([]byte(stamp))
+	tag := hex.EncodeToString(digest[:16])
 	a.tagMu.Lock()
-	a.tags[path] = tagEntry{tag: tag, ts: now}
+	if a.diskVersions[cachePathKey(path)] == version {
+		a.tags[path] = tagEntry{tag: tag, ts: now, version: version}
+	}
 	a.tagMu.Unlock()
 	return tag
 }
 
 // invalidateImageTag 立即失效指定图片路径的 tag 缓存。
 //
-// posterTag 是 5 分钟进程内缓存，且 cache.Clear() 只清 Redis、清不到它——
+// posterTag 是 5 分钟进程内缓存，响应缓存失效不会自动清除它；
 // 覆盖同名图片（上传海报、写入演员头像）后若不显式失效，
 // 客户端会拿着旧的 ImageTag 继续显示旧图，最长 5 分钟。
-func (a *App) invalidateImageTag(paths ...string) {
-	a.tagMu.Lock()
-	defer a.tagMu.Unlock()
-	for _, path := range paths {
-		delete(a.tags, path)
-	}
-}
+func (a *App) invalidateImageTag(paths ...string) { a.invalidateDiskPaths(paths, false) }
 
 // invalidateNFOStreams 失效指定 NFO 的流信息缓存（刮削/编辑改写 NFO 后调用）。
 // probe 的整库任务结束后会整体清空；单条写入必须精确失效，否则详情抽屉
@@ -256,16 +261,22 @@ func (a *App) dropNFOCache(nfoPath string) {
 // （webp/jpg/jpeg/png 均可），没有则借用库内最近入库影片的代表图（宽图优先）。
 // 解析要多次 stat 媒体盘并可能回查库，按库版本号缓存（空结果同样缓存）。
 func (a *App) libraryCoverPath(l store.Library) string {
-	key := "libcover:" + a.db.Version("g:version") + ":" + strconv.FormatInt(l.ID, 10)
-	if b, ok := a.cache.Get(key); ok {
-		return string(b)
+	key := "libcover:" + a.cacheScope(l.ID)
+	data, err := a.cache.Load(a.rootCtx, key, 5*time.Minute, func() ([]byte, error) {
+		path := imageutil.FindPoster(l.Path)
+		if path == "" {
+			var err error
+			path, err = a.db.RepresentativeArt(l.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return []byte(path), nil
+	})
+	if err != nil {
+		return ""
 	}
-	path := imageutil.FindPoster(l.Path)
-	if path == "" {
-		path, _ = a.db.RepresentativeArt(l.ID)
-	}
-	a.cache.Set(key, []byte(path), 5*time.Minute)
-	return path
+	return string(data)
 }
 
 // libraryCoverPathByID 按库内部 id 解析封面；库不存在返回空串。
@@ -292,7 +303,7 @@ func (a *App) cachedCoverRatio(path string) float64 {
 	if path == "" {
 		return 0
 	}
-	key := "ar:" + path + ":" + a.posterTag(path)
+	key := "ar:" + path + ":" + a.posterTag(path) + ":v" + strconv.FormatUint(a.diskVersion(path), 10)
 	if raw, ok := a.imgMeta.Get(key); ok {
 		if ratio, err := strconv.ParseFloat(string(raw), 64); err == nil {
 			return ratio
@@ -306,7 +317,7 @@ func (a *App) cachedCoverRatio(path string) float64 {
 // cachedUnplayed 未播数量（Views 每次都统计，按库 + 全局版本号缓存）。
 // 版本号一变（扫描/刮削/标记已看）自动失效，TTL 再兜一层。
 func (a *App) cachedUnplayed(libraryID int64) int {
-	key := "unplayed:" + a.db.Version("g:version") + ":" + strconv.FormatInt(libraryID, 10)
+	key := "unplayed:" + a.cacheScope(libraryID) + ":" + strconv.FormatInt(libraryID, 10)
 	if raw, ok := a.imgMeta.Get(key); ok {
 		if count, err := strconv.Atoi(string(raw)); err == nil {
 			return count
@@ -508,75 +519,76 @@ func (a *App) similar(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	src, err := a.db.Movie(id)
-	if err != nil || !src.IsVisible() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "12"))
 	if limit < 1 || limit > 50 {
 		limit = 12
 	}
-	// 相似度结果按 (版本,影片,limit) 短缓存，重复进入详情页直接命中。
-	simKey := "similar:" + a.db.Version("g:version") + ":" + strconv.FormatInt(id, 10) + ":" + strconv.Itoa(limit)
-	if b, ok := a.cache.Get(simKey); ok {
-		c.Data(200, "application/json", b)
-		return
-	}
-	// 候选与特征重合度打分都在 SQL 的倒排表上完成（类型/标签/厂商/导演/演员/系列）。
-	candidates, err := a.db.SimilarCandidates(src, similarPoolSize(limit))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	candidateIDs := make([]int64, 0, len(candidates))
-	for _, item := range candidates {
-		candidateIDs = append(candidateIDs, item.ID)
-	}
-	movies, err := a.db.MoviesByIDs(candidateIDs)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	simKey := responseKey("similar", a.cacheScope(0), id, limit)
+	a.cachedResponse(c, simKey, 20*time.Second, func() ([]byte, error) {
+		src, err := a.db.Movie(id)
+		if err != nil {
+			return nil, err
+		}
+		if !src.IsVisible() {
+			return nil, sql.ErrNoRows
+		}
+		// 候选与特征重合度打分都在 SQL 的倒排表上完成（类型/标签/厂商/导演/演员/系列）。
+		candidates, err := a.db.SimilarCandidates(src, similarPoolSize(limit))
+		if err != nil {
+			return nil, err
+		}
+		candidateIDs := make([]int64, 0, len(candidates))
+		for _, item := range candidates {
+			candidateIDs = append(candidateIDs, item.ID)
+		}
+		movies, err := a.db.MoviesByIDs(candidateIDs)
+		if err != nil {
+			return nil, err
+		}
 
-	type scored struct {
-		movie store.Movie
-		score int
-	}
-	results := make([]scored, 0, len(candidates))
-	for _, item := range candidates {
-		movie, ok := movies[item.ID]
-		if !ok {
-			continue
+		type scored struct {
+			movie store.Movie
+			score int
 		}
-		// 倒排分 + 非精确信号（分级/年份/番号前缀）；与 Emby 口径一致，总分 > 2 才算相似。
-		score := item.Score + similarBonus(src, movie)
-		if score > 2 {
-			results = append(results, scored{movie: movie, score: score})
+		results := make([]scored, 0, len(candidates))
+		for _, item := range candidates {
+			movie, ok := movies[item.ID]
+			if !ok {
+				continue
+			}
+			// 倒排分 + 非精确信号（分级/年份/番号前缀）；与 Emby 口径一致，总分 > 2 才算相似。
+			score := item.Score + similarBonus(src, movie)
+			if score > 2 {
+				results = append(results, scored{movie: movie, score: score})
+			}
 		}
-	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].score != results[j].score {
-			return results[i].score > results[j].score
+		sort.Slice(results, func(i, j int) bool {
+			if results[i].score != results[j].score {
+				return results[i].score > results[j].score
+			}
+			return results[i].movie.Title < results[j].movie.Title
+		})
+		if len(results) > limit {
+			results = results[:limit]
 		}
-		return results[i].movie.Title < results[j].movie.Title
+		ids := make([]int64, 0, len(results))
+		for _, r := range results {
+			ids = append(ids, r.movie.ID)
+		}
+		dataMap, err := a.db.DataFor(ids)
+		if err != nil {
+			return nil, err
+		}
+		actorMap, err := a.db.ActorsFor(ids)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]gin.H, 0, len(results))
+		for _, r := range results {
+			out = append(out, a.embyItemActors(r.movie, dataMap[r.movie.ID], actorMap[r.movie.ID], true))
+		}
+		return json.Marshal(gin.H{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
 	})
-	if len(results) > limit {
-		results = results[:limit]
-	}
-	ids := make([]int64, 0, len(results))
-	for _, r := range results {
-		ids = append(ids, r.movie.ID)
-	}
-	dataMap, _ := a.db.DataFor(ids)
-	actorMap, _ := a.db.ActorsFor(ids)
-	out := make([]gin.H, 0, len(results))
-	for _, r := range results {
-		out = append(out, a.embyItemActors(r.movie, dataMap[r.movie.ID], actorMap[r.movie.ID], true))
-	}
-	body, _ := json.Marshal(gin.H{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
-	a.cache.Set(simKey, body, 20*time.Second)
-	c.Data(http.StatusOK, "application/json", body)
 }
 
 // similarPoolSize 候选池大小：最终只要 limit 条，但年份/番号前缀这类加分只在候选内部
@@ -776,10 +788,12 @@ func (a *App) embyItemActors(m store.Movie, d store.UserData, actors []store.Act
 		// 无宽图时 Thumb 回退主海报，保证给客户端的 Thumb 标记总是可取图。
 		imageTags["Thumb"] = a.posterTag(m.PosterPath)
 	}
-	if m.BackdropPath != "" {
-		tag := a.posterTag(m.BackdropPath)
+	for index, path := range m.Backdrops() {
+		tag := a.posterTag(path)
 		backdrops = append(backdrops, tag)
-		imageTags["Backdrop"] = tag
+		if index == 0 {
+			imageTags["Backdrop"] = tag
+		}
 	}
 	// iPlay Android 对 ImageTags / BackdropImageTags 做无条件解引用：
 	// 二者必须恒为对象/数组（内容可空），缺失即列表页 NPE。
@@ -985,17 +999,14 @@ func (a *App) itemsQuery(c *gin.Context) {
 	fields := requestedFields(c)
 	term, years := c.Query("SearchTerm"), c.Query("Years")
 	// 缓存键不需要带请求来源：响应里的流地址是相对路径，与宿主无关。
-	key := strings.Join([]string{a.db.Version("g:version"), strconv.FormatInt(lib, 10), term, years, genre, tags, studios, person, c.Query("Filters"), sortBy, c.Query("SortOrder"), fields.key(), strconv.Itoa(start), strconv.Itoa(limit)}, "|")
-	if b, ok := a.cache.Get("items:" + key); ok {
-		c.Data(200, "application/json", b)
-		return
-	}
-	ms, total, e := a.db.SearchScoped(lib, "", term, years, genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start)
-	if e != nil {
-		c.JSON(500, gin.H{"error": e.Error()})
-		return
-	}
-	a.respondItems(c, ms, total, start, key)
+	key := responseKey("items", a.cacheScope(lib), term, years, genre, tags, studios, person, c.Query("Filters"), sortBy, c.Query("SortOrder"), fields.key(), start, limit)
+	a.cachedResponse(c, key, 15*time.Second, func() ([]byte, error) {
+		ms, total, err := a.db.SearchScoped(lib, "", term, years, genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start)
+		if err != nil {
+			return nil, err
+		}
+		return a.itemsBody(c, ms, total, start)
+	})
 }
 
 // itemFields 客户端通过 ?Fields= 显式索取的可选字段集合。
@@ -1081,10 +1092,27 @@ func embyTime(raw string) string {
 // respondItems 统一输出影片分页结果。cacheKey 非空时写入 15s 缓存（供 itemsQuery 命中复用）。
 // UserData 与演员表按整页批量取回，避免逐片 N+1 查询。
 func (a *App) respondItems(c *gin.Context, ms []store.Movie, total, start int, cacheKey string) {
+	body, err := a.itemsBody(c, ms, total, start)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	if cacheKey != "" {
+		a.cache.Set("items:"+cacheKey, body, 15*time.Second)
+	}
+	c.Data(200, "application/json", body)
+}
+func (a *App) itemsBody(c *gin.Context, ms []store.Movie, total, start int) ([]byte, error) {
 	fields := requestedFields(c)
 	ids := movieIDs(ms)
-	dataMap, _ := a.db.DataFor(ids)
-	actorMap, _ := a.db.ActorsFor(ids)
+	dataMap, err := a.db.DataFor(ids)
+	if err != nil {
+		return nil, err
+	}
+	actorMap, err := a.db.ActorsFor(ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]gin.H, 0, len(ms))
 	for _, m := range ms {
 		item := a.embyItemActors(m, dataMap[m.ID], actorMap[m.ID], true)
@@ -1092,11 +1120,7 @@ func (a *App) respondItems(c *gin.Context, ms []store.Movie, total, start int, c
 		out = append(out, item)
 	}
 	v := gin.H{"Items": out, "TotalRecordCount": total, "StartIndex": start}
-	b, _ := json.Marshal(v)
-	if cacheKey != "" {
-		a.cache.Set("items:"+cacheKey, b, 15*time.Second)
-	}
-	c.Data(200, "application/json", b)
+	return json.Marshal(v)
 }
 
 // movieIDs 提取影片列表的 id 切片（供批量查询）。
@@ -1196,55 +1220,48 @@ func (a *App) entityBrowse(c *gin.Context, kind string, libraryID int64, collect
 		limit = 100
 	}
 	// 实体名需扫全库 JSON 列去重，逐项还要查代表海报，故按（版本/类型/范围/分页）缓存。
-	cacheKey := "entities:" + a.db.Version("g:version") + ":" + strings.ToLower(kind) + ":" +
-		strconv.FormatInt(libraryID, 10) + ":" + collection + ":" + strconv.Itoa(start) + ":" + strconv.Itoa(limit)
-	if b, ok := a.cache.Get(cacheKey); ok {
-		c.Data(http.StatusOK, "application/json", b)
-		return
-	}
-	var (
-		names []string
-		err   error
-	)
-	switch strings.ToLower(kind) {
-	case "genre":
-		names, err = a.db.Genres(libraryID, collection)
-	case "tag":
-		names, err = a.db.Tags(libraryID, collection)
-	case "studio":
-		names, err = a.db.Studios(libraryID, collection)
-	case "person":
-		names, err = a.db.Persons(libraryID, collection)
-	default:
-		a.emptyItems(c)
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	sort.Strings(names)
-	if start > len(names) {
-		start = len(names)
-	}
-	end := start + limit
-	if end > len(names) {
-		end = len(names)
-	}
-	items := make([]gin.H, 0, end-start)
-	for _, name := range names[start:end] {
-		item := gin.H{
-			"Id": entityId(kind, name), "Name": name, "Type": kind,
-			"IsFolder": false, "ServerId": a.serverID,
+	key := responseKey("entities", a.cacheScope(libraryID), kind, collection, start, limit)
+	a.cachedResponse(c, key, 30*time.Second, func() ([]byte, error) {
+		var (
+			names []string
+			err   error
+		)
+		switch strings.ToLower(kind) {
+		case "genre":
+			names, err = a.db.Genres(libraryID, collection)
+		case "tag":
+			names, err = a.db.Tags(libraryID, collection)
+		case "studio":
+			names, err = a.db.Studios(libraryID, collection)
+		case "person":
+			names, err = a.db.Persons(libraryID, collection)
+		default:
+			return json.Marshal(gin.H{"Items": []gin.H{}, "TotalRecordCount": 0, "StartIndex": start})
 		}
-		if poster := a.entityPosterPath(kind, name); poster != "" {
-			item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
+		if err != nil {
+			return nil, err
 		}
-		items = append(items, item)
-	}
-	body, _ := json.Marshal(gin.H{"Items": items, "TotalRecordCount": len(names), "StartIndex": start})
-	a.cache.Set(cacheKey, body, 30*time.Second)
-	c.Data(http.StatusOK, "application/json", body)
+		sort.Strings(names)
+		if start > len(names) {
+			start = len(names)
+		}
+		end := start + limit
+		if end > len(names) {
+			end = len(names)
+		}
+		items := make([]gin.H, 0, end-start)
+		for _, name := range names[start:end] {
+			item := gin.H{
+				"Id": entityId(kind, name), "Name": name, "Type": kind,
+				"IsFolder": false, "ServerId": a.serverID,
+			}
+			if poster := a.entityPosterPath(kind, name); poster != "" {
+				item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
+			}
+			items = append(items, item)
+		}
+		return json.Marshal(gin.H{"Items": items, "TotalRecordCount": len(names), "StartIndex": start})
+	})
 }
 
 func (a *App) item(c *gin.Context) {
@@ -1303,20 +1320,21 @@ func (a *App) item(c *gin.Context) {
 		return
 	}
 	// 详情恒含 MediaSources，但流地址是相对路径，缓存键无需按宿主分桶。
-	key := "item:" + a.db.Version("g:version") + ":" + rawID
-	if b, ok := a.cache.Get(key); ok {
-		c.Data(200, "application/json", b)
-		return
-	}
-	m, e := a.db.Movie(id)
-	if e != nil || !m.IsVisible() {
-		c.JSON(404, gin.H{"error": "not found"})
-		return
-	}
-	d, _ := a.db.Data(id)
-	b, _ := json.Marshal(a.embyItemDetail(m, d, c))
-	a.cache.Set(key, b, time.Hour)
-	c.Data(200, "application/json", b)
+	key := "item:" + a.db.MovieVersion(id) + ":" + strconv.FormatInt(id, 10)
+	a.cachedResponse(c, key, time.Minute, func() ([]byte, error) {
+		m, err := a.db.Movie(id)
+		if err != nil {
+			return nil, err
+		}
+		if !m.IsVisible() {
+			return nil, sql.ErrNoRows
+		}
+		d, err := a.db.Data(id)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(a.embyItemDetail(m, d, c))
+	})
 }
 
 // embyItemDetail 在列表 DTO 之上补齐详情接口恒返回的字段。

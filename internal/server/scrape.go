@@ -3,15 +3,20 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"emby-go/internal/metatube"
+	"emby-go/internal/scanner"
 	"emby-go/internal/scraper"
 	"emby-go/internal/store"
 )
@@ -46,7 +51,7 @@ var errScrapeBusy = errors.New("刮削任务正在进行中")
 
 // claimNFO 独占 NFO 写入通道。kind 为 scan / probe / scrape / scrape_avatars。
 //
-// 已持有同一 kind 时视为可重入（例如探测内部再调扫描），返回 true 不重复占用。
+// 每次成功申请对应一个独立任务；类型相同也不能重入。
 //
 // 注意 scrape 与 scrape_avatars 用的是**不同 kind**，因此二者互斥而不是可并行——
 // 需求原计划写的是「可并行（写不同表）」，但头像任务要往每部参演影片的 NFO 里写
@@ -55,10 +60,18 @@ var errScrapeBusy = errors.New("刮削任务正在进行中")
 func (a *App) claimNFO(kind string) bool {
 	a.nfoGate.Lock()
 	defer a.nfoGate.Unlock()
-	if a.nfoOwner != "" && a.nfoOwner != kind {
+	if a.nfoOwner != "" {
 		return false
 	}
 	a.nfoOwner = kind
+	return true
+}
+
+func (a *App) claimNFORequest(c *gin.Context, kind string) bool {
+	if !a.claimNFO(kind) {
+		c.JSON(http.StatusConflict, gin.H{"error": "媒体库正在处理其他任务，请稍后再试"})
+		return false
+	}
 	return true
 }
 
@@ -83,6 +96,8 @@ func (a *App) nfoBusyOwner() string {
 		return "刮削"
 	case "scrape_avatars":
 		return "演员头像任务"
+	case "edit", "manual", "image", "reread":
+		return "媒体库编辑"
 	}
 	return ""
 }
@@ -126,7 +141,7 @@ func (a *App) endScrape(err error) {
 	status.Current = ""
 	status.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	ctx := a.scrapeCtx
-	status.Cancelled = ctx != nil && ctx.Err() != nil && err == nil
+	status.Cancelled = ctx != nil && errors.Is(ctx.Err(), context.Canceled) && (err == nil || errors.Is(err, context.Canceled))
 	if err != nil {
 		status.Error = err.Error()
 	}
@@ -226,10 +241,19 @@ func (a *App) adminScrapeRun(c *gin.Context) {
 
 // executeScrape 同步跑完一批刮削并完成全部收尾（调用方负责起 goroutine）。
 // 同步形态是为了让计划任务能据此判定重叠与成败。
-func (a *App) executeScrape(cfg scraper.Config, opts scraper.RunOptions) error {
+func (a *App) executeScrape(cfg scraper.Config, opts scraper.RunOptions) (err error) {
 	taskID := a.startTask("scrape")
+	defer a.releaseNFO("scrape")
+	defer func() { a.endScrape(err) }()
+	var successMu sync.Mutex
+	var successful []int64
 	opts.OnProgress = a.updateScrapeProgress
 	opts.OnItem = func(item scraper.ItemResult) {
+		if item.Status == scraper.StatusSuccess {
+			successMu.Lock()
+			successful = append(successful, item.MovieID)
+			successMu.Unlock()
+		}
 		// 覆盖同名图片后必须显式失效 tag 缓存，否则客户端几分钟内仍拿旧图。
 		if len(item.Images) > 0 {
 			a.invalidateImageTag(item.Images...)
@@ -238,26 +262,105 @@ func (a *App) executeScrape(cfg scraper.Config, opts scraper.RunOptions) error {
 			a.addScrapeFailure(displayItem(item))
 		}
 	}
-	// NFO 通道只在这段刮削期间持有：收尾的整库扫描会自己重新申请，
-	// 若仍持锁会被 claimNFO 判为「他人占用」而拒绝（互斥是按占用者类型判定的）。
-	progress, err := func() (scraper.Progress, error) {
-		defer a.releaseNFO("scrape")
-		return scraper.New(cfg, a.db).Run(a.scrapeContext(), opts)
-	}()
+	progress, runErr := scraper.New(cfg, a.db).Run(a.scrapeContext(), opts)
+	// 取消或熔断也要发布已成功落盘的影片；保持通道占用直到索引刷新完成。
+	err = errors.Join(runErr, a.refreshScrapedMovies(successful))
 	a.finishTask(taskID, err)
-	a.endScrape(err)
-
-	// 批量路径逐部写盘时没有刷新索引，这里统一整库扫一次
-	//（图片/NFO 可能落在多个库，整库扫描本身很快）。
-	if err == nil && progress.Success > 0 {
-		if _, scanErr := a.scanLibraries(0); scanErr != nil {
-			slog.Warn("刮削后整库扫描失败", "error", scanErr)
-		}
-	}
-	a.cache.Clear()
 	slog.Info("刮削任务结束", "success", progress.Success, "skipped", progress.Skipped,
 		"failed", progress.Failed, "total", progress.Total, "error", err)
 	return err
+}
+
+func (a *App) refreshScrapedMovies(ids []int64) (refreshErr error) {
+	if len(ids) == 0 {
+		return nil
+	}
+	movies, err := a.db.MoviesByIDs(ids)
+	if err != nil {
+		return err
+	}
+	type group struct {
+		library store.Library
+		paths   []string
+	}
+	groups := map[string]*group{}
+	libraries := map[int64]store.Library{}
+	paths := map[string]string{}
+	collectPaths := func(movies map[int64]store.Movie) {
+		for _, movie := range movies {
+			for _, path := range movieDiskPaths(movie) {
+				if path != "" {
+					paths[cachePathKey(path)] = path
+				}
+			}
+		}
+	}
+	invalidatePaths := func() {
+		batch := make([]string, 0, len(paths))
+		for _, path := range paths {
+			batch = append(batch, path)
+		}
+		a.invalidateDiskPaths(batch, false)
+	}
+	collectPaths(movies)
+	invalidatePaths()
+	// Preserve both old and newly selected dependencies, including failed or
+	// interrupted refreshes. Each phase traverses the caches just once.
+	defer func() {
+		updated, err := a.db.MoviesByIDs(ids)
+		collectPaths(updated)
+		invalidatePaths()
+		// Publish the final generations after disk invalidation. Responses loaded
+		// during reconciliation must not remain current with old image validators.
+		for id := range movies {
+			a.db.TouchMovie(id)
+		}
+		for libraryID := range libraries {
+			a.finishLibraryCacheRefresh(libraryID)
+		}
+		refreshErr = errors.Join(refreshErr, err)
+	}()
+	var errs []error
+	seen := map[int64]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		movie, exists := movies[id]
+		if !exists {
+			errs = append(errs, fmt.Errorf("刮削后影片不存在: %d", id))
+			continue
+		}
+		library, exists := libraries[movie.LibraryID]
+		if !exists {
+			library, err = a.db.Library(movie.LibraryID)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			libraries[movie.LibraryID] = library
+		}
+		key := strconv.FormatInt(library.ID, 10) + ":" + filepath.Dir(movie.SourcePath)
+		if groups[key] == nil {
+			groups[key] = &group{library: library}
+		}
+		groups[key].paths = append(groups[key].paths, movie.SourcePath)
+	}
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		g := groups[key]
+		result, err := scanner.RefreshFiles(a.db, g.library, g.paths, nil)
+		if result.Failed > 0 {
+			err = errors.Join(err, fmt.Errorf("刮削后刷新有 %d 个文件读取失败", result.Failed))
+		}
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // adminScrapeAvatars 启动演员头像任务（异步）。
@@ -316,6 +419,7 @@ func (a *App) executeScrapeAvatars(cfg scraper.Config, libraryID int64, limit in
 	a.finishTask(taskID, err)
 	a.endScrape(err)
 	a.cache.Clear()
+	a.imgMeta.DeleteMatching(func(key string) bool { return strings.HasPrefix(key, "av:") || strings.HasPrefix(key, "ep:") })
 	slog.Info("演员头像任务结束", "success", progress.Success, "skipped", progress.Skipped,
 		"failed", progress.Failed, "total", progress.Total, "error", err)
 	return err
@@ -386,6 +490,10 @@ func (a *App) adminScrapeInspect(c *gin.Context) {
 
 // adminScrapeConfirm 确认写入（无状态预览：按 provider:id 重新取详情后落盘）。
 func (a *App) adminScrapeConfirm(c *gin.Context) {
+	if !a.claimNFORequest(c, "scrape") {
+		return
+	}
+	defer a.releaseNFO("scrape")
 	movie, ok := a.movieParam(c)
 	if !ok {
 		return
@@ -404,11 +512,6 @@ func (a *App) adminScrapeConfirm(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址或 token"})
 		return
 	}
-	if !a.claimNFO("scrape") {
-		c.JSON(http.StatusConflict, gin.H{"error": a.nfoBusyOwner() + "正在进行中，请稍后再试"})
-		return
-	}
-	defer a.releaseNFO("scrape")
 	overwrite := cfg.Overwrite
 	if req.Overwrite != nil {
 		overwrite = *req.Overwrite
@@ -423,7 +526,7 @@ func (a *App) adminScrapeConfirm(c *gin.Context) {
 	if movie.NFOPath != "" {
 		a.invalidateNFOStreams(movie.NFOPath)
 	}
-	a.cache.Clear()
+	defer func() { a.invalidateMovieDisk(movie.ID); _ = a.db.BumpVersion(movie.LibraryID) }()
 	if err != nil {
 		_ = a.db.SetScrapeResult(movie.ID, err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})

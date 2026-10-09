@@ -99,6 +99,12 @@ func TestLibraryWatchEndToEnd(t *testing.T) {
 	if _, found := find("After busy"); !found {
 		t.Fatal("subtree deletion removed unrelated movie")
 	}
+	privatePoster := filepath.Join(root, "a-poster.jpg")
+	writeJPEGImage(t, privatePoster, 40, 80)
+	awaitLibraryWatch(t, func() bool {
+		movie, found := find("After busy")
+		return found && movie.PosterPath == privatePoster
+	})
 	otherRoot := t.TempDir()
 	writeFile(t, filepath.Join(otherRoot, "other.strm"), "http://media.test/other.mp4\n")
 	writeFile(t, filepath.Join(otherRoot, "other.nfo"), "<movie><title>New library</title></movie>")

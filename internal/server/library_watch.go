@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"emby-go/internal/librarywatch"
 	"emby-go/internal/scanner"
@@ -95,6 +96,20 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 	files := make(map[string][]string)
 	directories := make(map[string]bool)
 	for _, change := range changes {
+		// extrafanart belongs to movies in its parent folder, including when the
+		// entire image directory is created, renamed, or removed.
+		artDirectory := change.Path
+		if !change.Directory {
+			artDirectory = filepath.Dir(change.Path)
+		}
+		if strings.EqualFold(filepath.Base(artDirectory), "extrafanart") {
+			directory := filepath.Dir(artDirectory)
+			if _, exists := directories[directory]; !exists {
+				directories[directory] = false
+			}
+			files[directory] = append(files[directory], filepath.Join(directory, "fanart.jpg"))
+			continue
+		}
 		if change.Directory {
 			directories[change.Path] = true
 		} else {
@@ -105,6 +120,7 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 			}
 		}
 	}
+	a.invalidateLibraryChanges(changes)
 	ordered := make([]string, 0, len(directories))
 	for directory := range directories {
 		ordered = append(ordered, directory)
@@ -114,15 +130,10 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 	processed := 0
 	defer func() {
 		a.updateScanProgress(scanner.Progress{LibraryID: library.ID, LibraryName: library.Name, Total: processed, Done: processed, Result: total})
-		a.cache.Clear()
-		a.imgMeta.Clear()
-		a.imgThumb.Clear()
-		a.tagMu.Lock()
-		clear(a.tags)
-		a.tagMu.Unlock()
-		a.nfoMu.Lock()
-		clear(a.nfos)
-		a.nfoMu.Unlock()
+		a.invalidateLibraryChanges(changes)
+		if total.Added+total.Updated+total.Deleted > 0 || refreshErr != nil {
+			a.finishLibraryCacheRefresh(library.ID)
+		}
 	}()
 	for _, directory := range ordered {
 		if err := ctx.Err(); err != nil {
@@ -149,6 +160,18 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		}
 		if result.Failed > 0 {
 			return fmt.Errorf("局部刷新有 %d 个文件读取失败: %s", result.Failed, directory)
+		}
+	}
+	// Root artwork can change without updating any indexed movie.
+	if total.Added+total.Updated+total.Deleted == 0 {
+		for _, change := range changes {
+			ext := strings.ToLower(filepath.Ext(change.Path))
+			if !change.Directory && (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp") {
+				if err := a.db.BumpVersion(library.ID); err != nil {
+					return err
+				}
+				break
+			}
 		}
 	}
 	slog.Info("媒体库局部刷新完成", "library_id", library.ID, "events", len(changes),

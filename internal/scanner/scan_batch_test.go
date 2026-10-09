@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -124,5 +125,26 @@ func TestPreparedMovieRemainsIndependentOfDisk(test *testing.T) {
 	after, err := readSourceState(path, nil, "", &imageDirectory{})
 	if err != nil || state.Fingerprint == after.Fingerprint || entry.Movie.Title != "Original" {
 		test.Fatalf("post-read stability check failed: %+v %v", after, err)
+	}
+}
+
+func TestSharedImageSelectionRequiresFreshStabilityCheck(t *testing.T) {
+	root := t.TempDir()
+	writeScanFile(t, root, "a.strm", "https://media.test/a.mp4")
+	writeScanFile(t, root, "b.strm", "https://media.test/b.mp4")
+	writeScanFile(t, root, "poster.jpg", "old")
+	shared := &imageDirectory{reuse: true}
+	before, err := readSourceState(filepath.Join(root, "a.strm"), nil, "", shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeScanFile(t, root, "poster.webp", "new preferred image")
+	cached, err := readSourceState(filepath.Join(root, "b.strm"), nil, "", shared)
+	if err != nil || !reflect.DeepEqual(cached.Images, before.Images) {
+		t.Fatalf("directory selection was not shared: %+v %v", cached, err)
+	}
+	fresh, err := readSourceState(filepath.Join(root, "a.strm"), nil, "", &imageDirectory{})
+	if err != nil || fresh.Fingerprint == before.Fingerprint || fresh.Images.Poster != filepath.Join(root, "poster.webp") {
+		t.Fatalf("stability check missed changed images: %+v %v", fresh, err)
 	}
 }

@@ -51,7 +51,7 @@ func legacyScanFingerprint(test *testing.T, path string, parts []string, fallbac
 	return "v1:" + hex.EncodeToString(digest[:])
 }
 
-func TestOptimizedFingerprintMatchesExistingVersion(test *testing.T) {
+func TestArtworkFingerprintUpgradesExistingVersion(test *testing.T) {
 	root := test.TempDir()
 	for _, name := range []string{"movie-CD1.strm", "movie-CD2.strm", "movie.nfo", "folder.JPG", "fanart.png", "landscape.WebP"} {
 		writeScanFile(test, root, name, "fixture")
@@ -68,8 +68,8 @@ func TestOptimizedFingerprintMatchesExistingVersion(test *testing.T) {
 		if err != nil {
 			test.Fatal(err)
 		}
-		if want := legacyScanFingerprint(test, path, parts, fallback); state.Fingerprint != want {
-			test.Fatalf("fingerprint format changed: got=%s want=%s", state.Fingerprint, want)
+		if old := legacyScanFingerprint(test, path, parts, fallback); !strings.HasPrefix(state.Fingerprint, "v2:") || state.Fingerprint == old {
+			test.Fatalf("artwork fingerprint did not upgrade: got=%s old=%s", state.Fingerprint, old)
 		}
 	}
 }

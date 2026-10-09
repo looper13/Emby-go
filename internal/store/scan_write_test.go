@@ -1,6 +1,7 @@
 package store
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -68,5 +69,75 @@ func TestSaveScannedMoviesAtomicAndComplete(test *testing.T) {
 	fingerprints, err = database.ScanFingerprints(libraryID)
 	if err != nil || fingerprints[entry.Movie.SourcePath] != "" {
 		test.Fatalf("unstable scan retained stale fingerprint: %v %v", fingerprints, err)
+	}
+}
+
+func TestScanFeaturesMatchMetadataAndKeepUnchangedRelations(t *testing.T) {
+	database, libraryID := newFeatureStore(t)
+	entry := ScannedMovie{
+		Movie:  Movie{LibraryID: libraryID, SourcePath: "/tmp/av/parity.strm", Status: "success", Genres: []string{" Drama ", "Drama"}, Tags: []string{"Tag"}, Studios: []string{"Studio"}, Director: " Director ", Collection: "Collection", Series: "Fallback"},
+		Actors: []ActorRef{{Name: " Actor "}, {Name: "Actor"}, {Name: " "}},
+	}
+	if err := database.SaveScannedMovies([]ScannedMovie{entry}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := database.MovieIDByPath(entry.Movie.SourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() map[string]int {
+		t.Helper()
+		rows, err := database.db.Query("SELECT kind,value,weight FROM movie_features WHERE movie_id=?", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		result := map[string]int{}
+		for rows.Next() {
+			var kind, value string
+			var weight int
+			if err := rows.Scan(&kind, &value, &weight); err != nil {
+				t.Fatal(err)
+			}
+			result[kind+"\x00"+value] = weight
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	before := read()
+	if err := database.refreshFeatures(id); err != nil {
+		t.Fatal(err)
+	}
+	if after := read(); !reflect.DeepEqual(before, after) {
+		t.Fatalf("scan features differ from metadata features: %v / %v", before, after)
+	}
+	if _, err := database.db.Exec(`CREATE TRIGGER reject_actor_delete BEFORE DELETE ON movie_actors BEGIN SELECT RAISE(ABORT,'unchanged actors rewritten'); END;
+ CREATE TRIGGER reject_feature_delete BEFORE DELETE ON movie_features BEGIN SELECT RAISE(ABORT,'unchanged features rewritten'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	entry.Movie.Title = "Only title changed"
+	if err := database.SaveScannedMovies([]ScannedMovie{entry}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.Exec("DROP TRIGGER reject_actor_delete; DROP TRIGGER reject_feature_delete;"); err != nil {
+		t.Fatal(err)
+	}
+	entry.Actors = []ActorRef{{Name: "New actor"}}
+	entry.Movie.Collection = ""
+	if err := database.SaveScannedMovies([]ScannedMovie{entry}); err != nil {
+		t.Fatal(err)
+	}
+	actors, err := database.Actors(id)
+	if err != nil || len(actors) != 1 || actors[0].Name != "New actor" {
+		t.Fatalf("actor replacement: %v %v", actors, err)
+	}
+	before = read()
+	if err := database.refreshFeatures(id); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, read()) {
+		t.Fatal("changed features differ, including fallback series")
 	}
 }

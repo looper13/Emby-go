@@ -56,8 +56,8 @@ func TestIncrementalScanAPIAndScheduledModes(t *testing.T) {
 		t.Fatal("unchanged library scan invalidated cache")
 	}
 	call("/api/admin/scan", scanner.Result{Added: 1, Success: 1, Skipped: 1})
-	if _, exists := app.cache.Get("scan-test"); exists {
-		t.Fatal("changed library scan did not invalidate cache")
+	if _, exists := app.cache.Get("scan-test"); !exists {
+		t.Fatal("changed library scan discarded unrelated cache")
 	}
 	call("/api/admin/reindex", scanner.Result{Updated: 2, Success: 2})
 	call("/api/admin/scan", scanner.Result{Skipped: 2})

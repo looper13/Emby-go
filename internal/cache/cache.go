@@ -82,3 +82,15 @@ func (m *Memory) Clear() {
 	m.items = map[string]*list.Element{}
 	m.order.Init()
 }
+
+// DeleteMatching removes local derived entries without discarding unrelated LRU data.
+func (m *Memory) DeleteMatching(matches func(string) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, element := range m.items {
+		if matches(key) {
+			delete(m.items, key)
+			m.order.Remove(element)
+		}
+	}
+}

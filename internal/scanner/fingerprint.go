@@ -28,20 +28,11 @@ type sourceState struct {
 
 func readSourceState(path string, parts []string, fallbackNFO string, directory *imageDirectory) (sourceState, error) {
 	state := sourceState{}
-	if err := directory.load(filepath.Dir(path)); err != nil {
+	images, imageInfo, err := directory.selectImages(path)
+	if err != nil {
 		return state, err
 	}
-	imageInfo := make(map[string]os.FileInfo)
-	state.Images = imageutil.FindImages(filepath.Dir(path), func(image string) bool {
-		if !directory.contains(image) {
-			return false
-		}
-		info, err := os.Stat(image)
-		if err == nil {
-			imageInfo[image] = info
-		}
-		return err == nil
-	})
+	state.Images = images
 	dependencies := []string{path}
 	dependencies = append(dependencies, parts...)
 	optional := map[string]bool{}
@@ -52,7 +43,7 @@ func readSourceState(path string, parts []string, fallbackNFO string, directory 
 		dependencies = append(dependencies, fallbackNFO)
 		optional[fallbackNFO] = true
 	}
-	for _, image := range []string{state.Images.Poster, state.Images.Backdrop, state.Images.Landscape} {
+	for _, image := range append([]string{state.Images.Poster, state.Images.Landscape}, state.Images.Backdrops...) {
 		if image != "" {
 			dependencies = append(dependencies, image)
 		}
@@ -83,6 +74,6 @@ func readSourceState(path string, parts []string, fallbackNFO string, directory 
 		return state, err
 	}
 	digest := sha256.Sum256(payload)
-	state.Fingerprint = "v1:" + hex.EncodeToString(digest[:])
+	state.Fingerprint = "v2:" + hex.EncodeToString(digest[:])
 	return state, nil
 }

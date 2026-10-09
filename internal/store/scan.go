@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 )
@@ -18,6 +19,35 @@ func (s *Store) DirectoryScanFingerprints(libraryID int64, directory string, rec
 		prefix += string(filepath.Separator)
 	}
 	return s.scanFingerprints("movies.library_id=? AND (movies.output_dir=? OR (movies.output_dir>=? AND movies.output_dir<?))", libraryID, directory, prefix, prefix+"\U0010ffff")
+}
+
+// SourcePrefixScanFingerprints limits returned fingerprints and joins to the
+// source families implicated by a file event. The scanner still applies its
+// exact CD grouping rules to this conservative prefix match.
+func (s *Store) SourcePrefixScanFingerprints(libraryID int64, directory string, prefixes []string) (map[string]string, error) {
+	if len(prefixes) == 0 {
+		return map[string]string{}, nil
+	}
+	// SQLite LIKE only folds ASCII case. Preserve Go's Unicode CD grouping, and
+	// avoid a large OR expression when a batch already covers much of a folder.
+	if len(prefixes) > 32 {
+		return s.DirectoryScanFingerprints(libraryID, directory, false)
+	}
+	for _, prefix := range prefixes {
+		for _, character := range filepath.Base(prefix) {
+			if character > 127 {
+				return s.DirectoryScanFingerprints(libraryID, directory, false)
+			}
+		}
+	}
+	conditions := make([]string, len(prefixes))
+	args := []any{libraryID, directory}
+	escape := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+	for index, prefix := range prefixes {
+		conditions[index] = "movies.source_path LIKE ? ESCAPE '!'"
+		args = append(args, escape.Replace(prefix)+"%")
+	}
+	return s.scanFingerprints("movies.library_id=? AND movies.output_dir=? AND ("+strings.Join(conditions, " OR ")+")", args...)
 }
 
 func (s *Store) scanFingerprints(condition string, args ...any) (map[string]string, error) {
@@ -48,18 +78,26 @@ func (s *Store) DeleteScannedSources(libraryID int64, paths []string) (int, erro
 	}
 	defer transaction.Rollback()
 	deleted := 0
+	ids := []int64{}
 	for _, path := range paths {
-		result, err := transaction.Exec("DELETE FROM movies WHERE library_id=? AND source_path=?", libraryID, path)
+		var id int64
+		err := transaction.QueryRow("DELETE FROM movies WHERE library_id=? AND source_path=? RETURNING id", libraryID, path).Scan(&id)
+		if err == sql.ErrNoRows {
+			continue
+		}
 		if err != nil {
 			return 0, err
 		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return 0, err
-		}
-		deleted += int(count)
+		deleted++
+		ids = append(ids, id)
 	}
-	return deleted, transaction.Commit()
+	if err := transaction.Commit(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		s.TouchMovie(id)
+	}
+	return deleted, nil
 }
 
 func (s *Store) SaveScanFingerprint(libraryID int64, path, fingerprint string) error {

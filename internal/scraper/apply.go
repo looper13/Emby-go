@@ -86,13 +86,21 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 		dir = filepath.Dir(movie.SourcePath)
 	}
 	if s.cfg.DownloadImages {
+		existing := imageutil.FindMovieImages(movie.SourcePath, dir, func(path string) bool {
+			stat, err := os.Stat(path)
+			return err == nil && !stat.IsDir() && stat.Size() > 0
+		})
 		for _, target := range imageTargets {
+			if !opts.Overwrite && map[string]string{"primary": existing.Poster, "backdrop": existing.Backdrop, "thumb": existing.Landscape}[target.kind] != "" {
+				continue
+			}
 			// 角标只贴主海报（primary）：thumb/backdrop 在客户端是宽幅背景图，贴角标会挡画面。
 			badge := ""
 			if hasMark && target.kind == "primary" {
 				badge = mark.Badge
 			}
-			path, err := s.downloadImage(ctx, info, target.kind, filepath.Join(dir, target.name), badge, opts.Overwrite)
+			dest := imageutil.MovieImageDestination(movie.SourcePath, dir, strings.TrimSuffix(target.name, ".webp"))
+			path, err := s.downloadImage(ctx, info, target.kind, dest, badge, opts.Overwrite)
 			if err != nil {
 				// 图片尽力而为：元数据成功即算成功（需求 A5 #28）。
 				slog.Warn("刮削下载图片失败", "movie_id", movie.ID, "kind", target.kind, "error", err)
@@ -192,7 +200,16 @@ func (s *Scraper) downloadImage(ctx context.Context, info metatube.MovieInfo, ki
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	tmp := dest + ".tmp"
+	file, err := os.CreateTemp(filepath.Dir(dest), ".scrape-image-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmp := file.Name()
+	if err := file.Close(); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
+	defer os.Remove(tmp)
 	if err := imageutil.EncodeWebP(bytes.NewReader(data), tmp); err != nil {
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("转 webp 失败: %w", err)
@@ -296,7 +313,7 @@ func joinNumberTitle(number, title string) string {
 		return number
 	}
 	lead := leadingNumber(title)
-	if !metatube.SameNumber(lead, number) {
+	if !metatube.SameNumber(dashedNumber(metatube.Normalize(lead)), number) {
 		return number + " " + title
 	}
 	return number + title[len(lead):]
@@ -324,13 +341,14 @@ var seriesNumberRules = []struct {
 // 259LUXU1234 → LUXU-1234。入参须已过 metatube.Normalize（大写、分隔符统一）。
 // 已有分隔符（ABF-018、123456-789）或断点无法判断（FC2PPV1234567、H4610）的番号原样保留。
 func dashedNumber(number string) string {
-	if number == "" || strings.Contains(number, "-") {
-		return number
-	}
 	for _, rule := range seriesNumberRules {
-		if rest := strings.TrimPrefix(number, rule.prefix); rest != number && digitsOnly(rest) {
+		if rest := strings.TrimPrefix(number, rule.prefix); rest != number && digitsOnly(strings.TrimPrefix(rest, "-")) {
+			rest = strings.TrimPrefix(rest, "-")
 			return rule.alias + "-" + rest
 		}
+	}
+	if number == "" || strings.Contains(number, "-") {
+		return number
 	}
 	return numberWithDash.ReplaceAllString(number, "$1-$2")
 }

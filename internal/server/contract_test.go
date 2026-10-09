@@ -343,7 +343,7 @@ func TestContractImageURLs(t *testing.T) {
 	if primary == "" {
 		t.Fatal("有海报的条目应返回 ImageTags.Primary")
 	}
-	// tag 必须是稳定且随内容变化的标识（本实现是 36 进制 mtime）。
+	// tag 必须是稳定且随内容版本变化的字母数字标识。
 	if !regexp.MustCompile(`^[0-9a-z]+$`).MatchString(primary) {
 		t.Errorf("PrimaryImageTag 形状不对: %q", primary)
 	}

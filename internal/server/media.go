@@ -46,6 +46,15 @@ func movieImagePath(m store.Movie, kind string) string {
 func (a *App) image(c *gin.Context) {
 	rawID := c.Param("id")
 	kind := c.Param("kind")
+	index := 0
+	if raw := c.Param("index"); raw != "" {
+		var err error
+		index, err = strconv.Atoi(raw)
+		if err != nil || index < 0 {
+			c.Status(http.StatusNotFound)
+			return
+		}
+	}
 	if id, err := strconv.ParseInt(rawID, 10, 64); err == nil {
 		// 媒体库外部 id：库封面（库根目录自带图优先，否则借库内影片代表图）。
 		if libID, ok := parseLibraryExternal(id); ok {
@@ -58,7 +67,17 @@ func (a *App) image(c *gin.Context) {
 		}
 		// 数值 id 优先命中影片；影片不存在/不可见时回退为该媒体库的封面。
 		if m, ok := a.cachedMovie(id); ok && m.IsVisible() {
-			if p := movieImagePath(m, kind); p != "" {
+			p := movieImagePath(m, kind)
+			if strings.EqualFold(kind, "Backdrop") || strings.EqualFold(kind, "fanart") {
+				paths := m.Backdrops()
+				p = ""
+				if index < len(paths) {
+					p = paths[index]
+				}
+			} else if index != 0 {
+				p = ""
+			}
+			if p != "" {
 				a.serveImage(c, p)
 				return
 			}
@@ -127,7 +146,7 @@ func (a *App) firstCollectionPoster(names []string) string {
 // 图片接口每张图都要拿一次图片路径，直接查库会让整页海报串行排队
 // （SQLite 写只有一条连接，读虽已放开并发，但每张图一次查询依然是纯浪费）。
 func (a *App) cachedMovie(id int64) (store.Movie, bool) {
-	key := "m:" + strconv.FormatInt(id, 10)
+	key := "m:" + a.db.MovieMetadataVersion(id) + ":" + strconv.FormatInt(id, 10)
 	if raw, ok := a.imgMeta.Get(key); ok {
 		var m store.Movie
 		if json.Unmarshal(raw, &m) == nil {
@@ -167,7 +186,7 @@ func (a *App) thumbnail(c *gin.Context, path, tag string) ([]byte, bool) {
 	if width <= 0 && height <= 0 {
 		return nil, false
 	}
-	key := "t:" + path + ":" + tag + ":" + strconv.Itoa(width) + "x" + strconv.Itoa(height) + ":q" + strconv.Itoa(quality)
+	key := "t:" + path + ":v" + strconv.FormatUint(a.diskVersion(path), 10) + ":" + tag + ":" + strconv.Itoa(width) + "x" + strconv.Itoa(height) + ":q" + strconv.Itoa(quality)
 	if data, ok := a.imgThumb.Get(key); ok {
 		return data, true
 	}
@@ -317,7 +336,7 @@ func (a *App) imageInfo(c *gin.Context) {
 }
 
 // movieImageInfo 组装与真实 Emby 一致的图片清单：
-// poster→Primary、landscape→Thumb、fanart→Backdrop（首个 index 0）。
+// poster→Primary、thumb/landscape→Thumb，所有背景图按扫描顺序编号为 Backdrop。
 func (a *App) movieImageInfo(m store.Movie) []gin.H {
 	images := make([]gin.H, 0, 3)
 	for _, item := range []struct {
@@ -326,17 +345,17 @@ func (a *App) movieImageInfo(m store.Movie) []gin.H {
 	}{
 		{"Primary", m.PosterPath},
 		{"Thumb", m.LandscapePath},
-		{"Backdrop", m.BackdropPath},
 	} {
 		if item.path == "" {
 			continue
 		}
 		// 兼容 3.5.2 的 ImageInfo 契约：带 ImageTag（真机 4.9 列表无此键，多给无害）。
 		info := gin.H{"ImageType": item.imageType, "Path": item.path, "Filename": filepath.Base(item.path), "ImageTag": a.posterTag(item.path)}
-		if item.imageType == "Backdrop" {
-			info["ImageIndex"] = 0
-		}
 		images = append(images, info)
+	}
+	for index, path := range m.Backdrops() {
+		images = append(images, gin.H{"ImageType": "Backdrop", "ImageIndex": index, "Path": path,
+			"Filename": filepath.Base(path), "ImageTag": a.posterTag(path)})
 	}
 	return images
 }
@@ -543,7 +562,7 @@ func (a *App) nfoEntry(m store.Movie) nfoCacheEntry {
 	if m.NFOPath == "" {
 		return fallback
 	}
-	key := m.NFOPath + "|" + a.posterTag(m.NFOPath)
+	key := m.NFOPath + "|" + a.posterTag(m.NFOPath) + ":" + strconv.FormatUint(a.diskVersion(m.NFOPath), 10)
 	a.nfoMu.Lock()
 	if e, ok := a.nfos[key]; ok {
 		a.nfoMu.Unlock()
@@ -1086,15 +1105,13 @@ func (a *App) playing(c *gin.Context) {
 	// 进度心跳（Progress）几秒一次，若每次都 BumpVersion，列表/实体/详情/相似缓存
 	// （key 含 g:version）会被反复打掉，等于没有缓存。进度本身只影响进度条，
 	// 落一个 TTL 无所谓（列表 15s），代价远小于全站 cache miss 风暴。
-	// 因此：只有真正改变归属状态的 Stopped 才提升版本号（全站失效，低频）；
-	// 心跳只精确失效该片的详情缓存（它 TTL 1 小时，不失效会长时间显示旧进度）。
+	// Stopped 刷新该库列表及跨库结果；心跳只推进单部详情版本。
+	// 管理端列表进度最多延迟 5 秒，Emby 列表最多延迟 15 秒。
 	if strings.HasSuffix(c.Request.URL.Path, "Stopped") {
 		if err := a.db.BumpVersion(movie.LibraryID); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-	} else {
-		a.cache.Delete("item:" + a.db.Version("g:version") + ":" + strconv.FormatInt(id, 10))
 	}
 	c.Status(http.StatusNoContent)
 }
@@ -1164,10 +1181,12 @@ func (a *App) partItem(m store.Movie, index int) gin.H {
 	} else if m.PosterPath != "" {
 		imageTags["Thumb"] = a.posterTag(m.PosterPath)
 	}
-	if m.BackdropPath != "" {
-		tag := a.posterTag(m.BackdropPath)
+	for index, path := range m.Backdrops() {
+		tag := a.posterTag(path)
 		backdrops = append(backdrops, tag)
-		imageTags["Backdrop"] = tag
+		if index == 0 {
+			imageTags["Backdrop"] = tag
+		}
 	}
 	item := gin.H{
 		"Id":                virtualPartID(m.ID, part),

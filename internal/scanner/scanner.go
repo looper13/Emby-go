@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -133,6 +134,13 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		return result, fmt.Errorf("媒体库路径不是目录: %s", lib.Path)
 	}
 	groups := make(map[string][]candidate)
+	keys, all := affectedGroups(files)
+	targeted := len(files) > 0 && !all
+	// WalkDir already reads the direct directory entries. Reuse those image
+	// names for local refreshes; stability verification still reads fresh data.
+	walkImages := &imageDirectory{path: directory, reuse: true, names: map[string]bool{}, imageInfo: map[string]os.FileInfo{}}
+	entryCount := 0
+	var artworkEntries []os.DirEntry
 	err = filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == directory && filepath.Clean(directory) != filepath.Clean(lib.Path) && os.IsNotExist(walkErr) {
@@ -143,10 +151,26 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		if path == directory && !entry.IsDir() {
 			return fmt.Errorf("媒体库根目录无法遍历: %s", path)
 		}
+		if !recursive && path != directory {
+			if imageutil.IsImage(entry.Name()) || (entry.IsDir() && strings.EqualFold(entry.Name(), "extrafanart")) {
+				artworkEntries = append(artworkEntries, entry)
+			}
+			entryCount++
+			walkImages.large = entryCount > 64
+			if !entry.IsDir() {
+				switch strings.ToLower(filepath.Ext(path)) {
+				case ".webp", ".jpg", ".jpeg", ".png":
+					walkImages.names[strings.ToLower(entry.Name())] = true
+				}
+			}
+		}
 		if entry.IsDir() && path != directory && !recursive {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
+			return nil
+		}
+		if targeted && !keys[groupKey(path)] {
 			return nil
 		}
 		info, err := entry.Info()
@@ -167,7 +191,13 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		return result, err
 	}
 	var fingerprints map[string]string
-	if recursive && filepath.Clean(directory) == filepath.Clean(lib.Path) {
+	if targeted {
+		prefixes := make([]string, 0, len(keys))
+		for key := range keys {
+			prefixes = append(prefixes, strings.TrimSuffix(key, ".strm"))
+		}
+		fingerprints, err = s.SourcePrefixScanFingerprints(lib.ID, filepath.Clean(directory), prefixes)
+	} else if recursive && filepath.Clean(directory) == filepath.Clean(lib.Path) {
 		fingerprints, err = s.ScanFingerprints(lib.ID)
 	} else {
 		fingerprints, err = s.DirectoryScanFingerprints(lib.ID, filepath.Clean(directory), recursive)
@@ -175,18 +205,10 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 	if err != nil {
 		return result, err
 	}
-	if len(files) > 0 {
-		keys, all := affectedGroups(files)
-		if !all {
-			for key := range groups {
-				if !keys[key] {
-					delete(groups, key)
-				}
-			}
-			for path := range fingerprints {
-				if !keys[groupKey(path)] {
-					delete(fingerprints, path)
-				}
+	if targeted {
+		for path := range fingerprints {
+			if !keys[groupKey(path)] {
+				delete(fingerprints, path)
 			}
 		}
 	}
@@ -209,7 +231,22 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 	batch := make([]store.ScannedMovie, 0, batchSize)
 	batchResult := Result{}
 	lastFlush := time.Now()
+	largeSnapshots := make(map[string][]string)
 	flush := func() error {
+		// Large directories share the artwork catalog, but certify membership
+		// once per batch so new/deleted numbered images cannot leave a stale
+		// fingerprint that would prevent a subsequent scan from correcting it.
+		for directory, before := range largeSnapshots {
+			after, err := imageutil.ArtworkNames(directory)
+			if err != nil || !slices.Equal(before, after) {
+				for i := range batch {
+					if filepath.Dir(batch[i].Movie.SourcePath) == directory {
+						batch[i].Fingerprint = ""
+					}
+				}
+			}
+		}
+		clear(largeSnapshots)
 		if err := s.SaveScannedMovies(batch); err != nil {
 			return err
 		}
@@ -220,7 +257,13 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		lastFlush = time.Now()
 		return nil
 	}
-	images := &imageDirectory{}
+	images := &imageDirectory{reuse: true}
+	if !recursive {
+		if err := walkImages.loadArtwork(artworkEntries); err != nil {
+			return result, err
+		}
+		images = walkImages
+	}
 	process := func(item candidate, parts []string, fallbackNFO string) error {
 		paths[item.path] = struct{}{}
 		before, err := readSourceState(item.path, parts, fallbackNFO, images)
@@ -244,8 +287,26 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		} else {
 			outcome.Added++
 		}
-		if after, err := readSourceState(item.path, parts, fallbackNFO, images); err == nil && after.Fingerprint == before.Fingerprint {
-			entry.Fingerprint = before.Fingerprint
+		// Cached image selection must never certify stability.
+		freshImages := &imageDirectory{}
+		if images.large {
+			freshImages = &imageDirectory{path: images.path, statOnly: true, catalog: images.catalog}
+			if _, exists := largeSnapshots[images.path]; !exists {
+				largeSnapshots[images.path] = images.artworkNames
+			}
+		}
+		if after, err := readSourceState(item.path, parts, fallbackNFO, freshImages); err == nil {
+			if after.Fingerprint == before.Fingerprint {
+				entry.Fingerprint = before.Fingerprint
+			}
+			if freshImages.statOnly {
+				images.acceptFresh(freshImages, before.Images)
+			} else {
+				freshImages.reuse = true
+				images = freshImages
+			}
+		} else {
+			images = &imageDirectory{reuse: true}
 		}
 		batch = append(batch, entry)
 		batchResult.add(outcome)
@@ -412,10 +473,10 @@ func stackedGroup(group []candidate) (candidate, []candidate, bool) {
 
 func scanCandidate(s *store.Store, lib store.Library, item candidate, additionalParts []string, fallbackNFO string, result *Result, paths map[string]struct{}) error {
 	paths[item.path] = struct{}{}
-	images := imageutil.FindImages(filepath.Dir(item.path), func(path string) bool {
-		_, err := os.Stat(path)
-		return err == nil
-	})
+	images, _, err := (&imageDirectory{}).selectImages(item.path)
+	if err != nil {
+		return err
+	}
 	entry, outcome := prepareCandidate(lib, item, additionalParts, fallbackNFO, images)
 	if outcome.Failed == 0 {
 		if err := s.SaveScannedMovies([]store.ScannedMovie{entry}); err != nil {
@@ -457,6 +518,7 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 			// 图片与元数据同一趟写入，避免成功影片入库两次。
 			movie.PosterPath = images.Poster
 			movie.BackdropPath = images.Backdrop
+			movie.BackdropPaths = images.Backdrops
 			movie.LandscapePath = images.Landscape
 			result.Success++
 		} else {

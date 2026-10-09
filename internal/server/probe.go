@@ -221,6 +221,10 @@ func (a *App) adminProbeMediaCancel(c *gin.Context) {
 
 // adminProbeMediaItem 单条同步探测（管理端「探测」按钮）：立即返回探测到的参数。
 func (a *App) adminProbeMediaItem(c *gin.Context) {
+	if !a.claimNFORequest(c, "probe") {
+		return
+	}
+	defer a.releaseNFO("probe")
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -283,7 +287,9 @@ func (a *App) adminProbeMediaItem(c *gin.Context) {
 			"info":           probeInfoJSON(result.Info),
 		})
 	}
-	a.cache.Clear()
+	if len(files) > 0 {
+		_ = a.db.BumpVersion(movie.LibraryID)
+	}
 	if len(files) == 0 {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "全部文件探测失败: " + strings.Join(failures, "；")})
 		return
@@ -383,8 +389,6 @@ func (a *App) runProbe(taskID int64, ffprobe string, targets []probeTarget, only
 		cleared[libraryID] = struct{}{}
 		_ = a.db.BumpVersion(libraryID)
 	}
-	a.cache.Clear()
-	a.evictNFOStreams()
 
 	a.probeTaskMu.Lock()
 	status := &a.probeStatus
@@ -525,6 +529,7 @@ func (a *App) writeProbeNFO(movie store.Movie, url string, info probe.Info) erro
 		return err
 	}
 	a.evictNFOStream(movie.NFOPath)
+	a.db.TouchMovie(movie.ID)
 	return nil
 }
 
