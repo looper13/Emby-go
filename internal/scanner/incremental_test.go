@@ -78,6 +78,30 @@ func TestIncrementalUnchangedSurvivesRestart(t *testing.T) {
 	requireScan(t, reopened, library, Result{Skipped: 1})
 }
 
+func TestIncrementalRuntimeUnitStopsRepeatedFailures(t *testing.T) {
+	root := t.TempDir()
+	writeScanFile(t, root, "a.strm", "http://media.test/a.mp4\n")
+	writeScanFile(t, root, "a.nfo", "<movie><title>Original</title><runtime>90</runtime></movie>")
+	database, library := scanLibrary(t, root)
+	requireScan(t, database, library, Result{Added: 1, Success: 1})
+	before := visible(t, database)[0]
+	writeScanFile(t, root, "a.nfo", "<movie><title>Updated</title><runtime>94分</runtime></movie>")
+	requireScan(t, database, library, Result{Updated: 1, Success: 1})
+	after := visible(t, database)[0]
+	if after.ID != before.ID || after.Title != "Updated" || after.RuntimeSeconds != 5640 {
+		t.Fatalf("runtime unit did not reach index: %+v", after)
+	}
+	requireScan(t, database, library, Result{Skipped: 1})
+	writeScanFile(t, root, "a.nfo", "<movie><title>Broken</title><runtime>94分unknown</runtime></movie>")
+	requireScan(t, database, library, Result{Failed: 1})
+	if preserved := visible(t, database)[0]; preserved.Title != "Updated" || preserved.RuntimeSeconds != 5640 {
+		t.Fatalf("invalid runtime overwrote existing index: %+v", preserved)
+	}
+	writeScanFile(t, root, "a.nfo", "<movie><title>Recovered</title><runtime>94分</runtime></movie>")
+	requireScan(t, database, library, Result{Updated: 1, Success: 1})
+	requireScan(t, database, library, Result{Skipped: 1})
+}
+
 func TestIncrementalReconcilesChanges(t *testing.T) {
 	root := t.TempDir()
 	writeScanFile(t, root, "a.strm", "http://media.test/a.mp4\n")

@@ -44,7 +44,11 @@ func (a *App) watchLibrary(library store.Library) {
 		return a.refreshLibraryChanges(ctx, library, changes)
 	}, func(err error) {
 		if !errors.Is(err, errScanBusy) && !errors.Is(err, context.Canceled) {
-			slog.Warn("媒体库监听将重试", "library_id", library.ID, "path", library.Path, "error", err)
+			if librarywatch.ShouldRetry(err) {
+				slog.Warn("媒体库监听将重试", "library_id", library.ID, "path", library.Path, "error", err)
+			} else {
+				slog.Warn("媒体库局部刷新部分条目失败，等待文件变化或下次扫描", "library_id", library.ID, "path", library.Path, "error", err)
+			}
 		}
 	})
 	if err != nil {
@@ -159,9 +163,6 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		if err != nil {
 			return err
 		}
-		if result.Failed > 0 {
-			return fmt.Errorf("局部刷新有 %d 个文件读取失败: %s", result.Failed, directory)
-		}
 	}
 	// Root artwork can change without updating any indexed movie.
 	if total.Added+total.Updated+total.Deleted == 0 {
@@ -176,6 +177,9 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		}
 	}
 	slog.Info("媒体库局部刷新完成", "library_id", library.ID, "events", len(changes),
-		"added", total.Added, "updated", total.Updated, "skipped", total.Skipped, "deleted", total.Deleted)
+		"added", total.Added, "updated", total.Updated, "skipped", total.Skipped, "deleted", total.Deleted, "failed", total.Failed)
+	if total.Failed > 0 {
+		return &librarywatch.RefreshCompletedError{Err: fmt.Errorf("局部刷新有 %d 个文件读取失败: %s", total.Failed, library.Path)}
+	}
 	return nil
 }

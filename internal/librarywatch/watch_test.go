@@ -3,6 +3,7 @@ package librarywatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -226,6 +227,63 @@ func TestMonitorRetriesAndKeepsEventsDuringRefresh(t *testing.T) {
 	close(release)
 	if changes := nextChanges(t, batches); !containsChange(changes, second, false) {
 		t.Fatalf("event during refresh was lost: %+v", changes)
+	}
+}
+
+func TestMonitorCompletedErrorsDoNotReplayAndKeepNewEvents(t *testing.T) {
+	root := t.TempDir()
+	batches := make(chan []Change, 30)
+	reported := make(chan error, 30)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var block atomic.Bool
+	monitor, err := New(context.Background(), root, testOptions(), func(ctx context.Context, changes []Change) error {
+		batches <- changes
+		if block.CompareAndSwap(true, false) {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return fmt.Errorf("wrapped: %w", &RefreshCompletedError{Err: errors.New("invalid NFO")})
+	}, func(err error) { reported <- err })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer monitor.Close()
+	nextChanges(t, batches)
+	select {
+	case err := <-reported:
+		if ShouldRetry(err) {
+			t.Fatalf("completed item failure was retryable: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("item failure was not reported")
+	}
+	select {
+	case changes := <-batches:
+		t.Fatalf("completed root batch was automatically replayed: %+v", changes)
+	case <-time.After(3 * testOptions().RetryDelay):
+	}
+	block.Store(true)
+	first := filepath.Join(root, "first.nfo")
+	writeWatchFile(t, first)
+	if changes := nextChanges(t, batches); !containsChange(changes, first, false) {
+		t.Fatalf("new file change did not trigger refresh: %+v", changes)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+	second := filepath.Join(root, "second.strm")
+	writeWatchFile(t, second)
+	close(release)
+	changes := nextChanges(t, batches)
+	if !containsChange(changes, second, false) || containsChange(changes, first, false) || containsChange(changes, root, true) {
+		t.Fatalf("new event lost or completed batch replayed: %+v", changes)
 	}
 }
 

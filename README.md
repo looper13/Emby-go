@@ -53,6 +53,8 @@ ABF-018/
 
 扫描时 `.strm` 按 scheme 分类：`http/https` + NFO → 可播放；`http(s)` 无 NFO → 待补录；`ed2k` 等其它 scheme → 不兼容（不进 Emby）。
 
+NFO 的 `<runtime>` 与视频 `<duration>` 按分钟读取，兼容纯整数及 `94分`、`94分钟`、`94分鐘`、`94 min` / `mins` / `minute` / `minutes`（英文大小写不敏感，允许前后空白）。读取不改写源 NFO；本服务生成的 NFO 仍写纯整数。无法识别的时长或损坏 XML 仍会报错，扫描保留旧索引并在后续扫描重试。
+
 扫描**不做图片格式转换**，直接引用目录里已有的图片（`webp`/`jpg`/`jpeg`/`png`/`gif`/`tbn`）。媒体库封面优先取**库根目录**下 `poster`→`folder`→`cover`→`default` 任一命名的图片（`cover.webp` 同样适用）；没有则借用库内最近入库影片的宽图/海报。
 
 影片本地图片参考 [Emby 电影图片命名规则](https://emby.media/support/articles/Movie-Naming.html#video-images)：海报支持影片同名图及 `-poster`/`-cover`/`-default`/`-movie`，也认目录公共海报；宽图依次识别影片名 `-thumb`/`-landscape`、`thumb`/`landscape`。背景图识别 `backdrop`/`backdropX`、`fanart`/`fanart-X`、`background`/`background-X`、`art`/`art-X`，以及 `extrafanart/fanartX`（X 为数字）。保留服务生成的影片专属海报和背景图优先级；专属背景图不会混入目录公共背景，但仍包含 `extrafanart`。
@@ -67,6 +69,7 @@ ABF-018/
 - 正常文件事件默认等待 **1 秒静默期**，同一文件的重复通知合并；连续事件最多等待 **5 秒**便提交一批，防止一直不刷新。
 - `.strm` / NFO 变化只刷新对应影片或 CD 分组；海报、背景图、宽图变化只刷新同目录影片；目录移入、移出或重命名只处理对应子树，不因单文件更新重新遍历整库。
 - 文件事件是显式更新信号，因此即使写入工具保留文件大小和修改时间，相关影片也会重新读取。扫描期间的新事件继续排队；探测、刮削或手动扫描占用 NFO 通道时保留事件并重试。
+- 单条 STRM/NFO 读取或解析失败时保留旧索引，继续处理同批其他目录，并在任务和进度中记录失败数；不会自动重放整批事件。失败文件修改后或下次手动/定时扫描时再尝试。任务繁忙、目录遍历或数据库等导致刷新未完成的错误仍保留事件并重试。
 - 删除媒体库会停止对应监听，退出服务会释放监听句柄。管理端「任务」页显示「实时局部刷新」，扫描进度接口返回本轮统计。
 - 目录不可用或读取失败时保护已有索引。根目录失联后会尝试恢复；事件溢出时重新登记监听并做增量对账，积压超过 4096 个路径时合并为一次增量对账，避免静默漏更新。
 
@@ -150,6 +153,15 @@ Split/
 ### 合集（BoxSet）
 
 读 NFO `<set><name>` 自动聚合。Views 会出现「合集」媒体库（`CollectionType=boxsets`），合集内类型筛选只显示该合集数量≥1 的类型。
+
+### 客户端筛选、用户和媒体库接口
+
+- `GET /Tags`、`/Years`、`/OfficialRatings`、`/Studios` 返回 `Items`、`TotalRecordCount`、`StartIndex`；从可见影片索引聚合，不读取源媒体或 NFO。支持 `UserId`、媒体库/合集 `ParentId`、`IncludeItemTypes`、`ExcludeItemTypes`、`MediaTypes`、搜索及名称范围、升降序和分页（每页最多 1000）。这些接口目前按上述条件筛选，不支持 Emby 的全部高级查询参数。
+- 标签和年份使用 `{Name, Id}`，分级使用 `{Name}`，制片商使用 Studio 项；标签/制片商 ID 与影片列表筛选共用。影片列表支持 `OfficialRatings`（多个值用 `|` 或逗号分隔），与年份、标签、制片商筛选组合，并参与响应缓存键。
+- `GET /Users` 返回当前管理员的 UserDto 数组，需要访问令牌；支持 `IsHidden`、`IsDisabled`、`IsGuest`。`POST /Users/{uid}/Authenticate` 接收 JSON 或表单 `Pw`，校验密码并返回登录令牌；用户 ID 使用本服务返回的 `1`，不接受其它 Emby 服务器的旧用户 ID。
+- `GET /Library/VirtualFolders` 返回实际配置的媒体库数组，含 `Name`、`Locations`、`ItemId`、`Id`、`CollectionType`、`LibraryOptions`。库 ID 与 Views 一致；自动生成的合集视图不作为实际配置目录返回。
+- `GET /Items/{id}/ThumbnailSet` 返回 `{AspectRatio: 0, Thumbnails: []}`；当前未生成播放进度预览帧，空集合表示无预览。它与海报缩略图、剧照无关，也不会触发下载或抽帧。未知或不可见影片返回 404。
+- 上述接口同时提供根路径、`/emby` 前缀和全小写路径；除密码登录外均需鉴权。
 
 ## Web 管理后台
 

@@ -125,13 +125,33 @@ func (a *App) initialize(c *gin.Context) {
 
 func (a *App) authenticate(c *gin.Context) {
 	var req struct {
-		Username string `json:"Username"`
-		Pw       string `json:"Pw"`
+		Username string `json:"Username" form:"Username"`
+		Pw       string `json:"Pw" form:"Pw"`
 	}
 	if err := c.ShouldBind(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid credentials payload"})
 		return
 	}
+	a.authenticateCredentials(c, req.Username, req.Pw)
+}
+
+// authenticateByID is the password login variant used after selecting a user.
+// The path identifies our existing administrator; it never aliases unknown IDs.
+func (a *App) authenticateByID(c *gin.Context) {
+	if !a.validUser(c) {
+		return
+	}
+	var req struct {
+		Pw string `json:"Pw" form:"Pw"`
+	}
+	if err := c.ShouldBind(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid credentials payload"})
+		return
+	}
+	a.authenticateCredentials(c, a.currentAdminName(), req.Pw)
+}
+
+func (a *App) authenticateCredentials(c *gin.Context, username, password string) {
 	initialized, err := a.db.HasAdministrator()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -141,7 +161,7 @@ func (a *App) authenticate(c *gin.Context) {
 		c.JSON(http.StatusPreconditionRequired, gin.H{"error": "管理员尚未初始化"})
 		return
 	}
-	valid, err := a.db.AuthenticateAdministrator(strings.TrimSpace(req.Username), req.Pw)
+	valid, err := a.db.AuthenticateAdministrator(strings.TrimSpace(username), password)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -155,7 +175,7 @@ func (a *App) authenticate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成访问令牌失败"})
 		return
 	}
-	a.setAdminName(strings.TrimSpace(req.Username))
+	a.setAdminName(strings.TrimSpace(username))
 	token := hex.EncodeToString(b)
 	if err := a.db.SaveAccessToken(token); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存访问令牌失败"})

@@ -37,6 +37,23 @@ type workerResult struct {
 	err     error
 }
 
+// RefreshCompletedError reports item failures after the entire batch has been
+// processed. Replaying that batch cannot fix invalid input; a new file event
+// or explicit scan should attempt those items again.
+type RefreshCompletedError struct {
+	Err error
+}
+
+func (e *RefreshCompletedError) Error() string { return e.Err.Error() }
+func (e *RefreshCompletedError) Unwrap() error { return e.Err }
+
+// ShouldRetry distinguishes unfinished refreshes from completed batches with
+// item errors. Unfinished work (including a busy scanner) retains its events.
+func ShouldRetry(err error) bool {
+	var completed *RefreshCompletedError
+	return err != nil && !errors.As(err, &completed)
+}
+
 func New(parent context.Context, root string, options Options, refresh func(context.Context, []Change) error, report func(error)) (*Monitor, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
@@ -275,15 +292,18 @@ func run(ctx context.Context, watcher eventSource, root string, options Options,
 			go func() { results <- workerResult{changes: changes, err: refresh(ctx, changes)} }()
 		case result := <-results:
 			running = false
+			retry := ShouldRetry(result.err)
 			if result.err != nil && ctx.Err() == nil {
 				report(result.err)
-				for _, change := range result.changes {
-					merge(pending, change)
+				if retry {
+					for _, change := range result.changes {
+						merge(pending, change)
+					}
 				}
 			}
 			if len(pending) > 0 {
 				firstEvent = time.Now()
-				if result.err != nil {
+				if retry {
 					arm(options.RetryDelay)
 				} else {
 					arm(options.Debounce)

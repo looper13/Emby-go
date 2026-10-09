@@ -959,7 +959,7 @@ func (a *App) itemsQuery(c *gin.Context) {
 		person := joinEntityNames(c, "Person", "Person", "PersonIds")
 		unplayed := strings.Contains(strings.ToLower(c.Query("Filters")), "isunplayed")
 		favorite := strings.Contains(strings.ToLower(c.Query("Filters")), "isfavorite")
-		ms, total, e := a.db.SearchScoped(0, collection, c.Query("SearchTerm"), c.Query("Years"), genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start)
+		ms, total, e := a.db.SearchScoped(0, collection, c.Query("SearchTerm"), c.Query("Years"), genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start, c.Query("OfficialRatings"))
 		if e != nil {
 			c.JSON(500, gin.H{"error": e.Error()})
 			return
@@ -996,9 +996,9 @@ func (a *App) itemsQuery(c *gin.Context) {
 	fields := requestedFields(c)
 	term, years := c.Query("SearchTerm"), c.Query("Years")
 	// 缓存键不需要带请求来源：响应里的流地址是相对路径，与宿主无关。
-	key := responseKey("items", a.cacheScope(lib), term, years, genre, tags, studios, person, c.Query("Filters"), sortBy, c.Query("SortOrder"), fields.key(), start, limit)
+	key := responseKey("items", a.cacheScope(lib), term, years, genre, tags, studios, person, c.Query("Filters"), sortBy, c.Query("SortOrder"), fields.key(), start, limit, c.Query("OfficialRatings"))
 	a.cachedResponse(c, key, 15*time.Second, func() ([]byte, error) {
-		ms, total, err := a.db.SearchScoped(lib, "", term, years, genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start)
+		ms, total, err := a.db.SearchScoped(lib, "", term, years, genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start, c.Query("OfficialRatings"))
 		if err != nil {
 			return nil, err
 		}

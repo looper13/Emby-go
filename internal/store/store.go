@@ -937,8 +937,8 @@ func (s *Store) SearchFiltered(libraryID int64, term, years, genre string, unpla
 
 // SearchScoped 供合集上下文检索：collection="*" 限定“属于任一合集”，
 // 非空串限定为某个具体合集，空串表示不限合集。
-func (s *Store) SearchScoped(libraryID int64, collection, term, years, genre, tags, studios, person string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int) ([]Movie, int, error) {
-	return s.search(libraryID, term, "", years, genre, tags, studios, person, collection, "", "", unplayed, favorite, sortBy, desc, limit, offset)
+func (s *Store) SearchScoped(libraryID int64, collection, term, years, genre, tags, studios, person string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
+	return s.search(libraryID, term, "", years, genre, tags, studios, person, collection, "", "", unplayed, favorite, sortBy, desc, limit, offset, officialRatings...)
 }
 
 func (s *Store) SearchAll(libraryID int64, term, status, sortBy string, desc bool, limit, offset int) ([]Movie, int, error) {
@@ -1015,7 +1015,7 @@ func (s *Store) MoviesForProbe(libraryID int64, status string, limit int) ([]Mov
 	return out, rows.Err()
 }
 
-func (s *Store) search(libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int) ([]Movie, int, error) {
+func (s *Store) search(libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	where := []string{}
 	args := []any{}
 	switch status {
@@ -1069,6 +1069,14 @@ func (s *Store) search(libraryID int64, term, status, years, genre, tags, studio
 		if len(placeholders) > 0 {
 			where = append(where, "CAST(year AS TEXT) IN ("+strings.Join(placeholders, ",")+")")
 		}
+	}
+	if ratings := splitTerms(strings.Join(officialRatings, "|")); len(ratings) > 0 {
+		placeholders := make([]string, 0, len(ratings))
+		for _, rating := range ratings {
+			placeholders = append(placeholders, "?")
+			args = append(args, rating)
+		}
+		where = append(where, "official_rating IN ("+strings.Join(placeholders, ",")+")")
 	}
 	for field, value := range map[string]string{"genres": genre, "tags": tags, "studios": studios} {
 		if value == "" {

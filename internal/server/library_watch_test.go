@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -24,6 +25,70 @@ func awaitLibraryWatch(t *testing.T, condition func() bool) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for automatic library refresh")
+}
+
+func TestLibraryRefreshItemFailuresCompleteOtherDirectories(t *testing.T) {
+	root := t.TempDir()
+	bad := filepath.Join(root, "a-bad", "movie.nfo")
+	good := filepath.Join(root, "z-good", "movie.nfo")
+	for _, path := range []string{bad, good} {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, strings.TrimSuffix(path, ".nfo")+".strm", "http://media.test/movie.mp4\n")
+		writeFile(t, path, "<movie><title>Original</title><runtime>90</runtime></movie>")
+	}
+	app, _, _ := newProbeTestApp(t, root)
+	library, err := app.db.Library(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badID, err := app.db.MovieIDByPath(strings.TrimSuffix(bad, ".nfo") + ".strm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, bad, "<movie><title>Invalid</title><runtime>broken</runtime></movie>")
+	writeFile(t, good, "<movie><title>Updated good</title></movie>")
+	changes := []librarywatch.Change{{Path: bad}, {Path: good}}
+	err = app.refreshLibraryChanges(context.Background(), library, changes)
+	if err == nil || librarywatch.ShouldRetry(err) || !strings.Contains(err.Error(), "1 个文件读取失败") {
+		t.Fatalf("expected completed partial failure, got %v", err)
+	}
+	before, err := app.db.Movie(badID)
+	if err != nil || before.Title != "Original" || before.RuntimeSeconds != 5400 {
+		t.Fatalf("bad NFO overwrote old index: %+v, %v", before, err)
+	}
+	movies, count, err := app.db.SearchAll(1, "Updated good", "", "title", false, 10, 0)
+	if err != nil || count != 1 || len(movies) != 1 {
+		t.Fatalf("bad directory blocked later valid directory: %+v, %d, %v", movies, count, err)
+	}
+	app.taskMu.Lock()
+	last := app.tasks[0]
+	app.taskMu.Unlock()
+	if last.Type != "watch" || last.Status != "failed" || last.Error == "" {
+		t.Fatalf("partial failure disappeared from task history: %+v", last)
+	}
+	app.scanMu.RLock()
+	status := app.scanStatus
+	app.scanMu.RUnlock()
+	if status.Running || status.Failed != 1 || status.Updated != 1 || status.Done != 2 {
+		t.Fatalf("incorrect completed partial progress: %+v", status)
+	}
+	writeFile(t, bad, "<movie><title>Fixed</title><runtime>94分</runtime></movie>")
+	if err := app.refreshLibraryChanges(context.Background(), library, []librarywatch.Change{{Path: bad}}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := app.db.Movie(badID)
+	if err != nil || after.Title != "Fixed" || after.RuntimeSeconds != 5640 {
+		t.Fatalf("fixed file did not recover: %+v, %v", after, err)
+	}
+	// A missing child directory is a valid deletion event; an unavailable
+	// library root is an unfinished refresh and must retain its events.
+	unavailable := library
+	unavailable.Path = filepath.Join(root, "missing-root")
+	if err := app.refreshLibraryChanges(context.Background(), unavailable, []librarywatch.Change{{Path: unavailable.Path, Directory: true}}); !librarywatch.ShouldRetry(err) {
+		t.Fatalf("unfinished directory refresh must still retry: %v", err)
+	}
 }
 
 func TestLibraryWatchEndToEnd(t *testing.T) {

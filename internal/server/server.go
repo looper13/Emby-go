@@ -353,6 +353,8 @@ type embyRoute struct {
 func (a *App) embyRoutes() []embyRoute {
 	return []embyRoute{
 		{"POST", "/Users/AuthenticateByName", false, a.authenticate},
+		{"POST", "/Users/:uid/Authenticate", false, a.authenticateByID},
+		{"GET", "/Users", true, a.users},
 		{"GET", "/Users/Public", false, a.publicUsers},
 		{"GET", "/Users/Me", true, a.me},
 		{"GET", "/Users/:uid", true, a.userByID},
@@ -374,6 +376,11 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Items/Counts", true, a.counts},
 		{"GET", "/Search/Hints", true, a.searchHints},
 		{"GET", "/Genres", true, a.genres},
+		{"GET", "/Tags", true, a.tagsList},
+		{"GET", "/Studios", true, a.studios},
+		{"GET", "/Years", true, a.years},
+		{"GET", "/OfficialRatings", true, a.officialRatings},
+		{"GET", "/Library/VirtualFolders", true, a.virtualFolders},
 		{"GET", "/Users/:uid/Items/Resume", true, a.resume},
 		{"GET", "/Shows/NextUp", true, a.nextUp},
 		{"GET", "/Users/:uid/Views", true, a.views},
@@ -384,6 +391,7 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Items/:id/Images/:kind", false, a.image},
 		{"GET", "/Items/:id/Images/:kind/:index", false, a.image},
 		{"GET", "/Items/:id/Images", true, a.imageInfo},
+		{"GET", "/Items/:id/ThumbnailSet", true, a.thumbnailSet},
 		{"GET", "/Items/:id/Similar", true, a.similar},
 		{"GET", "/Items/:id/PlaybackInfo", true, a.playback},
 		{"POST", "/Items/:id/PlaybackInfo", true, a.playback},
