@@ -67,6 +67,7 @@ func (a *App) image(c *gin.Context) {
 		}
 		// 数值 id 优先命中影片；影片不存在/不可见时回退为该媒体库的封面。
 		if m, ok := a.cachedMovie(id); ok && m.IsVisible() {
+			m = a.resolveMovieArtwork(m, strings.EqualFold(kind, "Backdrop") || strings.EqualFold(kind, "fanart"))
 			p := movieImagePath(m, kind)
 			if strings.EqualFold(kind, "Backdrop") || strings.EqualFold(kind, "fanart") {
 				paths := m.Backdrops()
@@ -136,7 +137,9 @@ const (
 func (a *App) firstCollectionPoster(names []string) string {
 	for _, name := range names {
 		if poster, _ := a.db.CollectionPoster(name); poster != "" {
-			return poster
+			if path := a.artReference(poster, false); path != "" {
+				return path
+			}
 		}
 	}
 	return ""
@@ -267,13 +270,13 @@ func ifNoneMatchHit(header, tag string) bool {
 func (a *App) boxsetPoster(rawID string) string {
 	if rawID == boxsetViewID {
 		// 合集文件夹的封面要逐个合集试到第一个有海报的，缓存住避免每张图都扫一遍合集。
-		key := "boxcover:" + a.db.Version("g:version")
+		key := "boxcover:" + a.cacheScope(0)
 		if raw, ok := a.imgMeta.Get(key); ok {
 			return string(raw)
 		}
 		poster := a.firstCollectionPoster(a.cachedCollections())
 		a.imgMeta.Set(key, []byte(poster), 5*time.Minute)
-		return poster
+		return a.artReference(poster, false)
 	}
 	var names []string
 	if name, ok := parseBoxsetID(rawID); ok {
@@ -281,7 +284,7 @@ func (a *App) boxsetPoster(rawID string) string {
 	}
 	for _, name := range names {
 		if poster, _ := a.db.CollectionPoster(name); poster != "" {
-			return poster
+			return a.artReference(poster, false)
 		}
 	}
 	return ""
@@ -338,6 +341,7 @@ func (a *App) imageInfo(c *gin.Context) {
 // movieImageInfo 组装与真实 Emby 一致的图片清单：
 // poster→Primary、thumb/landscape→Thumb，所有背景图按扫描顺序编号为 Backdrop。
 func (a *App) movieImageInfo(m store.Movie) []gin.H {
+	m = a.movieArtwork(m)
 	images := make([]gin.H, 0, 3)
 	for _, item := range []struct {
 		imageType string
@@ -360,14 +364,33 @@ func (a *App) movieImageInfo(m store.Movie) []gin.H {
 	return images
 }
 
+// Current source properties are response data; they are never scan dependencies.
+func currentMovieSource(movie store.Movie, sourcePath string) (store.Movie, bool) {
+	movie.SourceProtocol, movie.SourceContainer = "", ""
+	raw, err := scanner.ReadSource(sourcePath)
+	if err != nil {
+		return movie, false
+	}
+	if parsed, err := url.Parse(raw); err == nil {
+		movie.SourceProtocol = strings.ToLower(parsed.Scheme)
+		movie.SourceContainer = strings.TrimPrefix(strings.ToLower(path.Ext(parsed.Path)), ".")
+	}
+	return movie, scanner.ValidHTTP(raw)
+}
+
 func (a *App) playback(c *gin.Context) {
 	movie, sourcePath, id, ok := a.resolvePlaybackTarget(c.Param("id"))
-	if !ok || !movie.IsVisible() || (movie.SourceProtocol != "http" && movie.SourceProtocol != "https") {
+	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	raw, err := scanner.ReadSource(sourcePath)
+	if err != nil || !scanner.ValidHTTP(raw) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "invalid or unavailable media source"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"MediaSources":  []gin.H{a.mediaSourceFor(movie, id, sourcePath, c)},
+		"MediaSources":  []gin.H{a.mediaSourceWithURL(movie, id, sourcePath, raw, c)},
 		"PlaySessionId": randomSessionID(),
 	})
 }
@@ -399,6 +422,19 @@ func (a *App) mediaSource(m store.Movie, c *gin.Context) gin.H {
 }
 
 func (a *App) mediaSourceFor(m store.Movie, id, sourcePath string, c *gin.Context) gin.H {
+	raw, _ := scanner.ReadSource(sourcePath)
+	return a.mediaSourceWithURL(m, id, sourcePath, raw, c)
+}
+
+func (a *App) mediaSourceWithURL(m store.Movie, id, sourcePath, raw string, c *gin.Context) gin.H {
+	parsed, _ := url.Parse(raw)
+	container, name := "", m.Title
+	if parsed != nil {
+		container = strings.TrimPrefix(strings.ToLower(path.Ext(parsed.Path)), ".")
+		if base := path.Base(parsed.Path); base != "" && base != "." && base != "/" {
+			name = strings.TrimSuffix(base, path.Ext(base))
+		}
+	}
 	stream := streamURL(id)
 	mediaSourceId := "mediasource_" + id
 	// 主文件取 NFO 的 streamdetails，分段取它自己的 mediainfo.json；
@@ -416,11 +452,11 @@ func (a *App) mediaSourceFor(m store.Movie, id, sourcePath string, c *gin.Contex
 	}
 	source := gin.H{
 		"Id":                         mediaSourceId,
-		"Name":                       mediaSourceName(m, sourcePath),
+		"Name":                       name,
 		"Path":                       mediaPath,
 		"DirectStreamUrl":            stream + "?MediaSourceId=" + mediaSourceId + "&Static=true",
 		"Protocol":                   "Http",
-		"Container":                  m.SourceContainer,
+		"Container":                  container,
 		"IsRemote":                   true,
 		"HasMixedProtocols":          false,
 		"Type":                       "Default",
@@ -465,42 +501,9 @@ func (a *App) mediaSourceFor(m store.Movie, id, sourcePath string, c *gin.Contex
 	return source
 }
 
-// mediaSourceName 返回 MediaSource 的展示名。真实 Emby 用媒体文件名（去扩展名），
-// 而非影片标题；本服务的媒体是 .strm 指向的远程直链，故取直链的文件名，取不到回退标题。
-func mediaSourceName(m store.Movie, sourcePath string) string {
-	if sourcePath == "" {
-		sourcePath = m.SourcePath
-	}
-	if base := mediaFileName(sourcePath); base != "" {
-		return base
-	}
-	return m.Title
-}
-
 // itemFileName 返回条目对应的文件名（含扩展名），即 .strm 文件名。
 func itemFileName(m store.Movie) string {
 	return filepath.Base(m.SourcePath)
-}
-
-// mediaFileName 从 .strm 内容里解析出媒体文件名（去扩展名）。
-// 内部只读一次首行，失败返回空串。
-func mediaFileName(strmPath string) string {
-	raw, err := scanner.ReadSource(strmPath)
-	if err != nil {
-		return ""
-	}
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return ""
-	}
-	name := path.Base(parsed.Path)
-	if name == "" || name == "." || name == "/" {
-		return ""
-	}
-	if ext := path.Ext(name); ext != "" {
-		name = strings.TrimSuffix(name, ext)
-	}
-	return name
 }
 
 // streamsBitrate 累加各轨 BitRate 作为容器总码率。
@@ -1035,7 +1038,12 @@ func (a *App) proxyStream(c *gin.Context) {
 		c.Header("Accept-Ranges", "bytes")
 	}
 	if c.Writer.Header().Get("Content-Type") == "" {
-		c.Header("Content-Type", containerMIME(movie.SourceContainer))
+		parsed, _ := url.Parse(raw)
+		container := ""
+		if parsed != nil {
+			container = strings.TrimPrefix(strings.ToLower(path.Ext(parsed.Path)), ".")
+		}
+		c.Header("Content-Type", containerMIME(container))
 	}
 	c.Status(resp.StatusCode)
 	if c.Request.Method == http.MethodHead {
@@ -1175,6 +1183,8 @@ func virtualPartID(movieID int64, part int) string {
 // partItem 渲染影片某 AdditionalPart 的 BaseItemDto，Id 用虚拟 part-<movieID>-<index+2>，
 // 元数据与图片共享主影片，保证 iPlay 点开分段项时详情可取图、不白屏。
 func (a *App) partItem(m store.Movie, index int) gin.H {
+	m = a.movieArtwork(m)
+	m, _ = currentMovieSource(m, m.AdditionalParts[index])
 	part := index + 2
 	imageTags := gin.H{}
 	backdrops := make([]string, 0, 1)

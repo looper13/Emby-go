@@ -168,7 +168,7 @@ func TestLibraryWatchEndToEnd(t *testing.T) {
 	writeJPEGImage(t, privatePoster, 40, 80)
 	awaitLibraryWatch(t, func() bool {
 		movie, found := find("After busy")
-		return found && movie.PosterPath == privatePoster
+		return found && app.movieCovers(movie).PosterPath == privatePoster
 	})
 	otherRoot := t.TempDir()
 	writeFile(t, filepath.Join(otherRoot, "other.strm"), "http://media.test/other.mp4\n")

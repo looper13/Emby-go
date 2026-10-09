@@ -74,6 +74,7 @@ func TestImageUploadPreservesSiblingAndRescan(t *testing.T) {
 		{bID, filepath.Join(root, "poster.jpg"), 80, 40},
 	} {
 		movie, err := app.db.Movie(item.id)
+		movie = app.movieArtwork(movie)
 		if err != nil || movie.PosterPath != item.path {
 			t.Fatalf("wrong indexed image: %+v, %v", movie, err)
 		}

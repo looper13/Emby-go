@@ -108,10 +108,10 @@ func TestWallLibraryFilter(t *testing.T) {
 	if got := count("&library_id=" + idB + "&status=success"); got != 1 {
 		t.Errorf("B 库可播放影片数 = %d，期望 1", got)
 	}
-	if got := count("&library_id=" + idB + "&status=incompatible"); got != 1 {
+	if got := count("&library_id=" + idB + "&status=pending"); got != 1 {
 		t.Errorf("B 库不兼容影片数 = %d，期望 1", got)
 	}
-	if got := count("&library_id=" + idA + "&status=incompatible"); got != 0 {
+	if got := count("&library_id=" + idA + "&status=pending"); got != 0 {
 		t.Errorf("A 库不兼容影片数 = %d，期望 0", got)
 	}
 	// 与搜索叠加。

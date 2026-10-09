@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -89,6 +90,7 @@ func (a *App) entityPosterPath(kind, name string) string {
 	if err != nil {
 		p = ""
 	}
+	p = a.artReference(p, false)
 	a.imgMeta.Set(key, []byte(p), 5*time.Minute)
 	return p
 }
@@ -267,6 +269,7 @@ func (a *App) libraryCoverPath(l store.Library) string {
 			if err != nil {
 				return nil, err
 			}
+			path = a.artReference(path, true)
 		}
 		return []byte(path), nil
 	})
@@ -408,7 +411,11 @@ func (a *App) boxsetFolderDTO(collections []string) gin.H {
 		"UserData":          gin.H{"UnplayedItemCount": len(collections), "PlaybackPositionTicks": 0, "IsFavorite": false, "Played": false},
 	}
 	for _, name := range collections {
-		if poster, _ := a.db.CollectionPoster(name); poster != "" {
+		if reference, _ := a.db.CollectionPoster(name); reference != "" {
+			poster := a.artReference(reference, false)
+			if poster == "" {
+				continue
+			}
 			item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
 			item["PrimaryImageAspectRatio"] = artRatio(poster)
 			break
@@ -437,9 +444,9 @@ func (a *App) boxsetItemFrom(name string, stat store.CollectionStat) gin.H {
 		"BackdropImageTags": []string{},
 		"UserData":          zeroUserData(),
 	}
-	if stat.Poster != "" {
-		item["ImageTags"] = gin.H{"Primary": a.posterTag(stat.Poster)}
-		item["PrimaryImageAspectRatio"] = artRatio(stat.Poster)
+	if poster := a.artReference(stat.Poster, false); poster != "" {
+		item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
+		item["PrimaryImageAspectRatio"] = artRatio(poster)
 	}
 	if len(stat.Genres) > 0 {
 		sort.Strings(stat.Genres)
@@ -709,12 +716,17 @@ func (a *App) peopleOfActors(m store.Movie, actors []store.ActorRef, loaded bool
 // embyItem 把 DB 影片映射为 BaseItemDto（Movie）。字段名与真实 Emby 对齐，
 // 并保证 iPlay 等脆弱客户端必须的 UserData / ImageTags / BackdropImageTags 恒存在。
 func (a *App) embyItem(m store.Movie, d store.UserData) gin.H {
-	return a.embyItemActors(m, d, nil, false)
+	return a.embyItemWithArtwork(m, d, nil, false, true)
 }
 
 // embyItemActors 与 embyItem 相同，但允许传入批量预取的演员列表避免逐片查库。
 // loaded=true 表示 actors 已由调用方批量取回（可为空，不再单条回查）。
 func (a *App) embyItemActors(m store.Movie, d store.UserData, actors []store.ActorRef, loaded bool) gin.H {
+	return a.embyItemWithArtwork(m, d, actors, loaded, false)
+}
+
+func (a *App) embyItemWithArtwork(m store.Movie, d store.UserData, actors []store.ActorRef, loaded, includeBackdrops bool) gin.H {
+	m = a.resolveMovieArtwork(m, includeBackdrops)
 	id := strconv.FormatInt(m.ID, 10)
 	sortName := m.SortName
 	if sortName == "" {
@@ -1317,7 +1329,13 @@ func (a *App) item(c *gin.Context) {
 		return
 	}
 	// 详情恒含 MediaSources，但流地址是相对路径，缓存键无需按宿主分桶。
-	key := "item:" + a.db.MovieVersion(id) + ":" + strconv.FormatInt(id, 10)
+	epoch := uint64(0)
+	if movie, ok := a.cachedMovie(id); ok {
+		if v, exists := a.scopeVersions.Load(movie.LibraryID); exists {
+			epoch = v.(*atomic.Uint64).Load()
+		}
+	}
+	key := "item:" + a.db.MovieVersion(id) + ":" + strconv.FormatInt(id, 10) + ":" + strconv.FormatUint(epoch, 10)
 	a.cachedResponse(c, key, time.Minute, func() ([]byte, error) {
 		m, err := a.db.Movie(id)
 		if err != nil {

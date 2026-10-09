@@ -288,7 +288,7 @@ func (a *App) refreshScrapedMovies(ids []int64) (refreshErr error) {
 	paths := map[string]string{}
 	collectPaths := func(movies map[int64]store.Movie) {
 		for _, movie := range movies {
-			for _, path := range movieDiskPaths(movie) {
+			for _, path := range append(movieDiskPaths(movie), movieDiskPaths(a.movieArtwork(movie))...) {
 				if path != "" {
 					paths[cachePathKey(path)] = path
 				}

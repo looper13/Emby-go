@@ -263,7 +263,7 @@ func TestCoreAPI(t *testing.T) {
 	if pageBody["TotalRecordCount"].(float64) != 1 || len(pageBody["Items"].([]any)) != 0 {
 		t.Fatalf("filtered pagination: %v", pageBody)
 	}
-	statusReq, _ := http.NewRequest("GET", ts.URL+"/api/admin/items?status=incompatible", nil)
+	statusReq, _ := http.NewRequest("GET", ts.URL+"/api/admin/items?status=pending", nil)
 	statusReq.Header.Set("X-Emby-Token", token)
 	statusResp, _ := http.DefaultClient.Do(statusReq)
 	var statusBody map[string]any
@@ -282,8 +282,8 @@ func TestCoreAPI(t *testing.T) {
 		t.Fatal("tasks unavailable")
 	}
 	statusItems := statusBody["items"].([]any)
-	if statusItems[0].(map[string]any)["source_protocol"] != "ed2k" {
-		t.Fatalf("protocol missing: %v", statusItems[0])
+	if statusItems[0].(map[string]any)["source_protocol"] != "" {
+		t.Fatalf("scan unexpectedly read protocol: %v", statusItems[0])
 	}
 	nullStopReq, _ := http.NewRequest("POST", ts.URL+"/emby/Sessions/Playing/Stopped", strings.NewReader("null"))
 	nullStopReq.Header.Set("X-Emby-Token", token)
@@ -885,7 +885,7 @@ func TestAPIKeysAndScanProgress(t *testing.T) {
 	if resp, _ := call("POST", "/api/admin/libraries", token, `{"Name":"AV","Path":"`+strings.ReplaceAll(root, `\`, `\\`)+`"}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("add library for scan: %d", resp.StatusCode)
 	}
-	if resp, scan := call("POST", "/api/admin/scan", token, ""); resp.StatusCode != http.StatusOK || scan["success"].(float64) != 1 || scan["incompatible"].(float64) != 1 {
+	if resp, scan := call("POST", "/api/admin/scan", token, ""); resp.StatusCode != http.StatusOK || scan["success"].(float64) != 1 || scan["pending"].(float64) != 1 {
 		t.Fatalf("scan result: status=%d body=%v", resp.StatusCode, scan)
 	}
 	if _, progress = call("GET", "/api/admin/scan/progress", token, ""); progress["running"].(bool) ||

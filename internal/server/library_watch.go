@@ -100,20 +100,24 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 	a.setScanLibrary(1, library)
 	files := make(map[string][]string)
 	directories := make(map[string]bool)
+	forceMetadata := make(map[string]bool)
 	for _, change := range changes {
-		// extrafanart belongs to movies in its parent folder, including when the
-		// entire image directory is created, renamed, or removed.
+		// Artwork events only invalidate request caches; they never rewrite NFO metadata.
 		artDirectory := change.Path
 		if !change.Directory {
 			artDirectory = filepath.Dir(change.Path)
 		}
 		if strings.EqualFold(filepath.Base(artDirectory), "extrafanart") {
-			directory := filepath.Dir(artDirectory)
-			if _, exists := directories[directory]; !exists {
-				directories[directory] = false
-			}
-			files[directory] = append(files[directory], filepath.Join(directory, "fanart.jpg"))
 			continue
+		}
+		if !change.Directory {
+			ext := strings.ToLower(filepath.Ext(change.Path))
+			if ext != ".strm" && ext != ".nfo" {
+				continue
+			}
+			if ext == ".nfo" {
+				forceMetadata[filepath.Dir(change.Path)] = true
+			}
 		}
 		if change.Directory {
 			directories[change.Path] = true
@@ -136,7 +140,7 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 	defer func() {
 		a.updateScanProgress(scanner.Progress{LibraryID: library.ID, LibraryName: library.Name, Phase: scanner.PhaseProcess, Total: processed, Done: processed, Result: total})
 		a.invalidateLibraryChanges(changes)
-		if total.Added+total.Updated+total.Deleted > 0 || refreshErr != nil {
+		if len(changes) > 0 {
 			a.finishLibraryCacheRefresh(library.ID)
 		}
 	}()
@@ -148,8 +152,10 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		var err error
 		if directories[directory] {
 			result, err = scanner.RefreshDirectory(ctx, a.db, library, directory, true, a.updateScanProgress)
-		} else {
+		} else if forceMetadata[directory] {
 			result, err = scanner.RefreshFiles(ctx, a.db, library, files[directory], a.updateScanProgress)
+		} else {
+			result, err = scanner.ReconcileFiles(ctx, a.db, library, files[directory], a.updateScanProgress)
 		}
 		total.Success += result.Success
 		total.Pending += result.Pending
@@ -162,18 +168,6 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		processed += result.Added + result.Updated + result.Skipped + result.Failed
 		if err != nil {
 			return err
-		}
-	}
-	// Root artwork can change without updating any indexed movie.
-	if total.Added+total.Updated+total.Deleted == 0 {
-		for _, change := range changes {
-			ext := strings.ToLower(filepath.Ext(change.Path))
-			if !change.Directory && (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp") {
-				if err := a.db.BumpVersion(library.ID); err != nil {
-					return err
-				}
-				break
-			}
 		}
 	}
 	slog.Info("媒体库局部刷新完成", "library_id", library.ID, "events", len(changes),

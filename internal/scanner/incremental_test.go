@@ -125,7 +125,7 @@ func TestIncrementalReconcilesChanges(t *testing.T) {
 	requireScan(t, database, library, Result{Added: 1, Deleted: 2, Skipped: 1, Pending: 1})
 	requireScan(t, database, library, Result{Skipped: 2})
 	writeScanFile(t, root, "moved.strm", "ed2k://file/movie\n")
-	requireScan(t, database, library, Result{Updated: 1, Incompatible: 1, Skipped: 1})
+	requireScan(t, database, library, Result{Skipped: 2})
 }
 
 func TestIncrementalTracksNFOAndImages(t *testing.T) {
@@ -138,21 +138,18 @@ func TestIncrementalTracksNFOAndImages(t *testing.T) {
 	requireScan(t, database, library, Result{Updated: 1, Success: 1})
 	for _, name := range []string{"cover.jpg", "poster.jpg", "poster.webp", "fanart.png", "landscape.jpg"} {
 		writeScanFile(t, root, name, "image")
-		requireScan(t, database, library, Result{Updated: 1, Success: 1})
+		requireScan(t, database, library, Result{Skipped: 1})
 		requireScan(t, database, library, Result{Skipped: 1})
 	}
 	writeScanFile(t, root, "poster.webp", "changed image")
-	requireScan(t, database, library, Result{Updated: 1, Success: 1})
-	if movie := visible(t, database)[0]; movie.PosterPath != filepath.Join(root, "poster.webp") || movie.BackdropPath != filepath.Join(root, "fanart.png") {
-		t.Fatalf("image selection = %+v", movie)
+	requireScan(t, database, library, Result{Skipped: 1})
+	if movie := visible(t, database)[0]; movie.PosterPath != "" || len(movie.BackdropPaths) != 0 {
+		t.Fatalf("scan unexpectedly indexed local artwork: %+v", movie)
 	}
 	if err := os.Remove(filepath.Join(root, "poster.webp")); err != nil {
 		t.Fatal(err)
 	}
-	requireScan(t, database, library, Result{Updated: 1, Success: 1})
-	if movie := visible(t, database)[0]; movie.PosterPath != filepath.Join(root, "poster.jpg") {
-		t.Fatalf("poster fallback = %s", movie.PosterPath)
-	}
+	requireScan(t, database, library, Result{Skipped: 1})
 	if err := os.Remove(filepath.Join(root, "a.nfo")); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +190,7 @@ func TestIncrementalCDGroupChanges(t *testing.T) {
 	writeScanFile(t, root, "Movie-CD3.strm", "http://media.test/cd3.mp4\n")
 	requireScan(t, database, library, Result{Updated: 1, Success: 1})
 	writeScanFile(t, root, "Movie-CD2.strm", "http://media.test/cd2-new.mp4\n")
-	requireScan(t, database, library, Result{Updated: 1, Success: 1})
+	requireScan(t, database, library, Result{Skipped: 1})
 	writeScanFile(t, root, "Movie.nfo", "<movie><title>Updated fallback</title></movie>")
 	requireScan(t, database, library, Result{Updated: 1, Success: 1})
 	writeScanFile(t, root, "Movie-CD1.nfo", "<movie><title>Primary</title></movie>")
@@ -223,7 +220,7 @@ func TestIncrementalFailureRetriesAndProtectsIndex(t *testing.T) {
 	writeScanFile(t, root, "b.nfo", "<movie><title>B</title></movie>")
 	database, library := scanLibrary(t, root)
 	requireScan(t, database, library, Result{Added: 2, Success: 2})
-	writeScanFile(t, root, "a.strm", "")
+	writeScanFile(t, root, "a.nfo", "<movie><title>Broken")
 	if err := os.Remove(filepath.Join(root, "b.strm")); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +229,7 @@ func TestIncrementalFailureRetriesAndProtectsIndex(t *testing.T) {
 	if movies := visible(t, database); len(movies) != 2 {
 		t.Fatalf("failed scan removed existing index: %+v", movies)
 	}
-	writeScanFile(t, root, "a.strm", "http://media.test/recovered.mp4\n")
+	writeScanFile(t, root, "a.nfo", "<movie><title>Recovery</title></movie>")
 	requireScan(t, database, library, Result{Updated: 1, Deleted: 1, Success: 1})
 	if err := os.Remove(filepath.Join(root, "a.nfo")); err != nil {
 		t.Fatal(err)

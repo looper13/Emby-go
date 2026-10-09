@@ -121,7 +121,7 @@ content.addEventListener('error', event => {
   img.replaceWith(placeholder);
 }, true);
 
-const STATUS_TEXT = { success: '可播放', manual: '手动录入', pending: '待补录', incompatible: '不兼容', failed: '失败' };
+const STATUS_TEXT = { success: '已入库', manual: '手动录入', pending: '待补录', incompatible: '不兼容', failed: '失败' };
 const statusBadge = status => {
   const key = Object.prototype.hasOwnProperty.call(STATUS_TEXT, status) ? status : 'manual';
   return `<span class="badge ${esc(key)}">${esc(STATUS_TEXT[key] || status)}</span>`;
@@ -184,8 +184,8 @@ async function pageOverview() {
       ${[
         ['媒体库', libraries.total ?? libraries.items?.length ?? 0, 'Collection Folder'],
         ['已入库影片', success.total || 0, 'NFO 真源 · 可见于 Emby'],
-        ['待补录', pendingCount, 'http(s) 但缺 NFO'],
-        ['不兼容源', incompatibleCount, 'ed2k / 其它 scheme']
+        ['待补录', pendingCount, '缺少 NFO 元数据'],
+        ['不兼容源', incompatibleCount, '旧索引状态，扫描后重新归类']
       ].map(([label, value, sub]) => `<div class="card"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(sub)}</span></div>`).join('')}
     </div>
     <section class="panel">
@@ -199,7 +199,7 @@ async function pageOverview() {
           <thead><tr><th>状态</th><th style="width:80px">数量</th></tr></thead>
           <tbody>${rows.map(([status, n]) => `<tr><td>${statusBadge(status)}</td><td class="num">${n}</td></tr>`).join('')}</tbody>
         </table></div>` : empty('档案为空', '添加媒体库并开始扫描。')}
-      <p class="hint">NFO 是元数据真源；仅 http/https .strm 进入 Emby。不兼容源需更换为 http(s) 后重读源。</p>
+      <p class="hint">NFO 决定影片入库；播放时读取当前 .strm，仅支持 http/https 地址。</p>
     </section>`;
   document.querySelector('#reindex').addEventListener('click', async () => {
     const btn = document.querySelector('#reindex');
@@ -339,7 +339,7 @@ async function pageItems(_param, options = {}) {
   wallState.restoring = true;
   wallGen += 1;
 
-  const pills = [['', '全部'], ['success', '可播放'], ['manual', '手动'], ['pending', '待补录'], ['incompatible', '不兼容']];
+  const pills = [['', '全部'], ['success', '已入库'], ['manual', '手动'], ['pending', '待补录'], ['incompatible', '不兼容']];
   const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '年份'], ['communityrating', '评分']];
   // 库少时平铺成 Tab，库多（>8）转下拉，避免筛选行被撑爆。
   const libFilter = libraries.length <= 8
@@ -374,7 +374,7 @@ async function pageItems(_param, options = {}) {
       <div class="wall" id="wall"></div>
       <div id="wall-empty"></div>
       <div id="wall-more" class="wall-more"></div>
-      <p class="hint">点击卡片进入详情页（可播放、刮削、探测媒体信息、重读源）；海报中央的播放按钮为快捷播放。不兼容源不会进入 Emby，更换为 http(s) .strm 后「重读源」可重新判定。</p>
+      <p class="hint">点击卡片进入详情页（可播放、刮削、探测媒体信息、重读源）；海报中央的播放按钮为快捷播放。播放时检查当前 .strm 地址；替换为 http(s) 后即可重试。</p>
     </section>`;
 
   // 离散筛选（状态/库/排序）压入历史，浏览器前进/后退可逐步回退到上一个筛选组合。
@@ -723,7 +723,7 @@ async function pageItem(id, options = {}) {
   const m = data.movie || {};
   const title = m.Title || String(id);
   const st = m.Status || '';
-  const playable = st === 'success' || st === 'manual';
+  const playable = data.playable ?? (st === 'success' || st === 'manual');
   // 本地图片优先；本地没有图时用 NFO <cover> 的远程地址兜底（其它刮削工具产出的 NFO 常见这种写法）。
   const cover = String(m.cover_url || '').trim();
   const trailer = String(m.trailer_url || '').trim();
@@ -994,7 +994,7 @@ async function pageManual() {
   content.innerHTML = `
     <section class="panel">
       <div class="panel-head"><h2>手动补录</h2><span class="hint" style="margin:0">写入 .strm + 生成 NFO，即时进入 Emby</span></div>
-      <p>为一条 <code>http(s)</code> 直链登记影片：系统会在此服务器上写入源文件、同目录 NFO，并把记录标记为「可播放」。源地址必须为 http/https。</p>
+      <p>为一条 <code>http(s)</code> 直链登记影片：系统会在此服务器上写入源文件、同目录 NFO，并将影片元数据入库。源地址必须为 http/https。</p>
       <form id="manual-form" class="field-grid">
         <div class="field"><label for="m-title">标题 *</label><input id="m-title" name="title" placeholder="展示标题" required></div>
         <div class="field"><label for="m-number">番号</label><input id="m-number" name="number" placeholder="如 ABF-018"></div>
@@ -1566,7 +1566,7 @@ async function pageScheduled() {
           <select id="s-lib"><option value="0">全部媒体库</option>${libOptions}</select></div>
         <div class="field" data-show="probe"><label for="s-status">影片状态</label>
           <select id="s-status">
-            <option value="success">可播放</option>
+            <option value="success">已入库</option>
             <option value="manual">手动录入</option>
             <option value="">全部</option>
           </select></div>
@@ -1930,7 +1930,7 @@ function renderScanProgress(p) {
   scanFill.style.width = walking ? '100%' : (total ? `${Math.min(100, Math.round(done / total * 100))}%` : '100%');
   const parts = [];
   parts.push(`新增 ${p.added || 0}`, `更新 ${p.updated || 0}`, `跳过 ${p.skipped || 0}`, `删除 ${p.deleted || 0}`);
-  if (p.success) parts.push(`可播放 ${p.success}`);
+  if (p.success) parts.push(`已入库 ${p.success}`);
   if (p.pending) parts.push(`待补录 ${p.pending}`);
   if (p.incompatible) parts.push(`不兼容 ${p.incompatible}`);
   if (p.failed) parts.push(`失败 ${p.failed}`);

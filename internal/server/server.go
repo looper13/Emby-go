@@ -55,8 +55,10 @@ type App struct {
 	// 这类每次请求都要的元信息（原本每张图一次 DB 查询，单连接下会串行排队）；
 	// imgThumb 存按请求尺寸生成的缩略图字节。都只在本进程内有意义，
 	// 走 Redis 每张图一次 RTT 不划算，故用本地 LRU。
-	imgMeta  *cache.Memory
-	imgThumb *cache.Memory
+	imgMeta     *cache.Memory
+	imgThumb    *cache.Memory
+	artworkOnce sync.Once
+	artworks    *artworkCache
 	// thumbSem 限制同时解码 + 缩放 + 编码的数量：纯 CPU 活，一次海报墙
 	// 几百张不加限制会把 CPU 打满、拖慢其它请求。
 	thumbSem chan struct{}

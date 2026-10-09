@@ -25,6 +25,21 @@ func ArtworkNames(directory string) ([]string, error) {
 	return ArtworkNamesFromEntries(directory, entries)
 }
 
+// CoverNames omits extrafanart until a detail or image request needs backdrops.
+func CoverNames(directory string) ([]string, error) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && IsImage(entry.Name()) {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
+}
+
 func ArtworkNamesFromEntries(directory string, entries []os.DirEntry) ([]string, error) {
 	var names []string
 	for _, entry := range entries {
@@ -136,6 +151,14 @@ func FindMovieImagesWithNames(source, directory string, exists func(string) bool
 }
 
 func (catalog *ArtworkCatalog) FindMovieImages(source, directory string, exists func(string) bool) ImagePaths {
+	return catalog.findMovieImages(source, directory, exists, true)
+}
+
+func (catalog *ArtworkCatalog) FindMovieCovers(source, directory string, exists func(string) bool) ImagePaths {
+	return catalog.findMovieImages(source, directory, exists, false)
+}
+
+func (catalog *ArtworkCatalog) findMovieImages(source, directory string, exists func(string) bool, backdrops bool) ImagePaths {
 	base := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
 	find := func(bases ...string) string {
 		for _, candidate := range bases {
@@ -154,6 +177,9 @@ func (catalog *ArtworkCatalog) FindMovieImages(source, directory string, exists 
 	images := ImagePaths{
 		Poster:    find(base+"-poster", base, base+"-cover", base+"-default", base+"-movie", "folder", "poster", "cover", "default", "movie"),
 		Landscape: find(base+"-thumb", base+"-landscape", "thumb", "landscape"),
+	}
+	if !backdrops {
+		return images
 	}
 	// Keep service-generated source-specific backdrops isolated from shared art.
 	if path := find(base + "-fanart"); path != "" {

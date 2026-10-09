@@ -6,37 +6,64 @@ import (
 	"strings"
 )
 
-func (s *Store) ScanFingerprints(libraryID int64) (map[string]string, error) {
-	return s.scanFingerprints("movies.library_id=?", libraryID)
+// ScannedSource keeps metadata freshness separate from source-file membership.
+type ScannedSource struct {
+	Fingerprint     string
+	AdditionalParts []string
 }
 
+func fingerprintsOnly(sources map[string]ScannedSource, err error) (map[string]string, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(sources))
+	for path, source := range sources {
+		out[path] = source.Fingerprint
+	}
+	return out, nil
+}
+
+func (s *Store) ScanFingerprints(libraryID int64) (map[string]string, error) {
+	return fingerprintsOnly(s.ScanSources(libraryID))
+}
 func (s *Store) DirectoryScanFingerprints(libraryID int64, directory string, recursive bool) (map[string]string, error) {
+	return fingerprintsOnly(s.DirectoryScanSources(libraryID, directory, recursive))
+}
+func (s *Store) SourcePrefixScanFingerprints(libraryID int64, directory string, prefixes []string) (map[string]string, error) {
+	return fingerprintsOnly(s.SourcePrefixScanSources(libraryID, directory, prefixes))
+}
+
+func (s *Store) ScanSources(libraryID int64) (map[string]ScannedSource, error) {
+	return s.scanSources("movies.library_id=?", libraryID)
+}
+
+func (s *Store) DirectoryScanSources(libraryID int64, directory string, recursive bool) (map[string]ScannedSource, error) {
 	if !recursive {
-		return s.scanFingerprints("movies.library_id=? AND movies.output_dir=?", libraryID, directory)
+		return s.scanSources("movies.library_id=? AND movies.output_dir=?", libraryID, directory)
 	}
 	prefix := directory
 	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
 		prefix += string(filepath.Separator)
 	}
-	return s.scanFingerprints("movies.library_id=? AND (movies.output_dir=? OR (movies.output_dir>=? AND movies.output_dir<?))", libraryID, directory, prefix, prefix+"\U0010ffff")
+	return s.scanSources("movies.library_id=? AND (movies.output_dir=? OR (movies.output_dir>=? AND movies.output_dir<?))", libraryID, directory, prefix, prefix+"\U0010ffff")
 }
 
-// SourcePrefixScanFingerprints limits returned fingerprints and joins to the
+// SourcePrefixScanSources limits returned fingerprints and parts to the
 // source families implicated by a file event. The scanner still applies its
 // exact CD grouping rules to this conservative prefix match.
-func (s *Store) SourcePrefixScanFingerprints(libraryID int64, directory string, prefixes []string) (map[string]string, error) {
+func (s *Store) SourcePrefixScanSources(libraryID int64, directory string, prefixes []string) (map[string]ScannedSource, error) {
 	if len(prefixes) == 0 {
-		return map[string]string{}, nil
+		return map[string]ScannedSource{}, nil
 	}
 	// SQLite LIKE only folds ASCII case. Preserve Go's Unicode CD grouping, and
 	// avoid a large OR expression when a batch already covers much of a folder.
 	if len(prefixes) > 32 {
-		return s.DirectoryScanFingerprints(libraryID, directory, false)
+		return s.DirectoryScanSources(libraryID, directory, false)
 	}
 	for _, prefix := range prefixes {
 		for _, character := range filepath.Base(prefix) {
 			if character > 127 {
-				return s.DirectoryScanFingerprints(libraryID, directory, false)
+				return s.DirectoryScanSources(libraryID, directory, false)
 			}
 		}
 	}
@@ -47,25 +74,25 @@ func (s *Store) SourcePrefixScanFingerprints(libraryID int64, directory string, 
 		conditions[index] = "movies.source_path LIKE ? ESCAPE '!'"
 		args = append(args, escape.Replace(prefix)+"%")
 	}
-	return s.scanFingerprints("movies.library_id=? AND movies.output_dir=? AND ("+strings.Join(conditions, " OR ")+")", args...)
+	return s.scanSources("movies.library_id=? AND movies.output_dir=? AND ("+strings.Join(conditions, " OR ")+")", args...)
 }
 
-func (s *Store) scanFingerprints(condition string, args ...any) (map[string]string, error) {
-	rows, err := s.db.Query(`SELECT movies.source_path, COALESCE(scan_fingerprints.fingerprint, '')
+func (s *Store) scanSources(condition string, args ...any) (map[string]ScannedSource, error) {
+	rows, err := s.db.Query(`SELECT movies.source_path, COALESCE(scan_fingerprints.fingerprint, ''), COALESCE(movies.additional_parts, '[]')
 FROM movies LEFT JOIN scan_fingerprints ON scan_fingerprints.movie_id=movies.id WHERE `+condition, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	fingerprints := make(map[string]string)
+	sources := make(map[string]ScannedSource)
 	for rows.Next() {
-		var path, fingerprint string
-		if err := rows.Scan(&path, &fingerprint); err != nil {
+		var path, fingerprint, parts string
+		if err := rows.Scan(&path, &fingerprint, &parts); err != nil {
 			return nil, err
 		}
-		fingerprints[path] = fingerprint
+		sources[path] = ScannedSource{Fingerprint: fingerprint, AdditionalParts: parseStrings(parts)}
 	}
-	return fingerprints, rows.Err()
+	return sources, rows.Err()
 }
 
 func (s *Store) DeleteScannedSources(libraryID int64, paths []string) (int, error) {

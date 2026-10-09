@@ -51,6 +51,8 @@ func (a *App) adminItemDetail(c *gin.Context) {
 		return
 	}
 
+	movie = a.movieArtwork(movie)
+	movie, playable := currentMovieSource(movie, movie.SourcePath)
 	paths := append([]string{movie.SourcePath}, movie.AdditionalParts...)
 	files := make([]detailFile, 0, len(paths))
 	for i, path := range paths {
@@ -105,6 +107,7 @@ func (a *App) adminItemDetail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"movie":        movie,
+		"playable":     playable && movie.IsVisible(),
 		"images":       a.movieImageInfo(movie),
 		"library_name": libraryName,
 		"userdata":     userData,

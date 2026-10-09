@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"emby-go/internal/imageutil"
 	"emby-go/internal/nfo"
 	"emby-go/internal/store"
 )
@@ -46,7 +45,6 @@ func (result *Result) add(other Result) {
 
 type candidate struct {
 	path     string
-	info     os.FileInfo
 	base     string
 	part     int
 	groupKey string
@@ -111,7 +109,17 @@ func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, di
 	return scanDirectory(ctx, s, lib, filepath.Join(lib.Path, relative), recursive, false, nil, onProgress)
 }
 
+// RefreshFiles explicitly rereads metadata, including NFO events preserving mtime.
 func RefreshFiles(ctx context.Context, s *store.Store, lib store.Library, files []string, onProgress func(Progress)) (Result, error) {
+	return refreshFiles(ctx, s, lib, files, true, onProgress)
+}
+
+// ReconcileFiles checks metadata and source membership without forcing NFO reads.
+func ReconcileFiles(ctx context.Context, s *store.Store, lib store.Library, files []string, onProgress func(Progress)) (Result, error) {
+	return refreshFiles(ctx, s, lib, files, false, onProgress)
+}
+
+func refreshFiles(ctx context.Context, s *store.Store, lib store.Library, files []string, full bool, onProgress func(Progress)) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, nil
 	}
@@ -137,7 +145,7 @@ func RefreshFiles(ctx context.Context, s *store.Store, lib store.Library, files 
 		directory = filepath.Dir(path)
 		normalized = append(normalized, path)
 	}
-	return scanDirectory(ctx, s, lib, directory, false, true, normalized, onProgress)
+	return scanDirectory(ctx, s, lib, directory, false, full, normalized, onProgress)
 }
 
 func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive, full bool, files []string, onProgress func(Progress)) (result Result, scanErr error) {
@@ -156,13 +164,11 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		return result, fmt.Errorf("媒体库路径不是目录: %s", lib.Path)
 	}
 	groups := make(map[string][]candidate)
-	keys, all := affectedGroups(files)
-	targeted := len(files) > 0 && !all
-	// WalkDir already reads the direct directory entries. Reuse those image
-	// names for local refreshes; stability verification still reads fresh data.
-	walkImages := &imageDirectory{path: directory, reuse: true, names: map[string]bool{}, imageInfo: map[string]os.FileInfo{}}
-	entryCount := 0
-	var artworkEntries []os.DirEntry
+	keys := affectedGroups(files)
+	if len(files) > 0 && len(keys) == 0 {
+		return result, nil
+	}
+	targeted := len(files) > 0
 	lastWalkReport := time.Now()
 	reportWalk := func(current string) {
 		if onProgress != nil {
@@ -191,20 +197,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		if path == directory && !entry.IsDir() {
 			return fmt.Errorf("媒体库根目录无法遍历: %s", path)
 		}
-		if !recursive && path != directory {
-			if imageutil.IsImage(entry.Name()) || (entry.IsDir() && strings.EqualFold(entry.Name(), "extrafanart")) {
-				artworkEntries = append(artworkEntries, entry)
-			}
-			entryCount++
-			walkImages.large = entryCount > 64
-			if !entry.IsDir() {
-				switch strings.ToLower(filepath.Ext(path)) {
-				case ".webp", ".jpg", ".jpeg", ".png":
-					walkImages.names[strings.ToLower(entry.Name())] = true
-				}
-			}
-		}
-		if entry.IsDir() && path != directory && !recursive {
+		if entry.IsDir() && path != directory && (!recursive || strings.EqualFold(entry.Name(), "extrafanart")) {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
@@ -213,12 +206,8 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		if targeted && !keys[groupKey(path)] {
 			return nil
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
 		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		candidate := candidate{path: path, info: info, base: base, groupKey: groupKey(path)}
+		candidate := candidate{path: path, base: base, groupKey: groupKey(path)}
 		if match := cdPartPattern.FindStringSubmatch(base); match != nil {
 			candidate.base = match[1]
 			candidate.part = parsePart(match[2])
@@ -232,7 +221,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	if err != nil {
 		return result, err
 	}
-	var fingerprints map[string]string
+	var fingerprints map[string]store.ScannedSource
 	perf.phase("index")
 	stageStarted := time.Now()
 	if targeted {
@@ -240,11 +229,11 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		for key := range keys {
 			prefixes = append(prefixes, strings.TrimSuffix(key, ".strm"))
 		}
-		fingerprints, err = s.SourcePrefixScanFingerprints(lib.ID, filepath.Clean(directory), prefixes)
+		fingerprints, err = s.SourcePrefixScanSources(lib.ID, filepath.Clean(directory), prefixes)
 	} else if recursive && filepath.Clean(directory) == filepath.Clean(lib.Path) {
-		fingerprints, err = s.ScanFingerprints(lib.ID)
+		fingerprints, err = s.ScanSources(lib.ID)
 	} else {
-		fingerprints, err = s.DirectoryScanFingerprints(lib.ID, filepath.Clean(directory), recursive)
+		fingerprints, err = s.DirectoryScanSources(lib.ID, filepath.Clean(directory), recursive)
 	}
 	perf.index = time.Since(stageStarted)
 	if err != nil {
@@ -283,27 +272,10 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	batch := make([]store.ScannedMovie, 0, batchSize)
 	batchResult := Result{}
 	lastFlush := time.Now()
-	largeSnapshots := make(map[string][]string)
 	flush := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
-		started := time.Now()
-		// Large directories share the artwork catalog, but certify membership
-		// once per batch so new/deleted numbered images cannot leave a stale
-		// fingerprint that would prevent a subsequent scan from correcting it.
-		for directory, before := range largeSnapshots {
-			after, err := imageutil.ArtworkNames(directory)
-			if err != nil || !slices.Equal(before, after) {
-				for i := range batch {
-					if filepath.Dir(batch[i].Movie.SourcePath) == directory {
-						batch[i].Fingerprint = ""
-					}
-				}
-			}
-		}
-		clear(largeSnapshots)
-		perf.verify += time.Since(started)
 		stats, err := s.SaveScannedMoviesWithStats(batch)
 		perf.addWrite(stats, len(batch), err)
 		if err != nil {
@@ -316,16 +288,6 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		lastFlush = time.Now()
 		return nil
 	}
-	images := &imageDirectory{reuse: true}
-	if !recursive {
-		started := time.Now()
-		err := walkImages.loadArtwork(artworkEntries)
-		perf.source += time.Since(started)
-		if err != nil {
-			return result, err
-		}
-		images = walkImages
-	}
 	process := func(item candidate, parts []string, fallbackNFO string) error {
 		defer func() {
 			perf.processed++
@@ -333,20 +295,19 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		}()
 		paths[item.path] = struct{}{}
 		started := time.Now()
-		before, err := readSourceState(item.path, parts, fallbackNFO, images)
+		before, err := readMetadataState(item.path, fallbackNFO)
 		perf.source += time.Since(started)
 		if err != nil {
 			result.Failed++
 			return nil
 		}
 		previous, exists := fingerprints[item.path]
-		if !full && previous == before.Fingerprint {
+		if !full && previous.Fingerprint == before.Fingerprint && slices.Equal(previous.AdditionalParts, parts) {
 			result.Skipped++
 			return nil
 		}
-		item.info = before.Info
 		started = time.Now()
-		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO, before.Images)
+		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO)
 		perf.prepare += time.Since(started)
 		if outcome.Failed != 0 {
 			result.add(outcome)
@@ -357,32 +318,9 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		} else {
 			outcome.Added++
 		}
-		// Cached image selection must never certify stability.
 		started = time.Now()
-		freshImages := &imageDirectory{}
-		if images.large {
-			// 大目录复用已有的目录清单：statOnly 的 imageDirectory 若没有 names，
-			// contains 会把每个候选文件名都当成可能存在，每部片都要 stat 上百个
-			// 不存在的名字（实测 114 次/部）。带上清单后只剩真实存在的少量图片
-			// 需要取新 stat；清单成员的变化（扫描中途新增/删除图片）仍由 flush
-			// 按目录比对 ArtworkNames 兜住，不会留下错误的稳定性指纹。
-			freshImages = &imageDirectory{path: images.path, statOnly: true, catalog: images.catalog, names: images.names}
-			if _, exists := largeSnapshots[images.path]; !exists {
-				largeSnapshots[images.path] = images.artworkNames
-			}
-		}
-		if after, err := readSourceState(item.path, parts, fallbackNFO, freshImages); err == nil {
-			if after.Fingerprint == before.Fingerprint {
-				entry.Fingerprint = before.Fingerprint
-			}
-			if freshImages.statOnly {
-				images.acceptFresh(freshImages, before.Images)
-			} else {
-				freshImages.reuse = true
-				images = freshImages
-			}
-		} else {
-			images = &imageDirectory{reuse: true}
+		if after, err := readMetadataState(item.path, fallbackNFO); err == nil && after.Fingerprint == before.Fingerprint {
+			entry.Fingerprint = before.Fingerprint
 		}
 		perf.verify += time.Since(started)
 		batch = append(batch, entry)
@@ -477,7 +415,7 @@ func RescanOne(s *store.Store, lib store.Library, strmPath string) (Result, erro
 	}
 
 	base := strings.TrimSuffix(filepath.Base(strmPath), filepath.Ext(strmPath))
-	candidate := candidate{path: strmPath, info: info, base: base, groupKey: strmPath}
+	candidate := candidate{path: strmPath, base: base, groupKey: strmPath}
 	if match := cdPartPattern.FindStringSubmatch(base); match != nil {
 		candidate.base = match[1]
 		candidate.part = parsePart(match[2])
@@ -530,11 +468,7 @@ func collectGroup(target candidate) []candidate {
 		if path == target.path {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		group = append(group, candidate{path: path, info: info, base: match[1],
+		group = append(group, candidate{path: path, base: match[1],
 			part: parsePart(match[2]), groupKey: target.groupKey})
 	}
 	return group
@@ -564,11 +498,7 @@ func stackedGroup(group []candidate) (candidate, []candidate, bool) {
 
 func scanCandidate(s *store.Store, lib store.Library, item candidate, additionalParts []string, fallbackNFO string, result *Result, paths map[string]struct{}) error {
 	paths[item.path] = struct{}{}
-	images, _, err := (&imageDirectory{}).selectImages(item.path)
-	if err != nil {
-		return err
-	}
-	entry, outcome := prepareCandidate(lib, item, additionalParts, fallbackNFO, images)
+	entry, outcome := prepareCandidate(lib, item, additionalParts, fallbackNFO)
 	if outcome.Failed == 0 {
 		if err := s.SaveScannedMovies([]store.ScannedMovie{entry}); err != nil {
 			return err
@@ -578,54 +508,38 @@ func scanCandidate(s *store.Store, lib store.Library, item candidate, additional
 	return nil
 }
 
-func prepareCandidate(lib store.Library, item candidate, additionalParts []string, fallbackNFO string, images imageutil.ImagePaths) (store.ScannedMovie, Result) {
+func prepareCandidate(lib store.Library, item candidate, additionalParts []string, fallbackNFO string) (store.ScannedMovie, Result) {
 	result := Result{}
 	movie := store.Movie{LibraryID: lib.ID, SourcePath: item.path, OutputDir: filepath.Dir(item.path), Status: "pending", AdditionalParts: additionalParts}
-	line, err := ReadSource(item.path)
-	if err != nil {
+	var actors []store.ActorRef
+	nfoPath := strings.TrimSuffix(item.path, filepath.Ext(item.path)) + ".nfo"
+	meta, nfoErr := nfo.Read(nfoPath)
+	if nfoErr != nil && fallbackNFO != "" {
+		nfoPath = fallbackNFO
+		meta, nfoErr = nfo.Read(fallbackNFO)
+	}
+	switch {
+	case nfoErr == nil:
+		applyMeta(&movie, meta, nfoPath)
+		// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
+		for _, actor := range meta.Actors {
+			actors = append(actors, store.ActorRef{Name: actor.Name, AvatarURL: strings.TrimSpace(actor.Thumb)})
+		}
+		result.Success++
+	case errors.Is(nfoErr, fs.ErrNotExist):
+		// 没有 NFO 文件＝待补录：保留 pending 状态等刮削补齐标题等元数据。
+		result.Pending++
+	default:
+		// NFO 存在但读不了或 XML 非法：不能当成「待补录」——那会用空标题覆盖
+		// 已经入库的好元数据，并写入本轮指纹让后续扫描直接跳过（影片就此隐没）。
+		// 这里保留旧索引、记下具体错误，且不写指纹，下一轮仍会重试；
+		// NFO 被修好（刮削重写）后自然恢复为 success。
 		result.Failed++
+		slog.Warn("NFO 读取或解析失败，保留原索引待下轮重试",
+			"library_id", lib.ID, "source", item.path, "nfo", nfoPath, "error", nfoErr)
 		return store.ScannedMovie{}, result
 	}
-	setSource(&movie, line)
-	var actors []store.ActorRef
-	if ValidHTTP(line) {
-		nfoPath := strings.TrimSuffix(item.path, filepath.Ext(item.path)) + ".nfo"
-		meta, nfoErr := nfo.Read(nfoPath)
-		if nfoErr != nil && fallbackNFO != "" {
-			nfoPath = fallbackNFO
-			meta, nfoErr = nfo.Read(fallbackNFO)
-		}
-		switch {
-		case nfoErr == nil:
-			applyMeta(&movie, meta, nfoPath)
-			// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
-			for _, actor := range meta.Actors {
-				actors = append(actors, store.ActorRef{Name: actor.Name, AvatarURL: strings.TrimSpace(actor.Thumb)})
-			}
-			// 图片与元数据同一趟写入，避免成功影片入库两次。
-			movie.PosterPath = images.Poster
-			movie.BackdropPath = images.Backdrop
-			movie.BackdropPaths = images.Backdrops
-			movie.LandscapePath = images.Landscape
-			result.Success++
-		case errors.Is(nfoErr, fs.ErrNotExist):
-			// 没有 NFO 文件＝待补录：保留 pending 状态等刮削补齐标题等元数据。
-			result.Pending++
-		default:
-			// NFO 存在但读不了或 XML 非法：不能当成「待补录」——那会用空标题覆盖
-			// 已经入库的好元数据，并写入本轮指纹让后续扫描直接跳过（影片就此隐没）。
-			// 这里保留旧索引、记下具体错误，且不写指纹，下一轮仍会重试；
-			// NFO 被修好（刮削重写）后自然恢复为 success。
-			result.Failed++
-			slog.Warn("NFO 读取或解析失败，保留原索引待下轮重试",
-				"library_id", lib.ID, "source", item.path, "nfo", nfoPath, "error", nfoErr)
-			return store.ScannedMovie{}, result
-		}
-	} else {
-		movie.Status = "incompatible"
-		result.Incompatible++
-	}
-	return store.ScannedMovie{Movie: movie, Size: item.info.Size(), ModTime: item.info.ModTime(), Actors: actors}, result
+	return store.ScannedMovie{Movie: movie, Actors: actors}, result
 }
 
 func applyMeta(movie *store.Movie, meta nfo.MovieMeta, nfoPath string) {
@@ -654,22 +568,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func setSource(movie *store.Movie, raw string) {
-	u, err := url.Parse(raw)
-	if err == nil && u.Scheme != "" {
-		movie.SourceProtocol = strings.ToLower(u.Scheme)
-		movie.SourceContainer = container(u.Path)
-		return
-	}
-	if index := strings.Index(raw, "://"); index > 0 {
-		movie.SourceProtocol = strings.ToLower(raw[:index])
-	}
-}
-
-func container(path string) string {
-	return strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
 }
 
 func ReadSource(path string) (string, error) {

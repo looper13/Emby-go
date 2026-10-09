@@ -1627,11 +1627,11 @@ var entityColumns = map[string]string{
 	"Studio": "studios",
 }
 
-// EntityPoster 为某个实体（Genre/Tag/Studio/Person）挑一部最近入库且有海报的影片
-// 作为代表性封面，返回其 poster 路径。collection 可限定合集范围（""/"*"/具体名）。
+// EntityPoster returns a representative stored poster or source reference for
+// request-time artwork discovery. collection limits the scope (""/"*"/name).
 func (s *Store) EntityPoster(kind, name string, libraryID int64, collection string) (string, error) {
-	query := `SELECT poster_path FROM movies
-		WHERE status IN ('success','manual') AND poster_path<>''`
+	query := `SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM movies
+		WHERE status IN ('success','manual')`
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -1680,16 +1680,19 @@ func (s *Store) RepresentativeArt(libraryID int64) (string, error) {
 		WHERE library_id=? AND status IN ('success','manual') AND poster_path<>''
 		ORDER BY id DESC LIMIT 1`, libraryID).Scan(&path)
 	if err == sql.ErrNoRows {
-		return "", nil
+		err = s.db.QueryRow(`SELECT source_path FROM movies WHERE library_id=? AND status IN ('success','manual') ORDER BY id DESC LIMIT 1`, libraryID).Scan(&path)
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
 	}
 	return path, err
 }
 
-// CollectionPoster 返回某合集中最近入库且带海报的影片海报路径（用作合集封面）。
+// CollectionPoster returns a stored poster or source reference for lazy artwork.
 func (s *Store) CollectionPoster(collection string) (string, error) {
 	var path string
-	err := s.db.QueryRow(`SELECT poster_path FROM movies
-		WHERE collection=? AND status IN ('success','manual') AND poster_path<>''
+	err := s.db.QueryRow(`SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM movies
+		WHERE collection=? AND status IN ('success','manual')
 		ORDER BY id DESC LIMIT 1`, collection).Scan(&path)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -1712,8 +1715,8 @@ func (s *Store) CollectionStats(minMovies int) (map[string]CollectionStat, error
 		minMovies = 1
 	}
 	rows, err := s.db.Query(`SELECT m1.collection, COUNT(*),
-		COALESCE((SELECT m2.poster_path FROM movies m2
-			WHERE m2.collection=m1.collection AND m2.status IN ('success','manual') AND m2.poster_path<>''
+		COALESCE((SELECT COALESCE(NULLIF(m2.poster_path,''),m2.source_path) FROM movies m2
+			WHERE m2.collection=m1.collection AND m2.status IN ('success','manual')
 			ORDER BY m2.id DESC LIMIT 1),'')
 		FROM movies m1
 		WHERE m1.status IN ('success','manual') AND COALESCE(m1.collection,'')<>''

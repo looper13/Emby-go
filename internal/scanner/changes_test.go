@@ -98,7 +98,7 @@ func TestRefreshFilesImageAndUppercaseSTRM(t *testing.T) {
 	}
 	writeScanFile(t, root, "poster.jpg", "new image")
 	result, err = RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "poster.jpg")}, nil)
-	if err != nil || result != (Result{Updated: 1, Success: 1}) {
+	if err != nil || result != (Result{}) {
 		t.Fatalf("image refresh crossed directory boundary: %+v, %v", result, err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 )
@@ -45,30 +46,28 @@ func TestIncrementalMissingNFOStaysPending(t *testing.T) {
 	requireScan(t, database, library, Result{Failed: 1})
 }
 
-// 大目录（>64 条目）复核稳定性时，只应对目录清单里真实存在的图片取属性，
-// 而不是把上百个候选文件名逐个探测一遍。修复前实测每部变化影片 114 次。
-func TestLargeDirectoryImageProbeStaysBounded(t *testing.T) {
+// An unchanged source checks exactly one NFO, irrespective of STRM/artwork changes.
+func TestUnchangedScanOnlyStatsNFO(t *testing.T) {
 	root := t.TempDir()
-	for index := 0; index < 65; index++ {
-		writeScanFile(t, root, fmt.Sprintf("junk-%02d.txt", index), "unused")
-	}
-	writeScanFile(t, root, "a.strm", "http://media.test/a.mp4\n")
+	writeScanFile(t, root, "a.strm", "http://media.test/a.mp4")
 	writeScanFile(t, root, "a.nfo", "<movie><title>A</title></movie>")
 	database, library := scanLibrary(t, root)
 	requireScan(t, database, library, Result{Added: 1, Success: 1})
-
 	var probes atomic.Int64
-	statFile = func(name string) (os.FileInfo, error) {
+	metadataStat = func(name string) (os.FileInfo, error) {
+		if filepath.Ext(name) != ".nfo" {
+			t.Fatalf("non-NFO attribute check: %s", name)
+		}
 		probes.Add(1)
 		return os.Stat(name)
 	}
-	t.Cleanup(func() { statFile = os.Stat })
-
-	// 源内容变化 ⇒ 该片要重新选图并复核稳定性（修复前就发生在这里）。
-	writeScanFile(t, root, "a.strm", "http://media.test/a2.mp4\n")
-	requireScan(t, database, library, Result{Updated: 1, Success: 1})
-	if got := probes.Load(); got > 2 {
-		t.Fatalf("目录里没有图片，却探测了 %d 个候选文件名", got)
+	t.Cleanup(func() { metadataStat = os.Stat })
+	writeScanFile(t, root, "a.strm", "")
+	writeScanFile(t, root, "poster.jpg", "new image")
+	writeScanFile(t, root, "extrafanart/fanart1.jpg", "new still")
+	requireScan(t, database, library, Result{Skipped: 1})
+	if probes.Load() != 1 {
+		t.Fatalf("attribute checks = %d", probes.Load())
 	}
 }
 

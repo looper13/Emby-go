@@ -415,7 +415,9 @@ func (a *App) adminItems(c *gin.Context) {
 			}
 		}
 		imageTags := make(map[string]gin.H, len(ms))
-		for _, movie := range ms {
+		for index, movie := range ms {
+			movie = a.movieCovers(movie)
+			ms[index] = movie
 			tags := gin.H{}
 			if movie.PosterPath != "" {
 				tags["Primary"] = a.posterTag(movie.PosterPath)
@@ -643,7 +645,8 @@ func (a *App) adminReread(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, gin.H{"status": movie.Status, "protocol": movie.SourceProtocol})
+	movie, playable := currentMovieSource(movie, movie.SourcePath)
+	c.JSON(200, gin.H{"status": movie.Status, "protocol": movie.SourceProtocol, "playable": playable && movie.IsVisible()})
 }
 
 func saveUploadedWebP(header *multipart.FileHeader, destination string) error {

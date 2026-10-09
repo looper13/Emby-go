@@ -123,6 +123,7 @@ func TestLocalArtworkScanAndIndexedAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	movie, err = app.db.Movie(id)
+	movie = app.movieArtwork(movie)
 	if err != nil || len(movie.BackdropPaths) != 1 {
 		t.Fatalf("directory removal did not refresh parent: %+v %v", movie, err)
 	}
@@ -169,12 +170,17 @@ func TestArtworkMonitoringIncludesExtraImages(t *testing.T) {
 			writeJPEGImage(t, filepath.Join(root, "thumb.jpg"), 80, 40)
 			awaitLibraryWatch(t, func() bool {
 				m, err := app.db.Movie(id)
+				m = app.movieArtwork(m)
 				return err == nil && len(m.BackdropPaths) == 1 && m.LandscapePath != ""
 			})
 			if err := os.Remove(filepath.Join(extra, "fanart1.jpg")); err != nil {
 				t.Fatal(err)
 			}
-			awaitLibraryWatch(t, func() bool { m, err := app.db.Movie(id); return err == nil && len(m.BackdropPaths) == 0 })
+			awaitLibraryWatch(t, func() bool {
+				m, err := app.db.Movie(id)
+				m = app.movieArtwork(m)
+				return err == nil && len(m.BackdropPaths) == 0
+			})
 		})
 	}
 }

@@ -55,6 +55,7 @@ func withinCacheDirectory(directory, path string) bool {
 // Invalidate only matching disk dependencies; thumbnail keys contain both the
 // path and tag, so other movies' decoded thumbnails remain reusable.
 func (a *App) invalidateDiskPaths(paths []string, recursive bool) {
+	a.invalidateArtworkPaths(paths, recursive)
 	files := make(map[string]bool, len(paths))
 	for _, path := range paths {
 		if path != "" {
@@ -133,7 +134,8 @@ func (a *App) invalidateMovieDisk(movieID int64) {
 	if err != nil {
 		return
 	}
-	a.invalidateDiskPaths(movieDiskPaths(movie), false)
+	paths := append(movieDiskPaths(movie), movieDiskPaths(a.movieArtwork(movie))...)
+	a.invalidateDiskPaths(paths, false)
 }
 
 func movieDiskPaths(movie store.Movie) []string {
