@@ -76,6 +76,8 @@ type Movie struct {
 	BackdropPath    string
 	BackdropPaths   []string
 	LandscapePath   string
+	TrailerURL      string `json:"trailer_url"` // NFO 预告片地址（uniqueid trailerurl / <trailerurlid> / <trailer>）
+	CoverURL        string `json:"cover_url"`   // NFO <cover> 的远程封面图；以本地图片为准，它只在本地无图时兜底
 	RuntimeSeconds  int64
 	AdditionalParts []string
 	// CreatedAt 首次入库时间（重扫不变），UpdatedAt 最近一次索引更新时间。
@@ -138,6 +140,8 @@ func Open(path string) (*Store, error) {
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN hide_from_resume INTEGER NOT NULL DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN landscape_path TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN backdrop_paths TEXT NOT NULL DEFAULT '[]'")
+	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN trailer_url TEXT")
+	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN cover_url TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN collection TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN official_rating TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN sortname TEXT")
@@ -392,11 +396,11 @@ func (s *Store) SetKV(key, value string) error {
 	return err
 }
 
-const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at,backdrop_paths)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at,backdrop_paths=excluded.backdrop_paths RETURNING id`
+const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at,backdrop_paths,trailer_url,cover_url)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at,backdrop_paths=excluded.backdrop_paths,trailer_url=excluded.trailer_url,cover_url=excluded.cover_url RETURNING id`
 
 func movieValues(movie Movie, size int64, mtime time.Time, now string) []any {
-	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops())}
+	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops()), movie.TrailerURL, movie.CoverURL}
 }
 
 func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error) {
@@ -903,7 +907,7 @@ func (s *Store) DeleteMissingSources(libraryID int64, paths map[string]struct{})
 func movieScan(row *sql.Rows) (Movie, error) {
 	var m Movie
 	var genres, tags, studios, taglines, parts, mt, backdrops string
-	err := row.Scan(&m.ID, &m.LibraryID, &m.SourcePath, &mt, &m.SourceProtocol, &m.SourceContainer, &m.Number, &m.Status, &m.NFOPath, &m.OutputDir, &m.Title, &m.OriginalTitle, &m.Plot, &m.Year, &m.Premiere, &m.Rating, &m.Director, &m.Series, &m.Maker, &m.Label, &m.Collection, &m.OfficialRating, &m.SortName, &taglines, &m.ProviderID, &genres, &tags, &studios, &m.PosterPath, &m.BackdropPath, &m.LandscapePath, &m.RuntimeSeconds, &parts, &m.CreatedAt, &m.UpdatedAt, &m.LastScrapeAt, &m.LastScrapeError, &backdrops)
+	err := row.Scan(&m.ID, &m.LibraryID, &m.SourcePath, &mt, &m.SourceProtocol, &m.SourceContainer, &m.Number, &m.Status, &m.NFOPath, &m.OutputDir, &m.Title, &m.OriginalTitle, &m.Plot, &m.Year, &m.Premiere, &m.Rating, &m.Director, &m.Series, &m.Maker, &m.Label, &m.Collection, &m.OfficialRating, &m.SortName, &taglines, &m.ProviderID, &genres, &tags, &studios, &m.PosterPath, &m.BackdropPath, &m.LandscapePath, &m.RuntimeSeconds, &parts, &m.CreatedAt, &m.UpdatedAt, &m.LastScrapeAt, &m.LastScrapeError, &backdrops, &m.TrailerURL, &m.CoverURL)
 	m.BackdropPaths = parseStrings(backdrops)
 	m.Genres = parseStrings(genres)
 	m.Tags = parseStrings(tags)
@@ -913,7 +917,7 @@ func movieScan(row *sql.Rows) (Movie, error) {
 	return m, err
 }
 
-const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]')"
+const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]'),COALESCE(trailer_url,''),COALESCE(cover_url,'')"
 
 func (s *Store) Movie(id int64) (Movie, error) {
 	row, err := s.db.Query("SELECT "+movieCols+" FROM movies WHERE id=?", id)

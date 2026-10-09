@@ -544,11 +544,6 @@ textarea { min-height: 84px; resize: vertical; line-height: 1.6; }
   .player-overlay { padding: 12px; }
   .player-shell { max-height: calc(100dvh - 24px); }
 }
-@media (max-width: 720px) {
-  /* 移动端详情抽屉全宽（需求 R3b 验收项）。 */
-  .detail-drawer { width: 100%; border-left: 0; }
-  .detail-hero-body { padding-top: 64px; }
-}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -570,33 +565,55 @@ textarea { min-height: 84px; resize: vertical; line-height: 1.6; }
 .wall-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255, 255, 255, 0.12); }
 .wall-progress i { display: block; height: 100%; background: var(--accent); }
 .wall-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s ease; }
-.wall-card:hover .wall-actions { opacity: 1; }
-.wall-play { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s ease; background: rgba(0, 0, 0, 0.28); border: 0; padding: 0; cursor: pointer; }
-.wall-play svg { width: 40px; height: 40px; color: #fff; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6)); }
-.wall-card:hover .wall-play { opacity: 1; }
+.wall-card:hover .wall-actions, .wall-card:focus-within .wall-actions { opacity: 1; }
+/* 快捷播放只占海报中央一个圆钮：海报其余区域留给「进详情页」，跟点击卡片的直觉一致。 */
+.wall-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 62px; height: 62px; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s ease; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 50%; padding: 0; cursor: pointer; }
+.wall-play svg { width: 26px; height: 26px; color: #fff; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.6)); }
+.wall-card:hover .wall-play, .wall-card:focus-within .wall-play { opacity: 1; }
+.wall-card:focus-visible, .wall-play:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wall-meta { display: grid; gap: 2px; }
 .wall-meta strong { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wall-meta small { color: var(--dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 实体筛选芯片（详情抽屉跳转过来时的当前筛选） */
+/* 实体筛选芯片（从详情页跳转过来时的当前筛选） */
 .filter-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: var(--accent-soft); border: 1px solid rgba(224, 179, 86, 0.35); color: var(--accent); font-size: 12.5px; }
 .chip-x { background: none; border: 0; color: inherit; cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px; }
 
-/* ---------------------------------------------------------------- 详情抽屉 */
-.detail-overlay { position: fixed; inset: 0; z-index: 70; background: rgba(5, 5, 7, 0.6); display: flex; justify-content: flex-end; }
-.detail-overlay[hidden] { display: none; }
-.detail-drawer { width: min(560px, 100%); height: 100%; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: -18px 0 44px rgba(0, 0, 0, 0.5); }
-.detail-hero { position: relative; min-height: 190px; background: var(--panel-2); }
-.detail-backdrop { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.42; }
-.detail-close { position: absolute; top: 10px; right: 10px; z-index: 2; background: rgba(10, 10, 12, 0.72); }
-.detail-hero-body { position: relative; display: flex; gap: 14px; align-items: flex-end; padding: 16px; padding-top: 74px; }
-.detail-poster { width: 104px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5); }
-.detail-hero-text { min-width: 0; }
-.detail-hero-text h2 { font-size: 19px; line-height: 1.3; margin: 0 0 6px; }
+/* ---------------------------------------------------------------- 影片详情页 */
+.item-page { display: grid; gap: 24px; }
+.item-hero { position: relative; overflow: hidden; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel-2); }
+.item-hero-bg { position: absolute; inset: 0; }
+.item-hero-bg img { width: 100%; height: 100%; object-fit: cover; }
+/* 背景图自上而下逐渐压暗：海报与标题始终落在暗底上，长简介也读得清。 */
+.item-hero-bg::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7, 9, 13, 0.28) 0%, rgba(7, 9, 13, 0.72) 58%, var(--bg) 100%); }
+.item-hero-body { position: relative; display: flex; gap: 20px; align-items: flex-end; padding: 24px 22px 20px; min-height: 320px; }
+.item-hero-poster { flex: 0 0 auto; width: 148px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); }
+.item-hero-text { min-width: 0; display: grid; gap: 8px; align-content: end; }
+.item-back { justify-self: start; }
+.item-hero-title { font-size: 28px; line-height: 1.2; margin: 0; overflow-wrap: anywhere; }
+.item-hero-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.item-sections { display: grid; gap: 24px; max-width: 1180px; }
+/* 技术信息（路径/时间/刮削状态）默认收起：详情页主体是内容，不是元数据表。 */
+.item-details summary { display: flex; align-items: center; gap: 8px; font-family: var(--font-serif); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); cursor: pointer; list-style: none; }
+.item-details summary::-webkit-details-marker { display: none; }
+.item-details summary::before { content: '▸'; font-size: 10px; }
+.item-details[open] summary::before { content: '▾'; }
+.item-details[open] summary { margin-bottom: 12px; }
+/* 长简介按行数截断，展开按钮由脚本按文本长度决定是否渲染。 */
+.detail-plot.is-clamped { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.plot-toggle { margin-top: 8px; }
+.similar-row { display: grid; grid-auto-flow: column; grid-auto-columns: 132px; gap: 14px; overflow-x: auto; padding-bottom: 6px; }
+.similar-card { display: grid; gap: 6px; justify-items: start; background: none; border: 0; padding: 0; text-align: left; color: inherit; cursor: pointer; font: inherit; }
+.similar-poster { display: block; width: 100%; aspect-ratio: 2 / 3; border-radius: var(--radius-sm); overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); }
+.similar-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.similar-card strong { max-width: 100%; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.similar-card small { max-width: 100%; color: var(--dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.similar-card:hover .similar-poster, .similar-card:focus-visible .similar-poster { border-color: var(--accent); }
 .detail-sub { color: var(--muted); font-size: 12.5px; margin: 0 0 8px; }
-.detail-badges { display: flex; gap: 6px; flex-wrap: wrap; }
-.detail-body { padding: 16px; display: grid; gap: 18px; }
-.detail-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.detail-badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* 标签芯片：点它按该标签跳回媒体墙过滤，走与演员/类型/厂商相同的实体跳转。 */
+.tag-chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line-strong); color: var(--muted); font: inherit; font-size: 11.5px; line-height: 1.4; cursor: pointer; }
+.tag-chip:hover, .tag-chip:focus-visible { color: var(--accent); border-color: rgba(224, 179, 86, 0.45); background: var(--accent-soft); }
 .detail-section h3 { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
 .detail-section h3 small { color: var(--muted); letter-spacing: 0; text-transform: none; font-size: 12px; }
 .detail-plot { font-size: 13.5px; line-height: 1.7; color: var(--muted); margin: 0; white-space: pre-wrap; }
@@ -663,11 +680,28 @@ body.player-open { overflow: hidden; }
 /* 触屏设备没有 hover：把悬停才出现的操作/播放按钮改为常显，保证可达 */
 @media (hover: none) {
   .wall-actions { opacity: 1; }
-  .wall-play { opacity: 1; background: transparent; place-items: end; padding: 8px; }
-  .wall-play svg { width: 30px; height: 30px; }
+  .wall-play { opacity: 1; }
 }
 
 .wall-more { text-align: center; color: var(--dim); font-size: 12.5px; padding: 18px 0 4px; min-height: 22px; }
 
+/* 预告片独立成区块，优先使用第一张剧照作为缩略图。 */
+.trailer-card { display: block; width: min(420px, 100%); margin: 0; padding: 0; background: none; border: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.trailer-thumb { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); }
+.trailer-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.trailer-play { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.3); }
+.trailer-play svg { width: 34px; height: 34px; color: #fff; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.65)); }
+.trailer-card:hover .trailer-thumb, .trailer-card:focus-visible .trailer-thumb { border-color: var(--accent); }
 .detail-artwork-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
 .detail-artwork-grid img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #000; }
+.image-placeholder { display: grid; place-items: center; background: var(--panel-2); color: var(--dim); }
+.image-placeholder svg { width: 28px; height: 28px; }
+.wall-poster > .image-placeholder, .trailer-thumb > .image-placeholder, .similar-poster > .image-placeholder, .item-hero-bg > .image-placeholder { width: 100%; height: 100%; }
+.detail-artwork-grid .image-placeholder { aspect-ratio: 16 / 9; border-radius: 8px; }
+.avatar-card > .image-placeholder { width: 64px; height: 64px; border-radius: 50%; }
+.wall-more .btn { margin-left: 8px; }
+@media (max-width: 720px) {
+  .item-hero-body { flex-direction: column; align-items: flex-start; gap: 14px; min-height: 0; padding: 20px 16px; }
+  .item-hero-poster { width: 118px; }
+  .item-hero-title { font-size: 22px; }
+}

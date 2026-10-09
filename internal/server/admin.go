@@ -363,7 +363,20 @@ func (a *App) adminItems(c *gin.Context) {
 				"position_ticks": data.PositionTicks, "play_count": data.PlayCount,
 			}
 		}
-		return json.Marshal(gin.H{"items": ms, "total": total, "limit": limit, "offset": offset, "userdata": userData})
+		imageTags := make(map[string]gin.H, len(ms))
+		for _, movie := range ms {
+			tags := gin.H{}
+			if movie.PosterPath != "" {
+				tags["Primary"] = a.posterTag(movie.PosterPath)
+			}
+			if movie.LandscapePath != "" {
+				tags["Thumb"] = a.posterTag(movie.LandscapePath)
+			}
+			if len(tags) > 0 {
+				imageTags[strconv.FormatInt(movie.ID, 10)] = tags
+			}
+		}
+		return json.Marshal(gin.H{"items": ms, "total": total, "limit": limit, "offset": offset, "userdata": userData, "image_tags": imageTags})
 	})
 }
 

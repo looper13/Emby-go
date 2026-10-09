@@ -216,3 +216,34 @@ func TestSaveFileInfoIndent(t *testing.T) {
 		t.Errorf("插入时 fileinfo 缩进不符:\n%s", raw2)
 	}
 }
+
+// TestTrailerAndCoverSources 预告片取值的三种写法与优先级，以及远程封面 <cover>。
+// 其它刮削工具产出的 NFO 用顶层 <trailer>，本项目自己的刮削器写的是 uniqueid。
+func TestTrailerAndCoverSources(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		trailer string
+		cover   string
+	}{
+		{"uniqueid 最优先", `<movie><uniqueid type="trailerurl">https://t/unique</uniqueid><trailerurlid>https://t/id</trailerurlid><trailer>https://t/tag</trailer></movie>`, "https://t/unique", ""},
+		{"trailerurlid 次之", `<movie><trailerurlid>https://t/id</trailerurlid><trailer>https://t/tag</trailer></movie>`, "https://t/id", ""},
+		{"trailer 兜底", "<movie><trailer> https://t/tag </trailer><cover> https://c/cover.jpg </cover></movie>", "https://t/tag", "https://c/cover.jpg"},
+		{"都没有", `<movie><title>无预告片</title></movie>`, "", ""},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "a.nfo")
+			if err := os.WriteFile(path, []byte(item.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			meta, err := Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if meta.TrailerURL() != item.trailer || meta.CoverURL() != item.cover {
+				t.Fatalf("TrailerURL=%q CoverURL=%q，期望 %q / %q", meta.TrailerURL(), meta.CoverURL(), item.trailer, item.cover)
+			}
+		})
+	}
+}

@@ -4,6 +4,29 @@ const content = document.querySelector('#content');
 const titleEl = document.querySelector('#page-title');
 const crumbEl = document.querySelector('#page-eyebrow');
 const toasts = document.querySelector('#toasts');
+let activePage = null;
+const isCurrentPage = view => !!view && view === activePage && !view.controller.signal.aborted;
+
+function abortPage(view) {
+  while (view) {
+    view.controller.abort();
+    view = view.previous;
+  }
+}
+
+function rememberPage(focusID) {
+  if (!activePage) return;
+  const state = { ...(history.state || {}), scrollY: window.scrollY };
+  if (activePage.name === 'items' && wallState) {
+    state.wallCount = wallState.items.length;
+    if (focusID) state.focusID = String(focusID);
+  }
+  history.replaceState(state, '');
+}
+
+function refreshPage(view) {
+  if (isCurrentPage(view)) return page(view.name, view.param, { preserveScroll: true });
+}
 
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 const icon = name => {
@@ -53,9 +76,12 @@ function debounce(fn, wait = 400) {
 }
 
 async function api(path, options = {}) {
+  const readOnly = !options.method || options.method === 'GET';
+  const signal = options.signal || (readOnly && !path.endsWith('/progress') ? activePage?.controller.signal : undefined);
   const headers = { 'X-Emby-Token': token, ...(options.headers || {}) };
   if (!(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const response = await fetch('/api/admin' + path, { ...options, headers });
+  const response = await fetch('/api/admin' + path, { ...options, headers, signal });
+  signal?.throwIfAborted();
   if (response.status === 401) {
     localStorage.removeItem('emby_token');
     window.location.replace('/');
@@ -66,8 +92,34 @@ async function api(path, options = {}) {
     try { message = (await response.json()).error || message; } catch { /* ignore */ }
     throw new Error(message);
   }
-  return response.status === 204 ? null : response.json();
+  const data = response.status === 204 ? null : await response.json();
+  signal?.throwIfAborted();
+  if (!readOnly && wallState) wallState.dirty = true;
+  return data;
 }
+
+function imageURL(id, type, width, tag, index) {
+  const query = new URLSearchParams();
+  if (tag) query.set('tag', tag);
+  if (width) query.set('maxWidth', String(width));
+  return `/Items/${id}/Images/${type}${index == null ? '' : '/' + index}${query.size ? '?' + query : ''}`;
+}
+
+// A failed fallback is replaced once, so a broken image cannot cause a request loop.
+content.addEventListener('error', event => {
+  const img = event.target;
+  if (img.tagName !== 'IMG') return;
+  const fallback = img.dataset.fallback;
+  delete img.dataset.fallback;
+  if (fallback && fallback !== img.getAttribute('src')) { img.src = fallback; return; }
+  const placeholder = document.createElement('span');
+  placeholder.className = img.className + ' image-placeholder';
+  placeholder.setAttribute('role', 'img');
+  placeholder.setAttribute('aria-label', img.alt || '图片暂不可用');
+  placeholder.title = '图片暂不可用';
+  placeholder.innerHTML = icon('film');
+  img.replaceWith(placeholder);
+}, true);
 
 const STATUS_TEXT = { success: '可播放', manual: '手动录入', pending: '待补录', incompatible: '不兼容', failed: '失败' };
 const statusBadge = status => {
@@ -89,6 +141,7 @@ const META = {
   overview: { title: '总览', crumb: 'Archive / Overview' },
   libraries: { title: '媒体库', crumb: 'Archive / Libraries' },
   items: { title: '媒体墙', crumb: 'Archive / Wall' },
+  item: { title: '影片详情', crumb: 'Archive / Wall / Detail' },
   manual: { title: '手动补录', crumb: 'Archive / Manual Ingest' },
   settings: { title: '设置', crumb: 'Archive / Settings' },
   apikeys: { title: 'API 密钥', crumb: 'Archive / API Keys' },
@@ -102,18 +155,22 @@ function setMeta(name) {
   const meta = META[name] || { title: '管理后台', crumb: 'Archive' };
   titleEl.textContent = meta.title;
   crumbEl.textContent = meta.crumb;
+  // 详情页属于媒体墙这一支：进入后仍高亮「媒体墙」，导航位置不丢失。
+  const nav = name === 'item' ? 'items' : name;
   document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.classList.toggle('is-active', btn.dataset.page === name);
+    btn.classList.toggle('is-active', btn.dataset.page === nav);
   });
 }
 
 /* ---------------------------------------------------------------- 总览 */
 async function pageOverview() {
+  const view = activePage;
   const [libraries, success, status] = await Promise.all([
     api('/libraries'),
     api('/items?status=success'),
     api('/status')
   ]);
+  if (!isCurrentPage(view)) return;
   const pendingCount = status.pending || 0;
   const incompatibleCount = status.incompatible || 0;
   const rows = [
@@ -150,13 +207,15 @@ async function pageOverview() {
     try { const r = await api('/reindex', { method: 'POST' }); toast(`重建完成：${r.success} 成功 / ${r.pending} 待补录 / ${r.incompatible} 不兼容`); }
     catch (e) { toast(e.message, 'error'); }
     btn.disabled = false;
-    pageOverview();
+    refreshPage(view);
   });
 }
 
 /* ---------------------------------------------------------------- 媒体库 */
 async function pageLibraries() {
+  const view = activePage;
   const data = await api('/libraries');
+  if (!isCurrentPage(view)) return;
   const items = data.items || [];
   const total = data.total ?? items.length;
   content.innerHTML = `
@@ -190,24 +249,24 @@ async function pageLibraries() {
     try {
       const lib = await api('/libraries', { method: 'POST', body: JSON.stringify(body) });
       toast(`已添加媒体库「${lib.Name}」`);
-      pageLibraries();
+      refreshPage(view);
     } catch (e) { toast(e.message, 'error'); }
   });
   document.querySelectorAll('[data-lib-scan]').forEach(button => button.addEventListener('click', () => runScan(button.dataset.libScan)));
   document.querySelectorAll('[data-lib-delete]').forEach(button => button.addEventListener('click', async () => {
     if (!confirm('删除该媒体库及其影片索引？不会删除磁盘文件，但该库影片的播放进度/收藏会一并清除。')) return;
-    try { await api('/libraries/' + button.dataset.libDelete, { method: 'DELETE' }); toast('媒体库已删除', 'ok'); pageLibraries(); }
+    try { await api('/libraries/' + button.dataset.libDelete, { method: 'DELETE' }); toast('媒体库已删除', 'ok'); refreshPage(view); }
     catch (e) { toast(e.message, 'error'); }
   }));
 }
 
 /* ---------------------------------------------------------------- 媒体墙 */
-function wallCard(item, ud) {
+function wallCard(item, ud, tags = {}) {
   const st = item.Status || item.status || '';
   const title = item.Title || '';
   const playable = st === 'success' || st === 'manual';
-  const poster = item.PosterPath ? `/Items/${item.id}/Images/Primary`
-    : (item.LandscapePath ? `/Items/${item.id}/Images/Thumb` : '');
+  const poster = item.PosterPath ? imageURL(item.id, 'Primary', 320, tags.Primary)
+    : (item.LandscapePath ? imageURL(item.id, 'Thumb', 320, tags.Thumb) : '');
   const sub = [numberUnlessInTitle(title, item.Number), item.Year, item.OriginalTitle].filter(Boolean).join(' · ')
     || (item.source_protocol || item.SourceProtocol || '');
   const progress = ud && item.RuntimeSeconds > 0 && ud.position_ticks > 0
@@ -219,7 +278,7 @@ function wallCard(item, ud) {
     (item.AdditionalParts || []).length ? `<span class="wall-badge multi">CD×${(item.AdditionalParts || []).length + 1}</span>` : ''
   ].join('');
   const body = poster
-    ? `<img loading="lazy" src="${esc(poster)}" alt="">`
+    ? `<img loading="lazy" decoding="async" src="${esc(poster)}" alt="" data-fallback="${esc(item.cover_url || '')}">`
     : `<span class="wall-path" title="${esc(item.source_path)}">${esc(item.source_path || title || '—')}</span>`;
   const label = title || String(item.source_path || '').split(/[\\/]/).pop() || '—';
   const a11y = ` tabindex="0" role="button" aria-label="查看 ${esc(label)} 详情"`;
@@ -246,8 +305,10 @@ function wallCard(item, ud) {
 const WALL_PAGE_SIZE = 100;
 let wallState = null;
 let wallGen = 0; // 列表请求代号，单调递增；用于丢弃被新搜索/筛选作废的过期响应
+let wallController = null;
 
-async function pageItems() {
+async function pageItems(_param, options = {}) {
+  const view = activePage;
   const params = new URLSearchParams(location.search);
   const status = params.get('status') || '';
   const search = params.get('search') || '';
@@ -256,6 +317,7 @@ async function pageItems() {
   // 库筛选：URL 里的 library_id 若指向已删除的库，回退「全部」并同步清洗 URL，
   // 避免刷新后一直停在空列表（旧书签/前进后退同样适用）。
   const libraries = ((await api('/libraries')).items || []);
+  if (!isCurrentPage(view)) return;
   const requestedLib = params.get('library_id') || '';
   const libraryID = libraries.some(lib => String(lib.Id) === requestedLib) ? requestedLib : '';
   if (requestedLib && !libraryID) {
@@ -263,13 +325,18 @@ async function pageItems() {
     history.replaceState({}, '', location.pathname + (params.toString() ? '?' + params.toString() : '') + location.hash);
   }
   const activeLib = libraries.find(lib => String(lib.Id) === libraryID);
-  // 实体筛选（详情抽屉里点演员/类型/厂商/合集跳过来的），单值，URL 可见且可一键清除。
+  // 实体筛选（详情页里点演员/类型/厂商/合集跳过来的），单值，URL 可见且可一键清除。
   const scrape = params.get('scrape') || '';
   const entity = ENTITY_PARAMS.map(([key, label]) => [key, label, params.get(key) || '']).find(item => item[2]) || null;
-  wallState = {
+  const cached = options.restore && wallState && !wallState.dirty && !wallState.failed &&
+    wallState.queryKey === location.search && Date.now() - wallState.loadedAt < 60000;
+  wallState = cached ? wallState : {
     status, search, sort, order, libraryID, libraryName: activeLib ? activeLib.Name : '',
-    scrape, entity, offset: 0, total: 0, loading: false, done: false, items: [], userdata: {}
+    scrape, entity, offset: 0, total: 0, loading: false, done: false, failed: false,
+    items: [], userdata: {}, imageTags: {}, queryKey: location.search, loadedAt: 0, dirty: false
   };
+  wallState.loading = false;
+  wallState.restoring = true;
   wallGen += 1;
 
   const pills = [['', '全部'], ['success', '可播放'], ['manual', '手动'], ['pending', '待补录'], ['incompatible', '不兼容']];
@@ -307,13 +374,13 @@ async function pageItems() {
       <div class="wall" id="wall"></div>
       <div id="wall-empty"></div>
       <div id="wall-more" class="wall-more"></div>
-      <p class="hint">点击海报打开详情抽屉（抽屉内可播放、刮削、探测）；海报上的播放图标为快捷播放。不兼容源不会进入 Emby，更换为 http(s) .strm 后「重读源」可重新判定。</p>
+      <p class="hint">点击卡片进入详情页（可播放、刮削、探测媒体信息、重读源）；海报中央的播放按钮为快捷播放。不兼容源不会进入 Emby，更换为 http(s) .strm 后「重读源」可重新判定。</p>
     </section>`;
 
   // 离散筛选（状态/库/排序）压入历史，浏览器前进/后退可逐步回退到上一个筛选组合。
   // 始终保留 hash，否则一次筛选就会让「刷新」离开媒体墙页。
   const queryURL = qs => location.pathname + (qs.toString() ? '?' + qs.toString() : '') + location.hash;
-  const pushQuery = qs => history.pushState({}, '', queryURL(qs));
+  const pushQuery = qs => { rememberPage(); history.pushState({}, '', queryURL(qs)); };
   const replaceQuery = qs => history.replaceState({}, '', queryURL(qs));
   document.querySelectorAll('.pill[data-status]').forEach(button => button.addEventListener('click', () => {
     const qs = new URLSearchParams(location.search);
@@ -321,7 +388,7 @@ async function pageItems() {
     if (value) qs.set('status', value); else qs.delete('status');
     qs.delete('search');
     pushQuery(qs);
-    pageItems();
+    page('items');
   }));
   // 刮削结果筛选：与其它条件叠加，点第二次取消。
   document.querySelectorAll('.pill[data-scrape]').forEach(button => button.addEventListener('click', () => {
@@ -329,7 +396,7 @@ async function pageItems() {
     const value = button.dataset.scrape;
     if (qs.get('scrape') === value) qs.delete('scrape'); else qs.set('scrape', value);
     pushQuery(qs);
-    pageItems();
+    page('items');
   }));
   // 库筛选 Tab：与状态/搜索/排序叠加，只动 library_id 一个参数。
   document.querySelectorAll('.pill[data-lib]').forEach(button => button.addEventListener('click', () => {
@@ -337,23 +404,25 @@ async function pageItems() {
     const value = button.dataset.lib;
     if (value) qs.set('library_id', value); else qs.delete('library_id');
     pushQuery(qs);
-    pageItems();
+    page('items');
   }));
   const libSelect = document.querySelector('#item-lib');
   if (libSelect) libSelect.addEventListener('change', () => {
     const qs = new URLSearchParams(location.search);
     if (libSelect.value) qs.set('library_id', libSelect.value); else qs.delete('library_id');
     pushQuery(qs);
-    pageItems();
+    page('items');
   });
   const searchInput = document.querySelector('#item-search');
   searchInput.addEventListener('input', debounce(() => {
+    if (!isCurrentPage(view)) return;
     const q = new URLSearchParams(location.search);
     const value = searchInput.value.trim();
     if (value) q.set('search', value); else q.delete('search');
     // 搜索输入用 replace：逐字输入不该产生大量历史记录。
     replaceQuery(q);
     wallState.search = value;
+    wallState.queryKey = location.search;
     reloadWall();
   }));
   const sortSelect = document.querySelector('#item-sort');
@@ -362,14 +431,14 @@ async function pageItems() {
     q.set('sort', sortSelect.value);
     q.delete('order');
     pushQuery(q);
-    pageItems();
+    page('items');
   });
   const entityClear = document.querySelector('#entity-clear');
   if (entityClear) entityClear.addEventListener('click', () => {
     const qs = new URLSearchParams(location.search);
     ENTITY_PARAMS.forEach(([key]) => qs.delete(key));
     pushQuery(qs);
-    pageItems();
+    page('items');
   });
   const probeButton = document.querySelector('#probe-media');
   if (probeButton) probeButton.addEventListener('click', runProbeAll);
@@ -384,7 +453,7 @@ async function pageItems() {
     const reread = event.target.closest('[data-reread]');
     if (reread) {
       event.stopPropagation();
-      try { const r = await api('/items/' + reread.dataset.reread + '/reread', { method: 'POST' }); toast(`状态已更新：${STATUS_TEXT[r.status] || r.status}`); pageItems(); }
+      try { const r = await api('/items/' + reread.dataset.reread + '/reread', { method: 'POST' }); toast(`状态已更新：${STATUS_TEXT[r.status] || r.status}`); refreshPage(view); }
       catch (e) { toast(e.message, 'error'); }
       return;
     }
@@ -392,11 +461,11 @@ async function pageItems() {
     if (remove) {
       event.stopPropagation();
       if (!confirm('仅删除数据库索引，不删除源文件。继续？')) return;
-      try { await api('/items/' + remove.dataset.delete, { method: 'DELETE' }); toast('已删除索引', 'ok'); pageItems(); }
+      try { await api('/items/' + remove.dataset.delete, { method: 'DELETE' }); toast('已删除索引', 'ok'); refreshPage(view); }
       catch (e) { toast(e.message, 'error'); }
       return;
     }
-    // hover 播放图标 = 快捷播放；点卡片其它位置 = 打开详情抽屉。
+    // hover 播放图标 = 快捷播放；点卡片其它位置 = 进入详情页。
     const quick = event.target.closest('[data-quickplay]');
     if (quick) {
       event.stopPropagation();
@@ -407,30 +476,48 @@ async function pageItems() {
     const card = event.target.closest('.wall-card');
     if (!card) return;
     const item = wallState.items.find(m => String(m.id) === card.dataset.play);
-    if (item) openDetail(item);
+    if (item) openItemPage(item.id);
   });
-  // 键盘可达：卡片获得焦点后回车/空格打开详情（桌面端无障碍）。
+  // 键盘可达：卡片获得焦点后回车/空格进入详情页（桌面端无障碍）。
   document.querySelector('#wall').addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const card = event.target.closest('.wall-card');
-    if (!card) return;
+    if (!card || event.target !== card) return;
     event.preventDefault();
     const item = wallState.items.find(m => String(m.id) === card.dataset.play);
-    if (item) openDetail(item);
+    if (item) openItemPage(item.id);
   });
-  await loadWallPage();
+  document.querySelector('#wall-more').addEventListener('click', event => {
+    if (!event.target.closest('[data-wall-retry]') || !isCurrentPage(view)) return;
+    wallState.failed = false;
+    loadWallPage();
+  });
+  if (cached) {
+    document.querySelector('#wall').innerHTML = wallState.items.map(item =>
+      wallCard(item, wallState.userdata[String(item.id)], wallState.imageTags[String(item.id)])).join('');
+    renderWallStatus();
+  } else {
+    const targetCount = options.restore?.wallCount || WALL_PAGE_SIZE;
+    do {
+      if (!await loadWallPage()) break;
+    } while (isCurrentPage(view) && wallState.offset < targetCount && !wallState.done);
+  }
+  if (isCurrentPage(view)) wallState.restoring = false;
 }
 
 // reloadWall 只重置列表并重新拉取，保留筛选栏与搜索框焦点（搜索输入走此路径，避免整页重渲染打断输入）。
 function reloadWall() {
   if (!wallState) return;
   wallGen += 1; // 作废尚未返回的旧请求
+  wallController?.abort();
   wallState.offset = 0;
   wallState.total = 0;
   wallState.items = [];
   wallState.userdata = {};
+  wallState.imageTags = {};
   wallState.done = false;
   wallState.loading = false;
+  wallState.failed = false;
   const wall = document.querySelector('#wall');
   if (wall) wall.innerHTML = '';
   const emptyBox = document.querySelector('#wall-empty');
@@ -442,18 +529,23 @@ function reloadWall() {
 
 // wallMaybeLoadMore 在哨兵接近视口时加载下一页（无限滚动）。
 function wallMaybeLoadMore() {
-  if (!wallState || wallState.loading || wallState.done) return;
+  if (activePage?.name !== 'items' || !wallState || wallState.loading || wallState.done || wallState.failed || wallState.restoring) return;
   const more = document.querySelector('#wall-more');
   if (!more) return;
   if (more.getBoundingClientRect().top <= window.innerHeight + 600) loadWallPage();
 }
 
 async function loadWallPage() {
-  if (!wallState || wallState.loading || wallState.done) return;
+  if (activePage?.name !== 'items' || !wallState || wallState.loading || wallState.done || wallState.failed) return false;
+  const state = wallState;
+  const view = activePage;
+  wallController?.abort();
+  wallController = new AbortController();
   wallState.loading = true;
   const gen = wallGen;
   const more = document.querySelector('#wall-more');
   if (more) more.textContent = '加载中…';
+  const current = () => isCurrentPage(view) && wallState === state && wallGen === gen;
   try {
     const query = new URLSearchParams({ limit: String(WALL_PAGE_SIZE), offset: String(wallState.offset), sort: wallState.sort, order: wallState.order });
     if (wallState.status) query.set('status', wallState.status);
@@ -461,68 +553,119 @@ async function loadWallPage() {
     if (wallState.libraryID) query.set('library_id', wallState.libraryID);
     if (wallState.entity) query.set(wallState.entity[0], wallState.entity[2]);
     if (wallState.scrape) query.set('scrape', wallState.scrape);
-    const data = await api('/items?' + query.toString());
-    if (!wallState || wallGen !== gen) return; // 已被新的搜索/筛选作废，丢弃过期响应
+    const data = await api('/items?' + query.toString(), { signal: wallController.signal });
+    if (!current()) return false;
     wallState.total = data.total;
     Object.assign(wallState.userdata, data.userdata || {});
+    Object.assign(wallState.imageTags, data.image_tags || {});
+    wallState.loadedAt = Date.now();
     const items = data.items || [];
     wallState.items.push(...items);
     wallState.offset += items.length;
     wallState.done = items.length === 0 || wallState.offset >= data.total;
     if (items.length) {
       document.querySelector('#wall').insertAdjacentHTML('beforeend',
-        items.map(item => wallCard(item, wallState.userdata[String(item.id)])).join(''));
+        items.map(item => wallCard(item, wallState.userdata[String(item.id)], wallState.imageTags[String(item.id)])).join(''));
     }
-    const count = document.querySelector('#wall-count');
-    const scope = [
-      wallState.libraryName,
-      wallState.entity ? `${wallState.entity[1]}：${wallState.entity[2]}` : '',
-      wallState.status ? (STATUS_TEXT[wallState.status] || wallState.status) : ''
-    ].filter(Boolean).join(' · ');
-    if (count) count.textContent = `共 ${data.total} 条${scope ? ' · ' + scope : ''} · 已加载 ${wallState.items.length}`;
-    const emptyBox = document.querySelector('#wall-empty');
-    if (emptyBox) {
-      const what = wallState.entity ? `「${wallState.entity[2]}」的影片`
-        : (wallState.libraryName ? `「${wallState.libraryName}」的影片` : '影片');
-      emptyBox.innerHTML = data.total === 0
-        ? empty(wallState.status ? `没有 ${STATUS_TEXT[wallState.status] || wallState.status} 的${what}` : `没有符合条件的${what}`,
-            wallState.search ? '试试其它关键词。' : '开始扫描或手动补录后再来看看。')
-        : '';
-    }
-    if (more) more.textContent = wallState.done && data.total > 0 ? `已全部加载（共 ${data.total} 条）` : '';
+    renderWallStatus();
+    return true;
   } catch (error) {
-    if (!wallState || wallGen !== gen) return;
-    if (more) more.textContent = '加载失败：' + (error.message || error);
+    if (!current() || error.name === 'AbortError') return false;
+    wallState.failed = true;
+    if (more) more.innerHTML = `<span>加载失败：${esc(error.message || error)}</span> <button class="btn" data-wall-retry>${icon('refresh')}<span>重试</span></button>`;
+    return false;
   } finally {
-    if (wallState && wallGen === gen) {
+    if (current()) {
       wallState.loading = false;
-      // 首屏未填满时继续加载，直到撑满视口。
       wallMaybeLoadMore();
     }
   }
 }
 
-/* ------------------------------------------------------------ 详情抽屉 */
-// 实体筛选参数：抽屉里点演员/类型/厂商/合集会带着其中一个参数回到媒体墙。
-const ENTITY_PARAMS = [['person', '演员'], ['genre', '类型'], ['studio', '厂商'], ['collection', '合集']];
-
-const detailOverlay = document.querySelector('#detail-overlay');
-const detailDrawer = document.querySelector('#detail-drawer');
-
-function closeDetail() {
-  detailOverlay.hidden = true;
-  detailDrawer.innerHTML = '';
+function renderWallStatus() {
+  const more = document.querySelector('#wall-more');
+  const count = document.querySelector('#wall-count');
+  const scope = [
+    wallState.libraryName,
+    wallState.entity ? `${wallState.entity[1]}：${wallState.entity[2]}` : '',
+    wallState.status ? (STATUS_TEXT[wallState.status] || wallState.status) : ''
+  ].filter(Boolean).join(' · ');
+  if (count) count.textContent = `共 ${wallState.total} 条${scope ? ' · ' + scope : ''} · 已加载 ${wallState.items.length}`;
+  const emptyBox = document.querySelector('#wall-empty');
+  if (emptyBox) {
+    const what = wallState.entity ? `「${wallState.entity[2]}」的影片`
+      : (wallState.libraryName ? `「${wallState.libraryName}」的影片` : '影片');
+    emptyBox.innerHTML = wallState.total === 0
+      ? empty(wallState.status ? `没有 ${STATUS_TEXT[wallState.status] || wallState.status} 的${what}` : `没有符合条件的${what}`,
+          wallState.search ? '试试其它关键词。' : '开始扫描或手动补录后再来看看。')
+      : '';
+  }
+  if (more) more.textContent = wallState.done && wallState.total > 0 ? `已全部加载（共 ${wallState.total} 条）` : '';
 }
 
-// gotoEntity 跳到媒体墙并按该实体过滤（单值筛选，URL 可见、抽屉关闭）。
+/* ------------------------------------------------------------ 影片详情页 */
+// 实体筛选参数：详情页里点演员/类型/厂商/合集会带着其中一个参数回到媒体墙。
+const ENTITY_PARAMS = [['person', '演员'], ['genre', '类型'], ['studio', '厂商'], ['tag', '标签'], ['collection', '合集']];
+
+// 详情是真实页面（#item/<id>）：卡片点击即进入，浏览器返回键回到媒体墙。
+const ITEM_ROUTE = /^item\/(\d+)$/;
+const currentItemID = () => (ITEM_ROUTE.exec(location.hash.replace('#', '')) || [])[1] || '';
+
+// openItemPage 进入整页详情。媒体墙的滚动位置记在它自己的历史条目上：
+// 只有从详情返回时才恢复，点导航回媒体墙仍从顶部开始。
+function openItemPage(id) {
+  // 把当前阅读位置记在「正要离开的那条」历史条目上：返回时（无论来自媒体墙还是另一部影片）
+  // 由 popstate 恢复。直接导航进某页不带这份记录，所以仍从顶部开始。
+  rememberPage(id);
+  history.pushState({ item: String(id) }, '', location.pathname + location.search + '#item/' + id);
+  page('item', String(id));
+}
+
+// backFromItem 详情页返回：应用内进入走 history.back()（与浏览器返回键同一路径）；
+// 只有本页从未渲染过媒体墙（直接打开链接、或在详情页刷新）时才替换为媒体墙，
+// 否则 history.back() 会跳出控制台。
+function backFromItem() {
+  if (wallState && history.state && history.state.item) { history.back(); return; }
+  history.replaceState({}, '', location.pathname + location.search + '#items');
+  page('items');
+}
+
+// refreshItemPage 原地重渲染详情（探测/重读/刮削收尾后），保持阅读位置。
+async function refreshItemPage(id) {
+  if (activePage?.name !== 'item' || String(id) !== activePage.param) return;
+  return refreshPage(activePage);
+}
+
+// embyJSON 调 Emby 兼容接口（与管理端 /api/admin 前缀不同）；失败返回 null，由调用方降级。
+async function embyJSON(path, view = activePage) {
+  const controller = new AbortController();
+  const signal = view?.controller.signal;
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  const timer = setTimeout(abort, 5000);
+  try {
+    const response = await fetch(path, { headers: { 'X-Emby-Token': token }, signal: controller.signal });
+    const result = response.ok ? await response.json() : null;
+    return controller.signal.aborted ? null : result;
+  } catch { return null; }
+  finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+}
+
+// plotClamped 长简介默认折叠到 6 行。按字符数判断是否需要「展开」，
+// 不依赖 line-clamp 后的行高探测（各引擎对被截断元素的 scrollHeight 上报不一致）。
+const plotClamped = text => String(text || '').length > 260;
+
+// gotoEntity 跳到媒体墙并按该实体过滤（单值筛选，URL 可见）。
 function gotoEntity(key, value) {
   const qs = new URLSearchParams();
   ENTITY_PARAMS.forEach(([k]) => qs.delete(k));
   qs.set(key, value);
   if (wallState && wallState.libraryID) qs.set('library_id', wallState.libraryID);
+  rememberPage();
   history.pushState({}, '', location.pathname + '?' + qs.toString() + '#items');
-  closeDetail();
-  pageItems();
+  // 走 page() 而不是直接 pageItems()：详情页顶栏写的是影片标题，不重设会带着它回到媒体墙。
+  page('items');
 }
 
 const fmtSize = bytes => {
@@ -568,58 +711,99 @@ function detailMetaRow(label, value, key) {
   return `<div class="detail-meta-row"><dt>${esc(label)}</dt><dd>${body}</dd></div>`;
 }
 
-async function openDetail(item) {
-  detailDrawer.innerHTML = '<div class="detail-body"><p class="hint">加载中…</p></div>';
-  detailOverlay.hidden = false;
-  let data;
-  try {
-    data = await api(`/items/${item.id}/detail`);
-  } catch (error) {
-    detailDrawer.innerHTML = `<div class="detail-body"><p class="hint">${esc(error.message || error)}</p></div>`;
-    return;
-  }
+// pageItem 渲染整页详情。id 来自 URL（#item/<id>），刷新或直接打开链接都落到同一部影片。
+async function pageItem(id, options = {}) {
+  const view = activePage;
+  const similar = embyJSON(`/Items/${id}/Similar?Limit=12`, view);
+  const data = await api(`/items/${id}/detail`);
+  if (!isCurrentPage(view)) return;
   // 注意：store.Movie 的 JSON 字段名大小写并不统一——只有少数几个字段带小写下划线 tag
   // （id / collection / official_rating / source_path / source_protocol / created_at …），
   // 其余保持 Go 字段名。取值时按接口实际返回的键来写。
   const m = data.movie || {};
-  const title = m.Title || String(item.id);
+  const title = m.Title || String(id);
   const st = m.Status || '';
   const playable = st === 'success' || st === 'manual';
-  const poster = m.PosterPath ? `/Items/${m.id}/Images/Primary` : '';
-  const backdrop = m.BackdropPath ? `/Items/${m.id}/Images/Backdrop` : (m.LandscapePath ? `/Items/${m.id}/Images/Thumb` : poster);
+  // 本地图片优先；本地没有图时用 NFO <cover> 的远程地址兜底（其它刮削工具产出的 NFO 常见这种写法）。
+  const cover = String(m.cover_url || '').trim();
+  const trailer = String(m.trailer_url || '').trim();
+  const images = data.images || [];
+  const tagFor = type => images.find(image => image.ImageType === type)?.ImageTag;
+  const poster = m.PosterPath ? imageURL(m.id, 'Primary', 320, tagFor('Primary')) : cover;
+  const backdrop = m.BackdropPath ? imageURL(m.id, 'Backdrop', 1280, tagFor('Backdrop'), 0)
+    : (m.LandscapePath ? imageURL(m.id, 'Thumb', 1280, tagFor('Thumb')) : poster);
   const backdrops = (data.images || []).filter(image => image.ImageType === 'Backdrop');
-  const artworkUrl = image => `/Items/${m.id}/Images/Backdrop/${image.ImageIndex}?tag=${encodeURIComponent(image.ImageTag || '')}`;
+  const artworkUrl = (image, width) => imageURL(m.id, 'Backdrop', width, image.ImageTag, image.ImageIndex);
+  const trailerThumb = backdrops.length ? artworkUrl(backdrops[0], 840) : (backdrop || cover);
   const head = [numberUnlessInTitle(title, m.Number), m.Year, fmtDuration(m.RuntimeSeconds), m.Rating ? `★ ${m.Rating}` : ''].filter(Boolean).join(' · ');
   const actors = data.actors || [];
+  const ui = options.detailUI || {};
 
-  detailDrawer.innerHTML = `
-    <div class="detail-hero">
-      ${backdrop ? `<img class="detail-backdrop" src="${esc(backdrop)}" alt="">` : ''}
-      <button id="detail-close" class="icon-btn detail-close" title="关闭 (Esc)">✕</button>
-      <div class="detail-hero-body">
-        ${poster ? `<img class="detail-poster" src="${esc(poster)}" alt="">` : ''}
-        <div class="detail-hero-text">
-          <h2>${esc(title)}</h2>
-          <p class="detail-sub">${esc(head || '—')}</p>
-          <div class="detail-badges">${statusBadge(st)}${m.collection ? `<span class="badge manual">合集 ${esc(m.collection)}</span>` : ''}</div>
+  titleEl.textContent = title;
+  crumbEl.textContent = '媒体墙 / 详情';
+  content.innerHTML = `
+    <article class="item-page">
+      <header class="item-hero">
+        <div class="item-hero-bg">${backdrop ? `<img src="${esc(backdrop)}" alt="" decoding="async" data-fallback="${esc(cover)}">` : ''}</div>
+        <div class="item-hero-body">
+          ${poster ? `<img class="item-hero-poster" src="${esc(poster)}" alt="" decoding="async" data-fallback="${esc(cover)}">` : ''}
+          <div class="item-hero-text">
+            <button id="item-back" class="btn item-back" title="返回媒体墙 (Esc)">← 返回媒体墙</button>
+            <h1 class="item-hero-title">${esc(title)}</h1>
+            <p class="detail-sub">${esc(head || '—')}</p>
+            <div class="detail-badges">${statusBadge(st)}${m.collection ? `<span class="badge manual">合集 ${esc(m.collection)}</span>` : ''}${(m.Tags || []).map(tag => `<button class="tag-chip" data-entity-key="tag" data-entity-value="${esc(tag)}" title="按标签筛选：${esc(tag)}">#${esc(tag)}</button>`).join('')}</div>
+            <div class="item-hero-actions">
+              ${playable
+                ? `<button id="detail-play" class="btn btn-accent">${icon('play')}<span>播放</span></button>`
+                : `<span class="hint" style="margin:0">该影片不可播放（待补录 / 协议不兼容）</span>`}
+              <button id="detail-probe" class="btn">${icon('probe')}<span>探测媒体信息</span></button>
+              <button id="detail-scrape" class="btn">${icon('search')}<span>刮削</span></button>
+              <button id="detail-reread" class="btn">${icon('refresh')}<span>重读源</span></button>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-    <div class="detail-body">
-      <div class="detail-actions">
-        ${playable
-          ? `<button id="detail-play" class="btn btn-accent">${icon('play')}<span>播放</span></button>`
-          : `<span class="hint" style="margin:0">该影片不可播放（待补录 / 协议不兼容）</span>`}
-        <button id="detail-probe" class="btn">${icon('probe')}<span>探测媒体信息</span></button>
-        <button id="detail-scrape" class="btn">${icon('search')}<span>刮削</span></button>
-        <button id="detail-reread" class="btn">${icon('refresh')}<span>重读源</span></button>
-      </div>
+      </header>
 
-      ${m.Plot ? `<section class="detail-section"><h3>简介</h3><p class="detail-plot">${esc(m.Plot)}</p></section>` : ''}
+      <div class="item-sections">
+
+      ${m.Plot ? `<section class="detail-section"><h3>简介</h3><p class="detail-plot${plotClamped(m.Plot) && !ui.plotExpanded ? ' is-clamped' : ''}" id="item-plot">${esc(m.Plot)}</p>${plotClamped(m.Plot) ? `<button class="btn plot-toggle" id="plot-toggle" aria-expanded="${!!ui.plotExpanded}" aria-controls="item-plot">${ui.plotExpanded ? '收起简介' : '展开全部'}</button>` : ''}</section>` : ''}
+
+      ${trailer ? `<section class="detail-section"><h3>预告片</h3>
+        <button class="trailer-card" id="item-trailer" title="播放预告片" aria-label="播放预告片">
+          <span class="trailer-thumb">${trailerThumb ? `<img loading="lazy" decoding="async" src="${esc(trailerThumb)}" alt="" data-fallback="${esc(cover || poster)}">` : ''}<span class="trailer-play">${icon('play')}</span></span>
+        </button>
+      </section>` : ''}
 
       ${backdrops.length ? `<section class="detail-section"><h3>剧照 <small>${backdrops.length}</small></h3>
-        <div class="detail-artwork-grid">${backdrops.map((image, index) => `<a href="${esc(artworkUrl(image))}" target="_blank" rel="noopener"><img loading="lazy" src="${esc(artworkUrl(image))}&amp;maxWidth=480" alt="剧照 ${index + 1}"></a>`).join('')}</div>
+        <div class="detail-artwork-grid">${backdrops.map((image, index) => `<a href="${esc(artworkUrl(image))}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="${esc(artworkUrl(image, 480))}" alt="剧照 ${index + 1}"></a>`).join('')}</div>
       </section>` : ''}
+
+      <section class="detail-section"><h3>演员 <small>${actors.length}</small></h3>
+        ${actors.length ? `<div class="avatar-grid">${actors.map(actor => `
+          <button class="avatar-card" data-entity-key="person" data-entity-value="${esc(actor.name)}">
+            ${actor.has_image
+              ? `<img loading="lazy" src="/Items/${esc(entityIdOf('person', actor.name))}/Images/Primary?maxWidth=200${actor.image_tag ? '&tag=' + esc(actor.image_tag) : ''}" alt="">`
+              : `<span class="avatar-fallback">${esc((actor.name || '?').trim().slice(0, 1))}</span>`}
+            <small>${esc(actor.name)}</small>
+          </button>`).join('')}</div>`
+          : '<p class="hint" style="margin:8px 0 0">NFO 中没有演员信息。</p>'}
+      </section>
+
+      <section class="detail-section" id="item-similar"${ui.similarHTML ? '' : ' hidden'}>${ui.similarHTML || ''}</section>
+
+      <section class="detail-section"><h3>媒体信息 <small>${(data.files || []).length} 个文件</small></h3>
+        ${(data.files || []).map(file => `
+          <div class="detail-file">
+            <div class="detail-file-head">
+              <strong>${file.role === 'main' ? '主文件' : `分段 ${file.index - 1}`}</strong>
+              <span class="mono">${esc(file.name)}</span>
+              <span class="hint" style="margin:0">${esc(fmtSize(file.size))}</span>
+              ${file.probed ? '' : '<span class="badge pending">未探测</span>'}
+            </div>
+            ${streamTable(file.streams)}
+            <p class="detail-path mono">${esc(file.path)}</p>
+          </div>`).join('')}
+      </section>
 
       <section class="detail-section"><h3>元数据</h3>
         <dl class="detail-meta">
@@ -637,32 +821,8 @@ async function openDetail(item) {
         </dl>
       </section>
 
-      <section class="detail-section"><h3>演员 <small>${actors.length}</small></h3>
-        ${actors.length ? `<div class="avatar-grid">${actors.map(actor => `
-          <button class="avatar-card" data-entity-key="person" data-entity-value="${esc(actor.name)}">
-            ${actor.has_image
-              ? `<img loading="lazy" src="/Items/${esc(entityIdOf('person', actor.name))}/Images/Primary?maxWidth=200${actor.image_tag ? '&tag=' + esc(actor.image_tag) : ''}" alt="">`
-              : `<span class="avatar-fallback">${esc((actor.name || '?').trim().slice(0, 1))}</span>`}
-            <small>${esc(actor.name)}</small>
-          </button>`).join('')}</div>`
-          : '<p class="hint" style="margin:8px 0 0">NFO 中没有演员信息。</p>'}
-      </section>
-
-      <section class="detail-section"><h3>媒体信息 <small>${(data.files || []).length} 个文件</small></h3>
-        ${(data.files || []).map(file => `
-          <div class="detail-file">
-            <div class="detail-file-head">
-              <strong>${file.role === 'main' ? '主文件' : `分段 ${file.index - 1}`}</strong>
-              <span class="mono">${esc(file.name)}</span>
-              <span class="hint" style="margin:0">${esc(fmtSize(file.size))}</span>
-              ${file.probed ? '' : '<span class="badge pending">未探测</span>'}
-            </div>
-            ${streamTable(file.streams)}
-            <p class="detail-path mono">${esc(file.path)}</p>
-          </div>`).join('')}
-      </section>
-
-      <section class="detail-section"><h3>文件与时间</h3>
+      <details class="detail-section item-details"${ui.filesExpanded ? ' open' : ''}>
+        <summary>文件与时间</summary>
         <dl class="detail-meta">
           ${detailMetaRow('源文件', m.source_path)}
           ${detailMetaRow('NFO', m.NFOPath)}
@@ -671,30 +831,68 @@ async function openDetail(item) {
           ${detailMetaRow('上次刮削', fmtTime(m.last_scrape_at))}
           ${detailMetaRow('刮削结果', m.last_scrape_error)}
         </dl>
-      </section>
-    </div>`;
+      </details>
+      </div>
+    </article>`;
 
-  document.querySelector('#detail-close').addEventListener('click', closeDetail);
+  document.querySelector('#item-back').addEventListener('click', backFromItem);
   const playBtn = document.querySelector('#detail-play');
-  if (playBtn) playBtn.addEventListener('click', () => { closeDetail(); openPlayer(item); });
-  document.querySelector('#detail-probe').addEventListener('click', async () => {
-    await probeItem(m.id);
-    openDetail(item);
+  // 播放器叠在详情页之上，关掉仍停在这一部，不用重新进。
+  if (playBtn) playBtn.addEventListener('click', () => openPlayer(m));
+  document.querySelector('#detail-probe').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    try { if (await probeItem(m.id)) await refreshPage(view); }
+    finally { button.disabled = false; }
   });
   // 单条刮削走「预览 → 人工确认」，取消则零写入零请求（需求 5j）。
-  document.querySelector('#detail-scrape').addEventListener('click', () => openScrapePreview(item));
-  document.querySelector('#detail-reread').addEventListener('click', async () => {
+  document.querySelector('#detail-scrape').addEventListener('click', () => openScrapePreview(m));
+  document.querySelector('#detail-reread').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
     try {
       const r = await api(`/items/${m.id}/reread`, { method: 'POST' });
       toast(`状态已更新：${STATUS_TEXT[r.status] || r.status}`);
-      closeDetail();
-      pageItems();
+      await refreshPage(view);
     } catch (e) { toast(e.message, 'error'); }
+    finally { button.disabled = false; }
   });
+  const plotToggle = document.querySelector('#plot-toggle');
+  if (plotToggle) plotToggle.addEventListener('click', () => {
+    const clamped = document.querySelector('#item-plot').classList.toggle('is-clamped');
+    plotToggle.textContent = clamped ? '展开全部' : '收起简介';
+    plotToggle.setAttribute('aria-expanded', String(!clamped));
+  });
+  // 预告片：NFO 里的地址直接送进内置播放器（远程 mp4，没有服务端代理端点）。
+  const trailerButton = document.querySelector('#item-trailer');
+  if (trailerButton) trailerButton.addEventListener('click', () => openTrailer(m, trailer));
   // 实体跳转：统一委托，演员卡片与元数据里的类型/标签/厂商/合集共用一条路径。
-  detailDrawer.querySelectorAll('[data-entity-key]').forEach(el => el.addEventListener('click', () => {
+  content.querySelectorAll('[data-entity-key]').forEach(el => el.addEventListener('click', () => {
     gotoEntity(el.dataset.entityKey, el.dataset.entityValue);
   }));
+  // 相似影片：点击进入那一部的详情页，同样压入历史，返回键回到当前这部。
+  const similarSection = document.querySelector('#item-similar');
+  similarSection.addEventListener('click', event => {
+    const card = event.target.closest('[data-similar]');
+    if (card) openItemPage(card.dataset.similar);
+  });
+  similar.then(result => {
+    if (!isCurrentPage(view)) return;
+    const items = result?.Items || [];
+    if (!result && ui.similarHTML) return;
+    similarSection.hidden = !items.length;
+    similarSection.innerHTML = items.length ? `<h3>相似影片 <small>${items.length}</small></h3>
+      <div class="similar-row">${items.map(item => {
+        const tag = (item.ImageTags || {}).Primary || '';
+        const sub = [item.ProductionYear, item.RunTimeTicks ? fmtDuration(item.RunTimeTicks / 10000000) : '', item.CommunityRating ? `★ ${item.CommunityRating}` : ''].filter(Boolean).join(' · ');
+        return `<button class="similar-card" data-similar="${esc(item.Id)}" title="${esc(item.Name || '')}">
+          <span class="similar-poster">${tag ? `<img loading="lazy" decoding="async" src="${esc(imageURL(item.Id, 'Primary', 320, tag))}" alt="">` : ''}</span>
+          <strong>${esc(item.Name || item.Id)}</strong><small>${esc(sub)}</small>
+        </button>`;
+      }).join('')}</div>` : '';
+  });
 }
 
 // entityIdOf 生成与后端一致的虚拟实体 id（小写类型 + base64url 名称）。
@@ -715,20 +913,28 @@ function closePlayer() {
   document.body.classList.remove('player-open');
 }
 
-function openPlayer(item) {
+// playOverlay 在内置播放器里播放一个地址。proxyURL 非空时，直连失败会回退到服务端代理端点。
+function playbackErrorMessage(code, url) {
+  if (location.protocol === 'https:' && /^http:/i.test(url)) return '播放失败：HTTPS 页面无法加载此 HTTP 视频地址，请使用 HTTPS 源';
+  if (code === 2) return '视频加载失败，请检查网络或源地址是否失效';
+  if (code === 3) return '视频解码失败，浏览器可能不支持该编码';
+  if (code === 4) return '视频源不可用或格式不受支持，请检查源地址和浏览器兼容性';
+  return '播放失败，请检查网络、源地址或视频格式';
+}
+
+function playOverlay({ title, url, type = 'mp4', proxyURL = '' }) {
   const overlay = document.querySelector('#player-overlay');
-  const title = item.Title || String(item.source_path || '').split(/[\\/]/).pop() || '播放';
   document.querySelector('#player-title').textContent = title;
   overlay.hidden = false;
   document.body.classList.add('player-open');
+  if (artInstance) { try { artInstance.destroy(); } catch { /* ignore */ } artInstance = null; }
   const stage = document.querySelector('#player-stage');
   stage.innerHTML = '';
-  const container = String(item.source_container || item.SourceContainer || '').toLowerCase();
-  const type = container === 'webm' ? 'webm' : 'mp4';
   let usedProxy = false;
-  artInstance = new Artplayer({
+  let reported = false;
+  const player = new Artplayer({
     container: stage,
-    url: '/Videos/' + item.id + '/stream',
+    url,
     type,
     title,
     autoplay: true,
@@ -743,20 +949,48 @@ function openPlayer(item) {
     theme: '#e0a44b',
     lang: 'zh-cn'
   });
+  artInstance = player;
   // 直链 302 在 HTTPS 页面可能被混合内容/跨域拦截；失败时回退服务端代理端点。
-  artInstance.on('error', () => {
-    if (usedProxy) { toast('播放失败：浏览器可能不支持该编码（如 H.265/MKV）', 'error'); return; }
+  player.on('error', () => {
+    if (artInstance !== player) return;
+    if (!proxyURL || usedProxy) {
+      if (!reported) toast(playbackErrorMessage(player.video?.error?.code, usedProxy ? proxyURL : url), 'error');
+      reported = true;
+      return;
+    }
     usedProxy = true;
-    artInstance.url = '/Videos/' + item.id + '/proxy';
+    player.url = proxyURL;
     // 回退发生在 error 回调里（非用户手势），移动端需静音才允许自动播放。
-    artInstance.muted = true;
-    artInstance.play().catch(() => { /* 用户可手动点播放 */ });
+    player.muted = true;
+    player.play().catch(() => { /* 用户可手动点播放 */ });
+  });
+}
+
+function openPlayer(item) {
+  const container = String(item.source_container || item.SourceContainer || '').toLowerCase();
+  playOverlay({
+    title: item.Title || String(item.source_path || '').split(/[\\/]/).pop() || '播放',
+    url: '/Videos/' + item.id + '/stream',
+    type: container === 'webm' ? 'webm' : 'mp4',
+    proxyURL: '/Videos/' + item.id + '/proxy'
+  });
+}
+
+// openTrailer 播放 NFO 的预告片：地址指向来源站，浏览器直连（没有服务端代理端点可回退）。
+function openTrailer(movie, url) {
+  const extension = String(url).split('?')[0].split('.').pop().toLowerCase();
+  playOverlay({
+    title: '预告片 · ' + (movie.Title || ''),
+    url,
+    type: extension === 'webm' ? 'webm' : 'mp4'
   });
 }
 
 /* ---------------------------------------------------------------- 手动补录 */
 async function pageManual() {
+  const view = activePage;
   const libs = (await api('/libraries')).items || [];
+  if (!isCurrentPage(view)) return;
   content.innerHTML = `
     <section class="panel">
       <div class="panel-head"><h2>手动补录</h2><span class="hint" style="margin:0">写入 .strm + 生成 NFO，即时进入 Emby</span></div>
@@ -808,7 +1042,9 @@ async function pageManual() {
 
 /* ---------------------------------------------------------------- 设置 */
 async function pageSettings() {
+  const view = activePage;
   const s = await api('/settings');
+  if (!isCurrentPage(view)) return;
   const cacheStats = Object.entries(s.cache_stats || {}).filter(([kind]) => kind !== 'token' && kind !== 'apikey').map(([, value]) => value);
   const hits = cacheStats.reduce((sum, v) => sum + (v.hits || 0), 0);
   const misses = cacheStats.reduce((sum, v) => sum + (v.misses || 0), 0);
@@ -834,7 +1070,9 @@ async function pageSettings() {
 
 /* ---------------------------------------------------------------- API 密钥 */
 async function pageAPIKeys() {
+  const view = activePage;
   const data = await api('/apikeys');
+  if (!isCurrentPage(view)) return;
   const items = data.items || [];
   content.innerHTML = `
     <section class="panel">
@@ -864,7 +1102,7 @@ async function pageAPIKeys() {
   document.querySelector('#apikey-form').addEventListener('submit', async event => {
     event.preventDefault();
     const name = String(new FormData(event.target).get('name') || '').trim();
-    try { await api('/apikeys', { method: 'POST', body: JSON.stringify({ name }) }); toast('密钥已创建'); pageAPIKeys(); }
+    try { await api('/apikeys', { method: 'POST', body: JSON.stringify({ name }) }); toast('密钥已创建'); refreshPage(view); }
     catch (e) { toast(e.message, 'error'); }
   });
   document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', async () => {
@@ -873,14 +1111,16 @@ async function pageAPIKeys() {
   }));
   document.querySelectorAll('[data-key-delete]').forEach(button => button.addEventListener('click', async () => {
     if (!confirm('删除该 API 密钥？使用它的客户端将立即失效。')) return;
-    try { await api('/apikeys/' + encodeURIComponent(button.dataset.keyDelete), { method: 'DELETE' }); toast('密钥已删除', 'ok'); pageAPIKeys(); }
+    try { await api('/apikeys/' + encodeURIComponent(button.dataset.keyDelete), { method: 'DELETE' }); toast('密钥已删除', 'ok'); refreshPage(view); }
     catch (e) { toast(e.message, 'error'); }
   }));
 }
 
 /* ---------------------------------------------------------------- 任务 */
 async function pageTasks() {
+  const view = activePage;
   const data = await api('/tasks');
+  if (!isCurrentPage(view)) return;
   const running = data.running;
   const items = data.items || [];
   const runLabel = s => RUN_STATUS_TEXT[s] || s;
@@ -907,12 +1147,14 @@ async function pageTasks() {
         </table></div>` : empty('暂无任务', '点击「立即扫描」开始索引。')}
     </section>`;
   document.querySelector('#task-scan').addEventListener('click', () => runScan());
-  document.querySelector('#task-refresh').addEventListener('click', pageTasks);
+  document.querySelector('#task-refresh').addEventListener('click', () => refreshPage(view));
 }
 
 /* ---------------------------------------------------------------- 探针 */
 async function pageProbe() {
+  const view = activePage;
   const data = await api('/probe');
+  if (!isCurrentPage(view)) return;
   const items = data.items || [];
   content.innerHTML = `
     <section class="panel">
@@ -927,7 +1169,7 @@ async function pageProbe() {
         </table></div>` : empty('暂无探针记录', '当客户端请求了未注册的 Emby 接口后会显示在这里。')}
     </section>`;
   document.querySelector('#clear-probes').addEventListener('click', async () => {
-    try { await api('/probe', { method: 'DELETE' }); toast('探针记录已清空'); pageProbe(); }
+    try { await api('/probe', { method: 'DELETE' }); toast('探针记录已清空'); refreshPage(view); }
     catch (e) { toast(e.message, 'error'); }
   });
 }
@@ -935,10 +1177,13 @@ async function pageProbe() {
 /* ---------------------------------------------------------------- 刮削 */
 // 配置存 DB（config.yaml 不设 scrape 段）；密钥只写不回显，读取时返回掩码。
 async function pageScrape() {
+  const view = activePage;
   const [settings, libs] = await Promise.all([api('/scrape/settings'), api('/libraries')]);
+  if (!isCurrentPage(view)) return;
   const libraries = libs.items || [];
   const tr = settings.translate || {};
   const progress = await api('/scrape/progress').catch(() => ({}));
+  if (!isCurrentPage(view)) return;
   const libOptions = libraries.map(lib => `<option value="${esc(lib.Id)}">${esc(lib.Name)}</option>`).join('');
 
   content.innerHTML = `
@@ -1029,7 +1274,7 @@ async function pageScrape() {
         timeout_seconds: num('#tr-timeout')
       }
     };
-    try { await api('/scrape/settings', { method: 'PUT', body: JSON.stringify(body) }); toast('配置已保存并即时生效'); pageScrape(); }
+    try { await api('/scrape/settings', { method: 'PUT', body: JSON.stringify(body) }); toast('配置已保存并即时生效'); refreshPage(view); }
     catch (e) { toast(e.message, 'error'); }
   });
 
@@ -1148,9 +1393,11 @@ async function openScrapePreview(item) {
   const body = document.querySelector('#scrape-body');
   overlay.hidden = false;
   body.innerHTML = '<p class="hint">正在搜索候选…</p>';
-  scrapeState = { movieId: item.id, preview: null, inspect: null, provider: '', id: '' };
+  const state = { movieId: item.id, preview: null, inspect: null, provider: '', id: '', view: activePage };
+  scrapeState = state;
   try {
     const preview = await api(`/items/${item.id}/scrape/preview`);
+    if (scrapeState !== state || !isCurrentPage(state.view)) return;
     scrapeState.preview = preview;
     if (!preview.candidates || !preview.candidates.length) {
       body.innerHTML = `<p class="hint">没有搜到候选（搜索词：${esc(preview.query || '—')}）。可先在详情里补番号，或在 NFO 里填好番号后重试。</p>`;
@@ -1159,16 +1406,20 @@ async function openScrapePreview(item) {
     const pick = preview.candidates[preview.recommended >= 0 ? preview.recommended : 0];
     await loadScrapeInspect(pick.provider, pick.id);
   } catch (e) {
+    if (scrapeState !== state || !isCurrentPage(state.view)) return;
     body.innerHTML = `<p class="hint" style="color:var(--danger)">${esc(e.message)}</p>`;
   }
 }
 
 async function loadScrapeInspect(provider, id) {
+  const state = scrapeState;
+  if (!state) return;
   const body = document.querySelector('#scrape-body');
   body.innerHTML = '<p class="hint">正在读取详情…</p>';
   const inspect = await api(`/items/${scrapeState.movieId}/scrape/inspect`, {
     method: 'POST', body: JSON.stringify({ provider, id })
   });
+  if (scrapeState !== state || !isCurrentPage(state.view)) return;
   scrapeState.inspect = inspect;
   scrapeState.provider = provider;
   scrapeState.id = id;
@@ -1250,9 +1501,9 @@ function renderScrapePreview() {
         body: JSON.stringify({ provider: state.provider, id: state.id, overwrite: body.querySelector('#scrape-force').checked })
       });
       toast(`已写入「${result.title}」（图片 ${result.images} 张）`);
-      closeScrapePreview();
-      closeDetail();
-      pageItems();
+      if (scrapeState === state) closeScrapePreview();
+      // 停在详情页看写入结果，不跳回媒体墙（用户在详情页发起的刮削）。
+      await refreshPage(state.view);
     } catch (e) { toast(e.message, 'error'); confirmBtn.disabled = false; }
   });
 }
@@ -1284,7 +1535,9 @@ function runBadge(status) {
 }
 
 async function pageScheduled() {
+  const view = activePage;
   const [data, libs] = await Promise.all([api('/scheduled'), api('/libraries')]);
+  if (!isCurrentPage(view)) return;
   const items = data.items || [];
   const types = data.types || TASK_TYPE_TEXT;
   const libraries = libs.items || [];
@@ -1396,9 +1649,9 @@ async function pageScheduled() {
     checkCron();
   }));
   if (document.querySelector('#sched-cancel')) {
-    document.querySelector('#sched-cancel').addEventListener('click', () => { scheduledEditId = null; pageScheduled(); });
+    document.querySelector('#sched-cancel').addEventListener('click', () => { scheduledEditId = null; refreshPage(view); });
   }
-  document.querySelector('#sched-refresh').addEventListener('click', pageScheduled);
+  document.querySelector('#sched-refresh').addEventListener('click', () => refreshPage(view));
 
   document.querySelector('#sched-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -1426,7 +1679,7 @@ async function pageScheduled() {
         await api('/scheduled', { method: 'POST', body: JSON.stringify(body) });
         toast(`计划任务「${body.name}」已创建`);
       }
-      pageScheduled();
+      refreshPage(view);
     } catch (e) { toast(e.message, 'error'); submit.disabled = false; }
   });
 
@@ -1435,8 +1688,8 @@ async function pageScheduled() {
     const role = el.dataset.role;
     if (role === 'toggle') {
       el.addEventListener('change', async () => {
-        try { await api(`/scheduled/${id}/toggle`, { method: 'POST' }); toast('状态已更新'); pageScheduled(); }
-        catch (e) { toast(e.message, 'error'); pageScheduled(); }
+        try { await api(`/scheduled/${id}/toggle`, { method: 'POST' }); toast('状态已更新'); refreshPage(view); }
+        catch (e) { toast(e.message, 'error'); refreshPage(view); }
       });
     } else if (role === 'run') {
       el.addEventListener('click', async () => {
@@ -1444,7 +1697,7 @@ async function pageScheduled() {
         catch (e) { toast(e.message, 'error'); }
       });
     } else if (role === 'edit') {
-      el.addEventListener('click', () => { scheduledEditId = Number(id); pageScheduled(); });
+      el.addEventListener('click', () => { scheduledEditId = Number(id); refreshPage(view); });
     } else if (role === 'del') {
       el.addEventListener('click', async () => {
         if (!confirm('删除该计划任务？已产生的影片数据不受影响。')) return;
@@ -1452,7 +1705,7 @@ async function pageScheduled() {
           await api('/scheduled/' + id, { method: 'DELETE' });
           if (scheduledEditId === Number(id)) scheduledEditId = null;
           toast('计划任务已删除');
-          pageScheduled();
+          refreshPage(view);
         } catch (e) { toast(e.message, 'error'); }
       });
     }
@@ -1464,6 +1717,7 @@ const pages = {
   overview: pageOverview,
   libraries: pageLibraries,
   items: pageItems,
+  item: pageItem,
   manual: pageManual,
   settings: pageSettings,
   apikeys: pageAPIKeys,
@@ -1473,14 +1727,66 @@ const pages = {
   probe: pageProbe
 };
 
-async function page(name) {
+async function page(name, param, options = {}) {
+  const previous = options.preserveScroll ? activePage : null;
+  const previousContent = content.firstChild;
+  const previousTitle = titleEl.textContent;
+  const previousCrumb = crumbEl.textContent;
+  if (options.preserveScroll) {
+    options.restore = { scrollY: window.scrollY, wallCount: wallState?.items.length || 0 };
+    if (name === 'item') {
+      options.detailUI = {
+        plotExpanded: document.querySelector('#plot-toggle')?.getAttribute('aria-expanded') === 'true',
+        filesExpanded: !!document.querySelector('.item-details')?.open,
+        similarHTML: document.querySelector('#item-similar')?.innerHTML || ''
+      };
+    }
+  }
+  // A refresh keeps the old controls usable if its read fails before rendering.
+  // Navigation, including navigation during a refresh, cancels both lifetimes.
+  if (!previous) abortPage(activePage);
+  wallController?.abort();
+  wallGen += 1;
+  const view = { name, param: param == null ? '' : String(param), controller: new AbortController(), previous };
+  activePage = view;
+  if (!options.preserveScroll) { closePlayer(); closeScrapePreview(); }
   setMeta(name);
-  content.innerHTML = skeletonPanel();
+  // 切页从顶部开始：hash 变化不会重置滚动，不显式归零会让详情页停在媒体墙的滚动位置。
+  // 返回时若该历史条目记过阅读位置，popstate 会在这之后再恢复。
+  if (!options.preserveScroll) {
+    window.scrollTo(0, 0);
+    content.innerHTML = skeletonPanel();
+  }
   const fn = pages[name];
   if (!fn) { content.innerHTML = `<div class="panel">${empty('模块即将开放', '请先使用上方导航。')}</div>`; return; }
   try {
-    await fn();
+    await fn(view.param, options);
+    if (!isCurrentPage(view)) return;
+    abortPage(previous);
+    view.previous = null;
+    if (options.restore) {
+      if (name === 'items' && options.restore.focusID) {
+        const card = Array.from(content.querySelectorAll('.wall-card')).find(el => el.dataset.play === options.restore.focusID);
+        card?.focus({ preventScroll: true });
+      }
+      window.scrollTo(0, options.restore.scrollY || 0);
+    }
+    if (name === 'items') wallMaybeLoadMore();
   } catch (error) {
+    if (!isCurrentPage(view) || error.name === 'AbortError') return;
+    if (previous && content.firstChild === previousContent) {
+      activePage = previous;
+      view.previous = null;
+      view.controller.abort();
+      setMeta(name);
+      titleEl.textContent = previousTitle;
+      crumbEl.textContent = previousCrumb;
+      if (name === 'items' && wallState) wallState.loading = false;
+      toast(error.message || '刷新失败', 'error');
+      return;
+    }
+    abortPage(previous);
+    view.previous = null;
     content.innerHTML = `<div class="panel error" style="border-color:#a64952">${icon('alert')} ${esc(error.message || error)}</div>`;
   }
 }
@@ -1580,7 +1886,8 @@ async function probeItem(id) {
   try {
     const r = await api('/items/' + id + '/probe', { method: 'POST' });
     toast(probeSummary(r.info), 'ok');
-  } catch (e) { toast(e.message, 'error'); }
+    return true;
+  } catch (e) { toast(e.message, 'error'); return false; }
 }
 
 // probeSummary 把探测结果压成一行可读摘要，作为单条探测的即时反馈。
@@ -1666,7 +1973,9 @@ async function runScan(libraryId) {
   scanBtn.disabled = false;
   scanBtn.querySelector('span').textContent = '开始扫描';
   const name = location.hash.replace('#', '');
-  if (pages[name]) page(name);
+  const item = ITEM_ROUTE.exec(name);
+  if (item) await refreshItemPage(item[1]);
+  else if (pages[name]) page(name);
 }
 
 async function boot() {
@@ -1679,15 +1988,22 @@ async function boot() {
     window.location.replace('/');
     return;
   }
-  // 导航写 hash 并压入历史，配合 popstate 让浏览器前进/后退在页面间往返。
+  history.scrollRestoration = 'manual';
+  // pushState avoids rendering twice through both a hash navigation and popstate.
   document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
-    if (location.hash !== '#' + button.dataset.page) location.hash = button.dataset.page;
+    if (location.hash !== '#' + button.dataset.page) {
+      rememberPage();
+      history.pushState({}, '', location.pathname + location.search + '#' + button.dataset.page);
+    }
     page(button.dataset.page);
   }));
   // 前进/后退时按 URL（hash + query）重渲染当前页，筛选条件随 URL 一并恢复。
   window.addEventListener('popstate', () => {
     const name = location.hash.replace('#', '');
-    page(pages[name] ? name : 'overview');
+    const item = ITEM_ROUTE.exec(name);
+    const target = item ? 'item' : (pages[name] ? name : 'overview');
+    // 返回时恢复离开该页时的阅读位置（记录在被返回的那条历史条目上）。
+    page(target, item ? item[1] : undefined, { restore: history.state || {} });
   });
   document.querySelector('#scan').addEventListener('click', () => runScan());
   window.addEventListener('scroll', wallMaybeLoadMore, { passive: true });
@@ -1695,18 +2011,16 @@ async function boot() {
   document.querySelector('#player-overlay').addEventListener('click', event => {
     if (event.target.id === 'player-overlay') closePlayer();
   });
-  // 详情抽屉：点遮罩关闭（抽屉本体不关，便于选中文本复制路径）。
-  detailOverlay.addEventListener('click', event => {
-    if (event.target.id === 'detail-overlay') closeDetail();
-  });
   document.querySelector('#scrape-overlay').addEventListener('click', event => {
     if (event.target.id === 'scrape-overlay') closeScrapePreview();
   });
   document.querySelector('#scrape-close').addEventListener('click', closeScrapePreview);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !document.querySelector('#scrape-overlay').hidden) { closeScrapePreview(); return; }
-    if (event.key === 'Escape' && !detailOverlay.hidden) { closeDetail(); return; }
-    if (event.key === 'Escape' && !document.querySelector('#player-overlay').hidden) closePlayer();
+    if (event.key !== 'Escape') return;
+    if (!document.querySelector('#scrape-overlay').hidden) { closeScrapePreview(); return; }
+    if (!document.querySelector('#player-overlay').hidden) { closePlayer(); return; }
+    // 详情页按 Esc 等同「返回媒体墙」，与抽屉时代的行为一致。
+    if (currentItemID()) backFromItem();
   });
   // 页面刷新/切换回来时，若扫描仍在进行则恢复进度显示。
   try {
@@ -1729,6 +2043,8 @@ async function boot() {
     }
   } catch { /* ignore */ }
   const initial = location.hash.replace('#', '');
-  page(pages[initial] ? initial : 'overview');
+  const initialItem = ITEM_ROUTE.exec(initial);
+  if (initialItem) page('item', initialItem[1]);
+  else page(pages[initial] ? initial : 'overview');
 }
 boot();

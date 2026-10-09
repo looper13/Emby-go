@@ -1,0 +1,33 @@
+[Unit]
+Description=Emby-go media library server
+Wants=network-online.target
+After=network-online.target
+# Redis may be remote; retry startup if it is not ready yet.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=emby-go
+Group=emby-go
+WorkingDirectory=/var/lib/emby-go
+StateDirectory=emby-go
+StateDirectoryMode=0750
+ExecStart=/usr/local/bin/emby-go -c /etc/emby-go/config.yaml
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+LimitNOFILE=65536
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# The application persists its generated server_id into this existing file.
+ReadWritePaths=/etc/emby-go/config.yaml
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=emby-go
+
+[Install]
+WantedBy=multi-user.target

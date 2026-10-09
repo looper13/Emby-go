@@ -15,6 +15,8 @@
 go build -o metatube ./cmd/metatube
 ```
 
+Linux amd64 部署可直接执行 `bash build.sh`，产物为 `dist/emby-go-linux-amd64`。systemd 服务模板和完整安装、权限、升级说明见 [Linux 部署](deploy/README.md)。
+
 ### 运行
 
 ```bash
@@ -55,7 +57,7 @@ ABF-018/
 
 影片本地图片参考 [Emby 电影图片命名规则](https://emby.media/support/articles/Movie-Naming.html#video-images)：海报支持影片同名图及 `-poster`/`-cover`/`-default`/`-movie`，也认目录公共海报；宽图依次识别影片名 `-thumb`/`-landscape`、`thumb`/`landscape`。背景图识别 `backdrop`/`backdropX`、`fanart`/`fanart-X`、`background`/`background-X`、`art`/`art-X`，以及 `extrafanart/fanartX`（X 为数字）。保留服务生成的影片专属海报和背景图优先级；专属背景图不会混入目录公共背景，但仍包含 `extrafanart`。
 
-多张背景图通过 `BackdropImageTags`、`GET /Items/{id}/Images` 的 `ImageIndex` 及 `GET /Items/{id}/Images/Backdrop/{index}` 提供给客户端，编号从 0 开始；管理端详情抽屉也展示剧照网格，可点击查看原图。图片与 `extrafanart` 目录的增删会触发父影片目录局部刷新。旧数据库自动补列，升级后进行一次增量扫描即可补齐图片，无需清库。
+多张背景图通过 `BackdropImageTags`、`GET /Items/{id}/Images` 的 `ImageIndex` 及 `GET /Items/{id}/Images/Backdrop/{index}` 提供给客户端，编号从 0 开始；管理端影片详情页也展示剧照网格，可点击查看原图。图片与 `extrafanart` 目录的增删会触发父影片目录局部刷新。旧数据库自动补列，升级后进行一次增量扫描即可补齐图片，无需清库。
 
 ### 实时监听与局部刷新
 
@@ -151,6 +153,11 @@ Split/
 `http://127.0.0.1:18080/admin` 提供：
 - 总览统计、媒体库管理（可删除库索引）、扫描/重建索引（带实时进度）
 - 媒体墙（海报墙 + 无限滚动 + 在线播放；状态/协议筛选、搜索、排序、重读源、删索引）
+- 影片详情页（`/admin#item/<id>`，可直链/刷新/浏览器前进后退）：背景图 hero + 播放/探测/刮削/重读源，简介、剧照、演员、相似影片、媒体信息（ffprobe 流信息）、元数据与文件路径分区；点演员/类型/厂商/标签/合集可带该筛选跳回媒体墙（标签同时以芯片显示在标题旁）
+- 预告片与远程封面：NFO 里的预告片地址（`uniqueid type="trailerurl"`、`<trailerurlid>` 或其它工具常用的 `<trailer>`）显示在独立的预告片区，封面优先使用第一张剧照，点击用内置播放器播放；无剧照时回退背景图、海报或 NFO `<cover>`，剧照网格独立显示并保留原图链接
+- 媒体墙返回时恢复已加载数量、滚动位置和影片焦点；仅复用最近一次同条件、未修改且 60 秒内的列表快照，过期或写入后重新加载到原数量。加载失败停止自动翻页，可手动重试
+- 切页取消过期读取，防止旧响应覆盖新页面；相似影片独立加载，5 秒超时不影响详情。重读源、探测或刮削后的刷新保留简介与文件信息展开状态；刷新失败保留原页面
+- 本地海报、剧照和预告片封面按展示尺寸请求缩略图，并携带图片版本标签；坏图只尝试一次备用封面，仍失败则显示固定尺寸占位。播放错误区分网络、解码、格式与 HTTP 混合内容限制
 - 手动补录（http(s) 直链 + 字段 → 生成 strm/NFO 即时入库）
 - API 密钥（创建后可直接调用 Emby 接口）
 - 任务日志、未知接口探针、设置
@@ -159,7 +166,7 @@ Split/
 
 ### 在线播放
 
-媒体墙点击海报即在内置播放器（ArtPlayer，MIT，已随二进制内嵌）中播放：
+媒体墙点击卡片进入影片详情页；海报中央的播放按钮、详情页的「播放」按钮在内置播放器（ArtPlayer，MIT，已随二进制内嵌）中播放：
 
 - 默认走 `/Videos/{id}/stream` 的 **302 直拉**（服务端零带宽）；
 - 若后台是 HTTPS 而源站是 HTTP（浏览器混合内容拦截）或跨域/防盗链导致失败，自动回退 `/Videos/{id}/proxy`（服务端透传 Range 代理，**仅网页播放器使用**，Emby 客户端仍走 302）；
@@ -208,7 +215,10 @@ server_domains: []        # 前端“服务器域名切换”候选
 ```bash
 go vet ./...
 go test ./...
+node --test internal/server/web_test/app.test.cjs
 ```
+
+前端回归使用 Node 内置测试运行器，无需安装 npm 依赖；覆盖页面请求隔离、媒体墙恢复与重试、详情展开状态、图片选择和播放器错误处理。布局仍需浏览器验证。
 
 ### 发布（GitHub Actions）
 

@@ -539,6 +539,7 @@ func applyMeta(movie *store.Movie, meta nfo.MovieMeta, nfoPath string) {
 	movie.Collection, movie.OfficialRating, movie.SortName = meta.Collection(), meta.Mpaa, meta.SortTitle
 	movie.Taglines, movie.ProviderID = meta.TaglineList(), meta.ProviderID()
 	movie.Genres, movie.Tags, movie.Studios, movie.RuntimeSeconds = meta.Genres, meta.Tags, meta.Studios, meta.RuntimeSeconds()
+	movie.TrailerURL, movie.CoverURL = meta.TrailerURL(), meta.CoverURL()
 }
 
 func parsePart(raw string) int {

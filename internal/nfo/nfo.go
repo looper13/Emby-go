@@ -140,6 +140,8 @@ type MovieMeta struct {
 	LockData      string     `xml:"lockdata,omitempty"`
 	MetaTubeID    string     `xml:"metatubeid,omitempty"`
 	TrailerURLID  string     `xml:"trailerurlid,omitempty"`
+	Trailer       string     `xml:"trailer,omitempty"`
+	Cover         string     `xml:"cover,omitempty"`
 	Set           *MovieSet  `xml:"set,omitempty"`
 	Genres        []string   `xml:"genre,omitempty"`
 	Tags          []string   `xml:"tag,omitempty"`
@@ -177,12 +179,22 @@ func (m MovieMeta) ProviderID() string {
 	return strings.TrimSpace(m.MetaTubeID)
 }
 
-// TrailerURL 返回预告片地址（uniqueid type=trailerurl，回退顶层 <trailerurlid>）。
+// TrailerURL 返回预告片地址：uniqueid type=trailerurl → 顶层 <trailerurlid> → <trailer>。
+// 最后一种写法常见于其它刮削工具直接产出的 NFO，本项目自己的刮削器写的是前两种。
 func (m MovieMeta) TrailerURL() string {
 	if v := m.uniqueID("trailerurl"); v != "" {
 		return v
 	}
-	return strings.TrimSpace(m.TrailerURLID)
+	if v := strings.TrimSpace(m.TrailerURLID); v != "" {
+		return v
+	}
+	return strings.TrimSpace(m.Trailer)
+}
+
+// CoverURL 返回 <cover> 的远程封面地址。其它工具产出的 NFO 常用它指向来源站的封面图；
+// 本项目以本地图片为准，它只在本地没有图时作为兜底。
+func (m MovieMeta) CoverURL() string {
+	return strings.TrimSpace(m.Cover)
 }
 
 // TaglineList 返回去空白的标语列表。

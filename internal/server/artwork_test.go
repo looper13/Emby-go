@@ -178,3 +178,65 @@ func TestArtworkMonitoringIncludesExtraImages(t *testing.T) {
 		})
 	}
 }
+
+func TestAdminItemsImageTagsRefreshAfterArtworkChange(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "movie.strm")
+	poster := filepath.Join(root, "poster.jpg")
+	thumb := filepath.Join(root, "thumb.jpg")
+	writeFile(t, source, "https://media.test/movie.mp4")
+	writeFile(t, filepath.Join(root, "movie.nfo"), "<movie><title>Movie</title></movie>")
+	writeJPEGImage(t, poster, 40, 80)
+	writeJPEGImage(t, thumb, 80, 40)
+	app, server, token := newProbeTestApp(t, root)
+	id, err := app.db.MovieIDByPath(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readTags := func() map[string]string {
+		t.Helper()
+		resp, raw := embyRaw(t, server, http.MethodGet, "/api/admin/items?limit=100", token, "")
+		var result struct {
+			Items     []store.Movie                `json:"items"`
+			ImageTags map[string]map[string]string `json:"image_tags"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil || resp.StatusCode != 200 || len(result.Items) != 1 {
+			t.Fatalf("admin items: status=%d body=%s err=%v", resp.StatusCode, raw, err)
+		}
+		tags := result.ImageTags[strconv.FormatInt(id, 10)]
+		if tags["Primary"] == "" || tags["Thumb"] == "" {
+			t.Fatalf("missing image tags: %v", tags)
+		}
+		return tags
+	}
+	before := readTags()
+	if before["Primary"] != app.posterTag(poster) || before["Thumb"] != app.posterTag(thumb) {
+		t.Fatalf("list tags disagree with image API: %v", before)
+	}
+	stamp, err := os.Stat(poster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJPEGImage(t, poster, 60, 80)
+	if err := os.Chtimes(poster, stamp.ModTime(), stamp.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	movie, err := app.db.Movie(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := app.db.Library(movie.LibraryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.refreshLibraryChanges(context.Background(), library, []librarywatch.Change{{Path: poster}}); err != nil {
+		t.Fatal(err)
+	}
+	after := readTags()
+	if after["Primary"] == before["Primary"] || after["Primary"] != app.posterTag(poster) {
+		t.Fatalf("poster change retained stale list tag: before=%v after=%v", before, after)
+	}
+	if after["Thumb"] != before["Thumb"] {
+		t.Fatalf("unchanged thumb tag changed: before=%v after=%v", before, after)
+	}
+}
