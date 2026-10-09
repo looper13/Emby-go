@@ -42,10 +42,11 @@ type scheduledView struct {
 // —— 执行器：把调度器回调接到具体的服务动作上 ——
 
 // runScheduledTask 执行一条计划任务。返回 scheduler.ErrBusy 表示同类任务未结束、本次跳过。
-func (a *App) runScheduledTask(_ context.Context, task scheduler.Task) error {
+// ctx 来自调度器（挂 rootCtx）：进程停机时取消，在跑的扫描据此提前收尾。
+func (a *App) runScheduledTask(ctx context.Context, task scheduler.Task) error {
 	switch task.Type {
 	case "scan", "reindex":
-		return a.runScheduledScan(task)
+		return a.runScheduledScan(ctx, task)
 	case "probe":
 		return a.runScheduledProbe(task)
 	case "scrape":
@@ -58,7 +59,7 @@ func (a *App) runScheduledTask(_ context.Context, task scheduler.Task) error {
 }
 
 // runScheduledScan 执行扫描/重建索引（同步阻塞直到结束，调度器据此判定重叠）。
-func (a *App) runScheduledScan(task scheduler.Task) error {
+func (a *App) runScheduledScan(ctx context.Context, task scheduler.Task) error {
 	libraryID := int64(0)
 	if task.Type == "scan" {
 		libraryID = paramInt64(task.Params, "library_id")
@@ -67,14 +68,15 @@ func (a *App) runScheduledScan(task scheduler.Task) error {
 		return scheduler.ErrBusy
 	}
 	taskID := a.startTask(task.Type)
-	result, err := a.scanLibrariesWithMode(libraryID, task.Type == "reindex")
+	result, err := a.scanLibrariesWithMode(ctx, libraryID, task.Type == "reindex")
 	if errors.Is(err, errScanBusy) {
 		a.finishTaskBusy(taskID, err.Error())
 		return scheduler.ErrBusy
 	}
-	a.finishTask(taskID, err)
+	a.finishTask(taskID, scanTaskError(err))
 	if err != nil {
-		return err
+		// 取消（停机）写进任务行时也用人话，别把 context canceled 当成故障。
+		return scanTaskError(err)
 	}
 	slog.Info("计划任务扫描完成", "task", task.Name, "library_id", libraryID,
 		"success", result.Success, "pending", result.Pending,

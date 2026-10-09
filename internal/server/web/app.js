@@ -1053,7 +1053,7 @@ async function pageSettings() {
     ['监听地址', s.listen],
     ['数据库', s.db_path],
     ['缓存后端', s.cache + (s.redis_addr ? ` · ${s.redis_addr}/${s.redis_db}` : '')],
-    ['Redis 在线', s.redis_online ? '是' : '否'],
+    ['Redis 在线', (s.redis_online ? '是' : '否') + (s.redis_failures ? ` · 累计失败 ${s.redis_failures} 次（按未命中处理）` : '')],
     ['响应缓存命中率', hits + misses ? `${(hits / (hits + misses) * 100).toFixed(1)}% · 命中 ${hits} / 未命中 ${misses}` : '暂无请求'],
     ['合并重复加载', `${shared} 次（统计自本次启动）`],
     ['媒体库监控', s.disable_library_monitor ? '已关闭' : s.library_monitor_mode === 'polling' ? '兼容模式（每 30 秒检查文件树）' : '实时监听']
@@ -1518,7 +1518,7 @@ const CRON_PRESETS = [
   ['每月 1 日 05:00', '0 5 1 * *']
 ];
 const TASK_TYPE_TEXT = { scan: '增量扫描媒体库', watch: '实时局部刷新', poll: '兼容模式局部刷新', reindex: '全量重建索引', probe: '媒体信息探测' };
-const RUN_STATUS_TEXT = { success: '成功', failed: '失败', skipped: '跳过', running: '进行中' };
+const RUN_STATUS_TEXT = { success: '成功', failed: '失败', skipped: '跳过', cancelled: '已取消', running: '进行中' };
 
 let scheduledEditId = null; // 正在编辑的任务 id（null = 新建）
 
@@ -1920,12 +1920,14 @@ function renderScanProgress(p) {
   if (!p || (!p.running && !p.finished_at)) { scanPanel.hidden = true; return; }
   scanPanel.hidden = false;
   const lib = p.libraries > 1 ? `${p.library_name || '媒体库'}（${p.library_index}/${p.libraries}）` : (p.library_name || '媒体库');
-  scanTitle.textContent = p.running ? `正在扫描 ${lib}` : `扫描完成 ${lib}`;
+  const walking = p.running && p.phase === 'walk';
+  scanTitle.textContent = p.running ? `正在扫描 ${lib}` : (p.cancelled ? `扫描已取消 ${lib}` : `扫描完成 ${lib}`);
   const total = p.total || 0;
   const done = p.done || 0;
-  scanCount.textContent = total ? `${done}/${total}` : String(done);
-  scanFill.classList.toggle('is-indeterminate', !total && p.running);
-  scanFill.style.width = total ? `${Math.min(100, Math.round(done / total * 100))}%` : '100%';
+  // 遍历阶段还没有候选总数：显示已发现的数量，进度条保持不确定态。
+  scanCount.textContent = walking ? (total ? `已发现 ${total}` : '遍历中') : (total ? `${done}/${total}` : String(done));
+  scanFill.classList.toggle('is-indeterminate', walking || (!total && p.running));
+  scanFill.style.width = walking ? '100%' : (total ? `${Math.min(100, Math.round(done / total * 100))}%` : '100%');
   const parts = [];
   parts.push(`新增 ${p.added || 0}`, `更新 ${p.updated || 0}`, `跳过 ${p.skipped || 0}`, `删除 ${p.deleted || 0}`);
   if (p.success) parts.push(`可播放 ${p.success}`);
@@ -1933,8 +1935,8 @@ function renderScanProgress(p) {
   if (p.incompatible) parts.push(`不兼容 ${p.incompatible}`);
   if (p.failed) parts.push(`失败 ${p.failed}`);
   if (p.running && p.current) parts.push(`当前 ${baseName(p.current)}`);
-  if (p.error) parts.push(`错误：${p.error}`);
-  scanDetail.textContent = parts.join(' · ') || (p.running ? '正在读取目录…' : '');
+  if (p.error && !p.cancelled) parts.push(`错误：${p.error}`);
+  scanDetail.textContent = parts.join(' · ') || (p.running ? (walking ? '正在遍历目录…' : '正在读取目录…') : '');
 }
 
 function stopScanPolling() { if (scanTimer) { clearInterval(scanTimer); scanTimer = null; } }

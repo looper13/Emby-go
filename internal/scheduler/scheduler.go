@@ -29,9 +29,10 @@ var ErrBusy = errors.New("任务正在进行中")
 
 // 执行结果状态，与 store.ScheduledTask.LastStatus 一致。
 const (
-	StatusSuccess = "success"
-	StatusFailed  = "failed"
-	StatusSkipped = "skipped"
+	StatusSuccess   = "success"
+	StatusFailed    = "failed"
+	StatusSkipped   = "skipped"
+	StatusCancelled = "cancelled"
 )
 
 // Task 一次计划任务的运行期视图（Params 已从 JSON 解码）。
@@ -43,7 +44,7 @@ type Task struct {
 	Params map[string]any
 }
 
-// Runner 执行一次任务；返回 ErrBusy 表示跳过，其它错误记为失败。
+// Runner 执行一次任务；ErrBusy 表示跳过，context 取消/超时表示取消，其它错误记为失败。
 type Runner func(ctx context.Context, task Task) error
 
 // Scheduler 管理全部计划任务。零值不可用，请用 New 构造。
@@ -141,6 +142,8 @@ func (s *Scheduler) fire(task Task) {
 	case err == nil:
 	case errors.Is(err, ErrBusy):
 		status, message = StatusSkipped, err.Error()
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		status, message = StatusCancelled, err.Error()
 	default:
 		status, message = StatusFailed, err.Error()
 	}

@@ -89,7 +89,8 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 	}
 	taskID := a.startTask(taskType)
 	defer func() {
-		a.finishTask(taskID, refreshErr)
+		// 与手动/计划扫描一致：取消记成「已取消」，不把 context canceled 当故障。
+		a.finishTask(taskID, scanTaskError(refreshErr))
 		a.endScan(refreshErr)
 	}()
 	a.setScanLibrary(1, library)
@@ -129,7 +130,7 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 	total := scanner.Result{}
 	processed := 0
 	defer func() {
-		a.updateScanProgress(scanner.Progress{LibraryID: library.ID, LibraryName: library.Name, Total: processed, Done: processed, Result: total})
+		a.updateScanProgress(scanner.Progress{LibraryID: library.ID, LibraryName: library.Name, Phase: scanner.PhaseProcess, Total: processed, Done: processed, Result: total})
 		a.invalidateLibraryChanges(changes)
 		if total.Added+total.Updated+total.Deleted > 0 || refreshErr != nil {
 			a.finishLibraryCacheRefresh(library.ID)
@@ -142,9 +143,9 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		var result scanner.Result
 		var err error
 		if directories[directory] {
-			result, err = scanner.RefreshDirectory(a.db, library, directory, true, a.updateScanProgress)
+			result, err = scanner.RefreshDirectory(ctx, a.db, library, directory, true, a.updateScanProgress)
 		} else {
-			result, err = scanner.RefreshFiles(a.db, library, files[directory], a.updateScanProgress)
+			result, err = scanner.RefreshFiles(ctx, a.db, library, files[directory], a.updateScanProgress)
 		}
 		total.Success += result.Success
 		total.Pending += result.Pending

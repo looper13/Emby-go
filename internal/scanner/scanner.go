@@ -2,10 +2,12 @@ package scanner
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -50,37 +52,50 @@ type candidate struct {
 	groupKey string
 }
 
+// 扫描阶段。walk 阶段还没数完候选（Total 是已发现数），process 阶段的
+// Total 才是本轮要处理的候选总数——管理端据此区分「在遍历」和「在处理」。
+const (
+	PhaseWalk    = "walk"
+	PhaseProcess = "process"
+)
+
 // Progress 单次媒体库扫描的进度快照，供管理端轮询展示。
 type Progress struct {
 	LibraryID   int64  `json:"library_id"`
 	LibraryName string `json:"library_name"`
+	Phase       string `json:"phase,omitempty"`
 	Total       int    `json:"total"`
 	Done        int    `json:"done"`
 	Current     string `json:"current"`
 	Result      Result `json:"result"`
 }
 
+// walkProgressInterval 遍历阶段的进度回报间隔：大库首次遍历可能持续数分钟，
+// 没有进度时管理端只能显示「0/0」，也不知道扫描是否还在跑。
+const walkProgressInterval = 500 * time.Millisecond
+
 var cdPartPattern = regexp.MustCompile(`(?i)^(.*?)[ ._-]+CD([1-9][0-9]*)$`)
 
 // Scan 按 Emby 的 stacking 语义处理末尾 -CDn 文件：CD1 为逻辑影片，CD2..CDn 作为 AdditionalParts。
-func Scan(s *store.Store, lib store.Library) (Result, error) {
-	return ScanWithProgress(s, lib, nil)
+// ctx 取消时返回已完成的统计与取消错误：已入库的分批保留，删除阶段不执行。
+func Scan(ctx context.Context, s *store.Store, lib store.Library) (Result, error) {
+	return ScanWithProgress(ctx, s, lib, nil)
 }
 
-// ScanWithProgress 与 Scan 相同，但在每个分组处理完后回调进度（可为 nil）。
-func ScanWithProgress(s *store.Store, lib store.Library, onProgress func(Progress)) (Result, error) {
-	return scanWithProgress(s, lib, false, onProgress)
+// ScanWithProgress 与 Scan 相同，但在遍历与处理过程中回调进度（可为 nil）。
+func ScanWithProgress(ctx context.Context, s *store.Store, lib store.Library, onProgress func(Progress)) (Result, error) {
+	return scanWithProgress(ctx, s, lib, false, onProgress)
 }
 
-func RebuildWithProgress(s *store.Store, lib store.Library, onProgress func(Progress)) (Result, error) {
-	return scanWithProgress(s, lib, true, onProgress)
+func RebuildWithProgress(ctx context.Context, s *store.Store, lib store.Library, onProgress func(Progress)) (Result, error) {
+	return scanWithProgress(ctx, s, lib, true, onProgress)
 }
 
-func scanWithProgress(s *store.Store, lib store.Library, full bool, onProgress func(Progress)) (result Result, scanErr error) {
-	return scanDirectory(s, lib, lib.Path, true, full, nil, onProgress)
+func scanWithProgress(ctx context.Context, s *store.Store, lib store.Library, full bool, onProgress func(Progress)) (result Result, scanErr error) {
+	return scanDirectory(ctx, s, lib, lib.Path, true, full, nil, onProgress)
 }
 
-func RefreshDirectory(s *store.Store, lib store.Library, directory string, recursive bool, onProgress func(Progress)) (Result, error) {
+func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive bool, onProgress func(Progress)) (Result, error) {
 	root, err := filepath.Abs(lib.Path)
 	if err != nil {
 		return Result{}, err
@@ -93,10 +108,10 @@ func RefreshDirectory(s *store.Store, lib store.Library, directory string, recur
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return Result{}, fmt.Errorf("刷新目录不在媒体库内: %s", directory)
 	}
-	return scanDirectory(s, lib, filepath.Join(lib.Path, relative), recursive, false, nil, onProgress)
+	return scanDirectory(ctx, s, lib, filepath.Join(lib.Path, relative), recursive, false, nil, onProgress)
 }
 
-func RefreshFiles(s *store.Store, lib store.Library, files []string, onProgress func(Progress)) (Result, error) {
+func RefreshFiles(ctx context.Context, s *store.Store, lib store.Library, files []string, onProgress func(Progress)) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, nil
 	}
@@ -122,10 +137,13 @@ func RefreshFiles(s *store.Store, lib store.Library, files []string, onProgress 
 		directory = filepath.Dir(path)
 		normalized = append(normalized, path)
 	}
-	return scanDirectory(s, lib, directory, false, true, normalized, onProgress)
+	return scanDirectory(ctx, s, lib, directory, false, true, normalized, onProgress)
 }
 
-func scanDirectory(s *store.Store, lib store.Library, directory string, recursive, full bool, files []string, onProgress func(Progress)) (result Result, scanErr error) {
+func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive, full bool, files []string, onProgress func(Progress)) (result Result, scanErr error) {
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	rootInfo, err := os.Stat(lib.Path)
 	if err != nil {
 		return result, err
@@ -141,7 +159,22 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 	walkImages := &imageDirectory{path: directory, reuse: true, names: map[string]bool{}, imageInfo: map[string]os.FileInfo{}}
 	entryCount := 0
 	var artworkEntries []os.DirEntry
+	lastWalkReport := time.Now()
+	reportWalk := func(current string) {
+		if onProgress != nil {
+			onProgress(Progress{LibraryID: lib.ID, LibraryName: lib.Name, Phase: PhaseWalk, Total: len(groups), Current: current, Result: result})
+		}
+	}
+	// 遍历一开始先报一次：管理端立刻切到「正在遍历目录」，不用等第一个 500ms 周期。
+	reportWalk(directory)
 	err = filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if time.Since(lastWalkReport) >= walkProgressInterval {
+			lastWalkReport = time.Now()
+			reportWalk(path)
+		}
 		if walkErr != nil {
 			if path == directory && filepath.Clean(directory) != filepath.Clean(lib.Path) && os.IsNotExist(walkErr) {
 				return nil
@@ -218,10 +251,14 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		}
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+
 	total := len(groups)
 	report := func(done int, current string) {
 		if onProgress != nil {
-			onProgress(Progress{LibraryID: lib.ID, LibraryName: lib.Name, Total: total, Done: done, Current: current, Result: result})
+			onProgress(Progress{LibraryID: lib.ID, LibraryName: lib.Name, Phase: PhaseProcess, Total: total, Done: done, Current: current, Result: result})
 		}
 	}
 	report(0, "")
@@ -290,7 +327,12 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		// Cached image selection must never certify stability.
 		freshImages := &imageDirectory{}
 		if images.large {
-			freshImages = &imageDirectory{path: images.path, statOnly: true, catalog: images.catalog}
+			// 大目录复用已有的目录清单：statOnly 的 imageDirectory 若没有 names，
+			// contains 会把每个候选文件名都当成可能存在，每部片都要 stat 上百个
+			// 不存在的名字（实测 114 次/部）。带上清单后只剩真实存在的少量图片
+			// 需要取新 stat；清单成员的变化（扫描中途新增/删除图片）仍由 flush
+			// 按目录比对 ArtworkNames 兜住，不会留下错误的稳定性指纹。
+			freshImages = &imageDirectory{path: images.path, statOnly: true, catalog: images.catalog, names: images.names}
 			if _, exists := largeSnapshots[images.path]; !exists {
 				largeSnapshots[images.path] = images.artworkNames
 			}
@@ -322,6 +364,12 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 	sort.Strings(groupKeys)
 	done := 0
 	for _, key := range groupKeys {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// 取消时先落库已处理的分批再返回：已完成的索引更新不该白做。
+			// 删除阶段不会执行——被取消的遍历不完整，按它删索引会误删。
+			flushErr := flush()
+			return result, errors.Join(ctxErr, flushErr)
+		}
 		group := groups[key]
 		primary, parts, ok := stackedGroup(group)
 		if !ok {
@@ -349,6 +397,11 @@ func scanDirectory(s *store.Store, lib store.Library, directory string, recursiv
 		report(done, key)
 	}
 	if err := flush(); err != nil {
+		return result, err
+	}
+	// 遍历已经完整，但取消信号可能刚好落在删除阶段之前；此时按索引缺失删除
+	// 仍然是安全的，只是没必要在停机/取消路径上继续写库，故直接返回。
+	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 
@@ -504,12 +557,8 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 			nfoPath = fallbackNFO
 			meta, nfoErr = nfo.Read(fallbackNFO)
 		}
-		var pathErr *os.PathError
-		if errors.As(nfoErr, &pathErr) && !os.IsNotExist(nfoErr) {
-			result.Failed++
-			return store.ScannedMovie{}, result
-		}
-		if nfoErr == nil {
+		switch {
+		case nfoErr == nil:
 			applyMeta(&movie, meta, nfoPath)
 			// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
 			for _, actor := range meta.Actors {
@@ -521,8 +570,18 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 			movie.BackdropPaths = images.Backdrops
 			movie.LandscapePath = images.Landscape
 			result.Success++
-		} else {
+		case errors.Is(nfoErr, fs.ErrNotExist):
+			// 没有 NFO 文件＝待补录：保留 pending 状态等刮削补齐标题等元数据。
 			result.Pending++
+		default:
+			// NFO 存在但读不了或 XML 非法：不能当成「待补录」——那会用空标题覆盖
+			// 已经入库的好元数据，并写入本轮指纹让后续扫描直接跳过（影片就此隐没）。
+			// 这里保留旧索引、记下具体错误，且不写指纹，下一轮仍会重试；
+			// NFO 被修好（刮削重写）后自然恢复为 success。
+			result.Failed++
+			slog.Warn("NFO 读取或解析失败，保留原索引待下轮重试",
+				"library_id", lib.ID, "source", item.path, "nfo", nfoPath, "error", nfoErr)
+			return store.ScannedMovie{}, result
 		}
 	} else {
 		movie.Status = "incompatible"

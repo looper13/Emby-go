@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,7 @@ func TestScanStacksAllCDParts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	movies := visible(t, s)
@@ -71,7 +72,7 @@ func TestScanPurgesStalePartRows(t *testing.T) {
 	if _, err := s.UpsertMovie(stale, 0, staleMTime); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	if movies := visible(t, s); len(movies) != 1 {
@@ -92,7 +93,7 @@ func TestScanReconcilesAddDeleteMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	if len(visible(t, s)) != 1 {
@@ -104,7 +105,7 @@ func TestScanReconcilesAddDeleteMove(t *testing.T) {
 	os.MkdirAll(dst, 0755)
 	os.Rename(filepath.Join(src, "ABC.strm"), filepath.Join(dst, "ABC.strm"))
 	os.Rename(filepath.Join(src, "ABC.nfo"), filepath.Join(dst, "ABC.nfo"))
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	movies := visible(t, s)
@@ -115,7 +116,7 @@ func TestScanReconcilesAddDeleteMove(t *testing.T) {
 	// 删除源文件
 	os.Remove(filepath.Join(dst, "ABC.strm"))
 	os.Remove(filepath.Join(dst, "ABC.nfo"))
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	if movies := visible(t, s); len(movies) != 0 {
@@ -142,7 +143,7 @@ func TestRescanOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(visible(t, s)); got != 2 {
@@ -175,7 +176,7 @@ func TestRescanOne(t *testing.T) {
 		t.Errorf("单文件重扫后影片数 = %d，期望 2（不带 DeleteMissingSources）", got)
 	}
 	// 而整库 Scan 才会清掉 b。
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(visible(t, s)); got != 1 {
@@ -201,7 +202,7 @@ func TestRescanOneKeepsCDGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Scan(s, lib); err != nil {
+	if _, err := Scan(context.Background(), s, lib); err != nil {
 		t.Fatal(err)
 	}
 	movies := visible(t, s)

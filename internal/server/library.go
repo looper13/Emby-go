@@ -209,7 +209,7 @@ func (a *App) posterTag(path string) string {
 	info, err := os.Stat(path)
 	if err != nil {
 		a.tagMu.Lock()
-		if a.diskVersions[cachePathKey(path)] == version {
+		if a.diskVersionLocked(cachePathKey(path)) == version {
 			a.tags[path] = tagEntry{tag: "0", ts: now, neg: true, version: version}
 		}
 		a.tagMu.Unlock()
@@ -219,7 +219,7 @@ func (a *App) posterTag(path string) string {
 	digest := sha256.Sum256([]byte(stamp))
 	tag := hex.EncodeToString(digest[:16])
 	a.tagMu.Lock()
-	if a.diskVersions[cachePathKey(path)] == version {
+	if a.diskVersionLocked(cachePathKey(path)) == version {
 		a.tags[path] = tagEntry{tag: tag, ts: now, version: version}
 	}
 	a.tagMu.Unlock()
@@ -234,7 +234,7 @@ func (a *App) posterTag(path string) string {
 func (a *App) invalidateImageTag(paths ...string) { a.invalidateDiskPaths(paths, false) }
 
 // invalidateNFOStreams 失效指定 NFO 的流信息缓存（刮削/编辑改写 NFO 后调用）。
-// probe 的整库任务结束后会整体清空；单条写入必须精确失效，否则详情抽屉
+// 单条写入必须精确失效，否则详情抽屉
 // 与 PlaybackInfo 会继续返回旧参数。
 func (a *App) invalidateNFOStreams(nfoPaths ...string) {
 	for _, path := range nfoPaths {
@@ -243,16 +243,13 @@ func (a *App) invalidateNFOStreams(nfoPaths ...string) {
 }
 
 // dropNFOCache 丢弃某个 NFO 的缓存条目并失效它的 mtime tag。
-// 缓存键是「路径 + tag」，只删键不够：tag 若还在缓存里，下一次请求会拼出同一个键。
+// 只删条目还不够：条目命中要求 tag 与磁盘一致，tag 缓存若还是旧值，
+// 下一次请求会拿旧 tag 去匹配（虽然版本号已经变了，但显式失效更直白）。
 // 两个锁不嵌套获取，避免与 nfoEntry 的取锁顺序相左。
 func (a *App) dropNFOCache(nfoPath string) {
-	prefix := nfoPath + "|"
+	key := cachePathKey(nfoPath)
 	a.nfoMu.Lock()
-	for key := range a.nfos {
-		if strings.HasPrefix(key, prefix) {
-			delete(a.nfos, key)
-		}
-	}
+	a.nfos.deleteMatching(func(path string) bool { return cachePathKey(path) == key })
 	a.nfoMu.Unlock()
 	a.invalidateImageTag(nfoPath) // a.tags 是同一张 tag 缓存，图片与 NFO 共用
 }

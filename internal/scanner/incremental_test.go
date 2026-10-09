@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,7 +34,7 @@ func scanLibrary(t *testing.T, root string) (*store.Store, store.Library) {
 func requireScan(t *testing.T, database *store.Store, library store.Library, want Result) {
 	t.Helper()
 	var progress Progress
-	got, err := ScanWithProgress(database, library, func(current Progress) { progress = current })
+	got, err := ScanWithProgress(context.Background(), database, library, func(current Progress) { progress = current })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestIncrementalUnchangedSurvivesRestart(t *testing.T) {
 	if before.ID != after.ID || before.UpdatedAt != after.UpdatedAt || reopened.Version("g:version") != version {
 		t.Fatalf("unchanged movie or version was rewritten: before=%+v after=%+v", before, after)
 	}
-	result, err := RebuildWithProgress(reopened, library, nil)
+	result, err := RebuildWithProgress(context.Background(), reopened, library, nil)
 	if err != nil || result != (Result{Updated: 1, Success: 1}) {
 		t.Fatalf("full rebuild = %+v, %v", result, err)
 	}
@@ -225,11 +226,11 @@ func TestIncrementalFailureRetriesAndProtectsIndex(t *testing.T) {
 	writeScanFile(t, root, "a.nfo", "<movie><title>Recovered</title></movie>")
 	requireScan(t, database, library, Result{Updated: 1, Success: 1})
 	library.Path = filepath.Join(root, "offline")
-	if _, err := Scan(database, library); err == nil {
+	if _, err := Scan(context.Background(), database, library); err == nil {
 		t.Fatal("missing library root should fail")
 	}
 	library.Path = filepath.Join(root, "a.strm")
-	if _, err := RebuildWithProgress(database, library, nil); err == nil {
+	if _, err := RebuildWithProgress(context.Background(), database, library, nil); err == nil {
 		t.Fatal("non-directory library root should fail")
 	}
 	if movies := visible(t, database); len(movies) != 1 || movies[0].Title != "Recovered" {

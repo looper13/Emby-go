@@ -86,6 +86,10 @@ func (directory *imageDirectory) contains(path string) bool {
 	return directory.names == nil || (err == nil && directory.names[strings.ToLower(relative)])
 }
 
+// statFile 读取图片文件属性。测试替换它来统计探测次数（大目录里对不存在的
+// 候选图片名做属性查询是纯浪费），生产路径就是 os.Stat。
+var statFile = os.Stat
+
 // selectImages shares a snapshot only within one scan. Stability checks use
 // a fresh imageDirectory even when directory mtime was preserved.
 func (directory *imageDirectory) selectImages(source string) (imageutil.ImagePaths, map[string]os.FileInfo, error) {
@@ -101,7 +105,7 @@ func (directory *imageDirectory) selectImages(source string) (imageutil.ImagePat
 		if !directory.contains(image) {
 			return false
 		}
-		stamp, err := os.Stat(image)
+		stamp, err := statFile(image)
 		if err == nil && !stamp.IsDir() {
 			info[image] = stamp
 		}

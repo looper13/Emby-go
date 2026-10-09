@@ -6,6 +6,7 @@ import (
 	"emby-go/internal/store"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"runtime"
@@ -75,21 +76,23 @@ func (a *App) invalidateDiskPaths(paths []string, recursive bool) {
 	}
 	a.tagMu.Lock()
 	if a.diskVersions == nil {
-		a.diskVersions = make(map[string]uint64)
+		a.diskVersions = make(map[string]diskVersionRecord)
 	}
-	for path := range a.diskVersions {
-		if matches(path) {
-			a.diskVersions[path]++
-		}
-	}
+	// 同一批变化共享一个版本；目录记录作用于所有后代，包括正在加载、
+	// 尚未进入缓存的路径，不依赖读请求事先登记。
+	a.diskVersionSeq++
 	for _, path := range paths {
-		if path != "" && !recursive {
+		if path != "" {
 			key := cachePathKey(path)
-			if _, exists := a.diskVersions[key]; !exists {
-				a.diskVersions[key] = 1
+			record := a.diskVersions[key]
+			record.version, record.ts = a.diskVersionSeq, time.Now()
+			if recursive {
+				record.subtreeVersion = a.diskVersionSeq
 			}
+			a.diskVersions[key] = record
 		}
 	}
+	a.pruneDiskVersionsLocked(time.Now())
 	for path := range a.tags {
 		if matches(path) {
 			delete(a.tags, path)
@@ -97,16 +100,7 @@ func (a *App) invalidateDiskPaths(paths []string, recursive bool) {
 	}
 	a.tagMu.Unlock()
 	a.nfoMu.Lock()
-	for key := range a.nfos {
-		index := strings.LastIndex(key, "|")
-		if index < 0 {
-			continue
-		}
-		path := key[:index]
-		if matches(path) {
-			delete(a.nfos, key)
-		}
-	}
+	a.nfos.deleteMatching(matches)
 	a.nfoMu.Unlock()
 	a.imgThumb.DeleteMatching(func(key string) bool {
 		if !strings.HasPrefix(key, "t:") {
@@ -146,15 +140,83 @@ func movieDiskPaths(movie store.Movie) []string {
 	return append([]string{movie.SourcePath, movie.NFOPath, movie.PosterPath, movie.LandscapePath}, movie.Backdrops()...)
 }
 
+// diskVersionRecord 保存路径自身及整棵子树最近的失效版本。
+// 有效版本取基线、自身版本和祖先子树版本的最大值。
+type diskVersionRecord struct {
+	version        uint64
+	subtreeVersion uint64
+	ts             time.Time
+}
+
+const (
+	// diskVersionMaxPaths 路径失效记录的软上限。超过后才做清理：正常情况下
+	// 记录数只跟「启动后被改动过的不同路径数」有关，不会随读请求增长。
+	diskVersionMaxPaths = 50000
+	// diskVersionRetention 失效记录的保留时长；回收时同时抬高全局基线，
+	// 客户端与正在加载的请求所持的历史版本也会失配。
+	diskVersionRetention = 24 * time.Hour
+)
+
+// bumpDiskVersionLocked 记一次路径失效。调用方需持有 tagMu。
+func (a *App) bumpDiskVersionLocked(path string) {
+	a.diskVersionSeq++
+	record := a.diskVersions[path]
+	record.version = a.diskVersionSeq
+	record.ts = time.Now()
+	a.diskVersions[path] = record
+}
+
+// pruneDiskVersionsLocked 在失效记录过多时清理：先淘汰超过保留期的记录，
+// 仍然超限（短时间内改了太多路径）才整表重置。任何记录回收都抬高基线。
+//
+// 分配序号不随记录删除回退，基线严格大于曾发出的版本，避免复用客户端旧 ETag。
+func (a *App) pruneDiskVersionsLocked(now time.Time) {
+	if len(a.diskVersions) <= diskVersionMaxPaths {
+		return
+	}
+	cutoff := now.Add(-diskVersionRetention)
+	removed := 0
+	for path, record := range a.diskVersions {
+		if record.ts.Before(cutoff) {
+			delete(a.diskVersions, path)
+			removed++
+		}
+	}
+	if removed > 0 {
+		a.diskVersionSeq++
+		a.diskVersionBase = a.diskVersionSeq
+	}
+	if len(a.diskVersions) <= diskVersionMaxPaths {
+		slog.Info("清理过期的磁盘失效记录", "removed", removed, "remaining", len(a.diskVersions))
+		return
+	}
+	// 仍然超限：整表重置，基线抬到所有已发出的版本之上。
+	total := len(a.diskVersions)
+	clear(a.diskVersions)
+	a.diskVersionSeq++
+	a.diskVersionBase = a.diskVersionSeq
+	slog.Info("重置磁盘失效记录", "dropped", total, "baseline", a.diskVersionBase)
+}
+
 func (a *App) diskVersion(path string) uint64 {
 	path = cachePathKey(path)
 	a.tagMu.Lock()
 	defer a.tagMu.Unlock()
-	if a.diskVersions == nil {
-		a.diskVersions = make(map[string]uint64)
+	return a.diskVersionLocked(path)
+}
+
+// diskVersionLocked 调用方需持有 tagMu。逐层查祖先，保持目录边界与局部失效范围。
+func (a *App) diskVersionLocked(path string) uint64 {
+	version := a.diskVersionBase
+	if record := a.diskVersions[path]; record.version > version {
+		version = record.version
 	}
-	version := a.diskVersions[path]
-	a.diskVersions[path] = version
+	for parent := filepath.Dir(path); parent != path; parent = filepath.Dir(path) {
+		if record := a.diskVersions[parent]; record.subtreeVersion > version {
+			version = record.subtreeVersion
+		}
+		path = parent
+	}
 	return version
 }
 

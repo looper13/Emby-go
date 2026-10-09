@@ -71,6 +71,50 @@ func TestPreservedTimestampChangesClientImageValidator(t *testing.T) {
 	}
 }
 
+func TestDirectoryInvalidationChangesClientImageValidator(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "poster.jpg")
+	writeJPEGImage(t, path, 80, 40)
+	app, _, _ := newProbeTestApp(t, root)
+	request := func(etag string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/image?maxWidth=32", nil)
+		c.Request.Header.Set("If-None-Match", etag)
+		app.serveImage(c, path)
+		c.Writer.WriteHeaderNow()
+		return recorder
+	}
+	first := request("")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 一个尚未完成读盘的请求只有版本快照，还没有 tag/NFO 缓存条目。
+	inflightPath := filepath.Join(root, "nested", "movie.nfo")
+	inflightVersion := app.diskVersion(inflightPath)
+	sibling := filepath.Join(root+"-sibling", "poster.jpg")
+	siblingVersion := app.diskVersion(sibling)
+	writeJPEGImage(t, path, 40, 80)
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	app.invalidateLibraryChanges([]librarywatch.Change{{Path: root, Directory: true}})
+	fresh := request(first.Header().Get("ETag"))
+	if first.Code != 200 || fresh.Code != 200 || fresh.Header().Get("ETag") == first.Header().Get("ETag") || fresh.Body.String() == first.Body.String() {
+		t.Fatal("directory refresh reused old validator or thumbnail")
+	}
+	if app.diskVersion(inflightPath) == inflightVersion {
+		t.Fatal("directory refresh did not invalidate an in-flight child read")
+	}
+	if app.diskVersion(sibling) != siblingVersion {
+		t.Fatal("directory refresh invalidated sibling directory")
+	}
+	if request(fresh.Header().Get("ETag")).Code != 304 {
+		t.Fatal("unchanged image failed conditional revalidation")
+	}
+}
+
 func TestPlaybackPreservesImageMetadataAndRefreshesDetail(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "a.strm")

@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func TestBatchScanBoundariesAndReadFailure(test *testing.T) {
 	database, library := scanLibrary(test, root)
 	committedBeforeEnd := false
 	var progress Progress
-	result, err := ScanWithProgress(database, library, func(current Progress) {
+	result, err := ScanWithProgress(context.Background(), database, library, func(current Progress) {
 		progress = current
 		if current.Done >= 100 && current.Done < current.Total && current.Result.Added >= 100 {
 			if _, err := database.MovieIDByPath(filepath.Join(root, "000.strm")); err == nil {
@@ -37,7 +38,7 @@ func TestBatchScanBoundariesAndReadFailure(test *testing.T) {
 	if err := os.Remove(filepath.Join(root, "204.strm")); err != nil {
 		test.Fatal(err)
 	}
-	result, err = RebuildWithProgress(database, library, nil)
+	result, err = RebuildWithProgress(context.Background(), database, library, nil)
 	if err != nil || result != (Result{Updated: 203, Success: 203, Failed: 1}) {
 		test.Fatalf("partial failure = %+v %v", result, err)
 	}
@@ -94,7 +95,7 @@ func TestBatchScanDoesNotClaimRolledBackWrites(test *testing.T) {
 	writeScanFile(test, root, "movie.strm", "https://media.test/movie.mp4\n")
 	writeScanFile(test, root, "movie.nfo", "<movie><title>Movie</title></movie>")
 	database, library := scanLibrary(test, root)
-	result, err := ScanWithProgress(database, library, func(progress Progress) {
+	result, err := ScanWithProgress(context.Background(), database, library, func(progress Progress) {
 		if progress.Done == 0 && progress.Total > 0 {
 			database.Close()
 		}
@@ -146,5 +147,42 @@ func TestSharedImageSelectionRequiresFreshStabilityCheck(t *testing.T) {
 	fresh, err := readSourceState(filepath.Join(root, "a.strm"), nil, "", &imageDirectory{})
 	if err != nil || fresh.Fingerprint == before.Fingerprint || fresh.Images.Poster != filepath.Join(root, "poster.webp") {
 		t.Fatalf("stability check missed changed images: %+v %v", fresh, err)
+	}
+}
+
+// 大目录里扫描中途新增的图片仍必须被检出：稳定性复核改为只认目录清单内的
+// 名字（见 scanner.go 的 freshImages），能否发现新图片就落到「批次写入前复核
+// 目录清单」这条链路上——本轮不写成功指纹，下一轮扫描补选图片。
+func TestLargeDirectoryMidScanImageChangeIsDetected(test *testing.T) {
+	root := test.TempDir()
+	for index := 0; index < 65; index++ {
+		writeScanFile(test, root, fmt.Sprintf("junk-%02d.txt", index), "unused")
+	}
+	writeScanFile(test, root, "a.strm", "https://media.test/a.mp4\n")
+	writeScanFile(test, root, "a.nfo", "<movie><title>A</title></movie>")
+	database, library := scanLibrary(test, root)
+	requireScan(test, database, library, Result{Added: 1, Success: 1})
+	if movie := visible(test, database)[0]; movie.PosterPath != "" {
+		test.Fatalf("unexpected poster before injection: %s", movie.PosterPath)
+	}
+
+	injected := false
+	result, err := RebuildWithProgress(context.Background(), database, library, func(progress Progress) {
+		if !injected && progress.Phase == PhaseProcess && progress.Done > 0 {
+			injected = true
+			// 该片已被处理、批次尚未写入：此刻出现的图片只能靠批次级清单复核发现。
+			writeScanFile(test, root, "a-poster.jpg", "poster")
+		}
+	})
+	if err != nil || !injected || result != (Result{Updated: 1, Success: 1}) {
+		test.Fatalf("中途新增图片的扫描 = %+v injected=%v err=%v", result, injected, err)
+	}
+	fingerprints, err := database.ScanFingerprints(library.ID)
+	if err != nil || fingerprints[filepath.Join(root, "a.strm")] != "" {
+		test.Fatalf("目录清单变化后仍写入了成功指纹: %+v %v", fingerprints, err)
+	}
+	requireScan(test, database, library, Result{Updated: 1, Success: 1})
+	if movie := visible(test, database)[0]; movie.PosterPath != filepath.Join(root, "a-poster.jpg") {
+		test.Fatalf("新图片未被补选: %+v", movie)
 	}
 }

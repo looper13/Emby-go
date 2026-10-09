@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func TestMovieImagesRemainIsolatedAcrossScanAndEvents(t *testing.T) {
 	}
 	// Even a forced event refresh of one poster must not reindex its sibling.
 	writeScanFile(t, root, "a-poster.webp", "new")
-	result, err := RefreshFiles(database, library, []string{filepath.Join(root, "a-poster.webp")}, nil)
+	result, err := RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "a-poster.webp")}, nil)
 	if err != nil || result != (Result{Updated: 1, Success: 1}) {
 		t.Fatalf("art event scope: %+v, %v", result, err)
 	}
@@ -39,7 +40,7 @@ func TestMovieImagesRemainIsolatedAcrossScanAndEvents(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "a-poster.webp")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RefreshFiles(database, library, []string{filepath.Join(root, "a-poster.webp")}, nil); err != nil {
+	if _, err := RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "a-poster.webp")}, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, movie := range visible(t, database) {

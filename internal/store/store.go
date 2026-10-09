@@ -1821,8 +1821,8 @@ type ScheduledTask struct {
 	Params      string `json:"params"`
 	Enabled     bool   `json:"enabled"`
 	LastRunAt   string `json:"last_run_at,omitempty"`
-	LastStatus  string `json:"last_status,omitempty"`  // success / failed / skipped
-	LastMessage string `json:"last_message,omitempty"` // 失败原因或跳过原因
+	LastStatus  string `json:"last_status,omitempty"`  // success / failed / skipped / cancelled
+	LastMessage string `json:"last_message,omitempty"` // 失败、跳过或取消原因
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }

@@ -43,3 +43,31 @@ func TestRedisBehavior(t *testing.T) {
 		t.Fatal("redis clear failed")
 	}
 }
+
+// Redis 不可用时：访问要有明确时间/重试预算（不能把查询拖到秒级），
+// 失败要计数（设置页显示真实状态），且一律按未命中继续而不是报错。
+func TestRedisBudgetAndFailureVisibility(t *testing.T) {
+	c := NewRedis("127.0.0.1:1", "", 0)
+	options := c.client.Options()
+	if options.MaxRetries != redisRetries || options.ReadTimeout != redisOperationTimeout ||
+		options.WriteTimeout != redisOperationTimeout || !options.ContextTimeoutEnabled {
+		t.Fatalf("Redis 超时/重试预算未收紧: %+v", options)
+	}
+	start := time.Now()
+	if _, ok := c.Get("missing"); ok {
+		t.Fatal("Redis 不可用时读取应算未命中")
+	}
+	if elapsed := time.Since(start); elapsed > redisDialTimeout+redisOperationTimeout {
+		t.Fatalf("Redis 故障时 Get 耗时 %v，超出预算", elapsed)
+	}
+	if c.Errors() == 0 {
+		t.Fatal("访问失败没有计数")
+	}
+	if online, failures := c.Health(); online || failures == 0 {
+		t.Fatalf("健康检查 = online:%v failures:%d", online, failures)
+	}
+	// 写入/删除/清理路径同样不能阻塞或无限重试。
+	c.Set("k", []byte("v"), time.Minute)
+	c.Delete("k")
+	c.Clear()
+}

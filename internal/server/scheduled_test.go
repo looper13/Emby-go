@@ -1,9 +1,69 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"emby-go/internal/scheduler"
+	"emby-go/internal/store"
+	"github.com/gin-gonic/gin"
 )
+
+func TestCancelledScanTaskStatus(t *testing.T) {
+	app, _, _ := newProbeTestApp(t, t.TempDir())
+	for _, kind := range []string{"scan", "reindex"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/admin/"+kind, nil).WithContext(ctx)
+			if kind == "scan" {
+				app.adminScan(c)
+			} else {
+				app.adminReindex(c)
+			}
+			if recorder.Code != statusClientClosed {
+				t.Fatalf("cancelled request status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if task := app.tasks[0]; task.Status != "cancelled" || task.Error != "扫描已取消" || task.EndedAt == "" {
+				t.Fatalf("cancelled task misclassified: %+v", task)
+			}
+			if app.scanStatus.Running || !app.scanStatus.Cancelled {
+				t.Fatalf("cancelled scan did not release running status: %+v", app.scanStatus)
+			}
+		})
+	}
+}
+
+func TestCancelledScheduledScanRecordsCancellation(t *testing.T) {
+	app, _, _ := newProbeTestApp(t, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !errors.Is(scanTaskError(ctx.Err()), context.Canceled) {
+		t.Fatal("translated cancellation lost context identity")
+	}
+	task, err := app.db.CreateScheduledTask(store.ScheduledTask{Name: "cancelled scan", Type: "scan", Cron: "@daily", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := scheduler.New(ctx, app.db, app.runScheduledTask)
+	defer s.Stop()
+	if err := s.RunNow(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := app.db.ScheduledTask(task.ID)
+	if err != nil || stored.LastStatus != scheduler.StatusCancelled || stored.LastMessage != "扫描已取消" {
+		t.Fatalf("scheduled cancellation not recorded: %+v err=%v", stored, err)
+	}
+	if app.tasks[0].Status != "cancelled" {
+		t.Fatalf("task history misclassified cancellation: %+v", app.tasks[0])
+	}
+}
 
 func TestNormalizeParams(t *testing.T) {
 	cases := []struct {

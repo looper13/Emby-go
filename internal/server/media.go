@@ -546,46 +546,51 @@ func (a *App) nfoFileInfo(m store.Movie) ([]gin.H, int64) {
 	return entry.streams, entry.size
 }
 
-// nfoCacheMaxEntries NFO 缓存条目上限。缓存按「路径 + 文件 mtime」存，
-// 文件每次被改写都会留下一条新条目，到上限时整体清空（而不是 LRU：这里只需要防泄漏）。
-const nfoCacheMaxEntries = 20000
-
 // nfoEntry 读取并缓存 NFO 的流信息、体积与「是否已探测」。
 //
-// 缓存键是「NFO 路径 + 文件 tag（mtime）」，不是纯路径 + 固定 TTL：
-// 列表页带上 MediaSources 时一部片就要读一个 NFO，媒体盘慢的时候
-// 「100 部片 2.6 秒」几乎全是这些读盘，而 2 分钟 TTL 一到期就重来一遍。
-// 用 mtime 做键之后，文件没变就一直命中，外部改了 NFO（mtime 变）立刻重读。
+// 缓存按路径保存，命中条件是「路径 + 文件 mtime tag + 显式失效版本」都与
+// 读入时一致：文件没变就一直命中，外部改了 NFO（mtime 变）立刻重读。
 // tag 本身有 5 分钟进程内缓存，命中路径不会每次都 stat 媒体盘。
+// 读取失败只保留 nfoReadErrorTTL（见 nfo_cache.go）：文件补上后能很快恢复。
 func (a *App) nfoEntry(m store.Movie) nfoCacheEntry {
 	fallback := nfoCacheEntry{streams: genericVideoStream()}
 	if m.NFOPath == "" {
 		return fallback
 	}
-	key := m.NFOPath + "|" + a.posterTag(m.NFOPath) + ":" + strconv.FormatUint(a.diskVersion(m.NFOPath), 10)
+	tag := a.posterTag(m.NFOPath)
+	version := a.diskVersion(m.NFOPath)
+	key := nfoFlightKey{path: m.NFOPath, tag: tag, version: version}
+	now := time.Now()
 	a.nfoMu.Lock()
-	if e, ok := a.nfos[key]; ok {
+	if entry, ok := a.nfos.get(m.NFOPath, tag, version, now); ok {
 		a.nfoMu.Unlock()
-		return e
+		return entry
 	}
+	if flight, ok := a.nfos.flights[key]; ok {
+		a.nfoMu.Unlock()
+		<-flight.done
+		return flight.entry
+	}
+	// entry 先填通用回退：万一读盘路径 panic，等待者拿到的也是可用的回退轨，
+	// 而不是零值条目（defer 里必须能保证唤醒等待者）。
+	flight := &nfoFlight{done: make(chan struct{}), entry: fallback}
+	a.nfos.flights[key] = flight
 	a.nfoMu.Unlock()
+	defer func() {
+		a.nfoMu.Lock()
+		delete(a.nfos.flights, key)
+		close(flight.done)
+		a.nfoMu.Unlock()
+	}()
 
-	entry := fallback
-	entry.ts, entry.neg = time.Now(), true
-	meta, err := nfo.Read(m.NFOPath)
-	if err == nil && meta.FileInfo != nil {
-		entry.size = meta.FileInfo.Size
-		if details := meta.FileInfo.StreamDetails; details != nil {
-			if out := buildStreams(details); len(out) > 0 {
-				entry.streams, entry.probed, entry.neg = out, true, false
-			}
-		}
-	}
+	entry := readNFOEntry(m.NFOPath)
+	entry.tag, entry.version, entry.readAt = tag, version, now
+	flight.entry = entry
 	a.nfoMu.Lock()
-	if len(a.nfos) >= nfoCacheMaxEntries {
-		a.nfos = make(map[string]nfoCacheEntry)
+	// 旧读取可以完成当前请求，但不能把失效前的结果写回新缓存。
+	if a.diskVersion(m.NFOPath) == version {
+		a.nfos.put(m.NFOPath, entry)
 	}
-	a.nfos[key] = entry
 	a.nfoMu.Unlock()
 	return entry
 }

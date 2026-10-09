@@ -12,6 +12,12 @@ type Cache interface {
 	Delete(string)
 	Clear()
 }
+
+// HealthReporter 由能报告运行时健康状况的后端实现（目前是 Redis）：
+// 管理端设置页据此显示真实连通性与累计故障，而不是写死一个「在线」。
+type HealthReporter interface {
+	Health() (online bool, failures uint64)
+}
 type entry struct {
 	key     string
 	value   []byte

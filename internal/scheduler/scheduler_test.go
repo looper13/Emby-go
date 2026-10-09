@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -69,7 +70,7 @@ func TestReloadSkipsInvalidExpression(t *testing.T) {
 	}
 }
 
-// TestRunNowRecordsOutcome 验证三种结果都被写回任务行。
+// TestRunNowRecordsOutcome 验证成功、失败、跳过与取消都被写回任务行。
 func TestRunNowRecordsOutcome(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -79,6 +80,8 @@ func TestRunNowRecordsOutcome(t *testing.T) {
 		{"成功", nil, StatusSuccess},
 		{"失败", errors.New("boom"), StatusFailed},
 		{"跳过", ErrBusy, StatusSkipped},
+		{"取消", fmt.Errorf("scan stopped: %w", context.Canceled), StatusCancelled},
+		{"超时取消", context.DeadlineExceeded, StatusCancelled},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

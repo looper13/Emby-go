@@ -354,7 +354,9 @@ func (a *App) refreshScrapedMovies(ids []int64) (refreshErr error) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		g := groups[key]
-		result, err := scanner.RefreshFiles(a.db, g.library, g.paths, nil)
+		// 刻意不用 scrapeContext：任务被取消或熔断时也要发布已经成功落盘的影片
+		// （executeScrape 的注释说明了原因），跟着取消会让它们停在旧索引。
+		result, err := scanner.RefreshFiles(context.Background(), a.db, g.library, g.paths, nil)
 		if result.Failed > 0 {
 			err = errors.Join(err, fmt.Errorf("刮削后刷新有 %d 个文件读取失败", result.Failed))
 		}

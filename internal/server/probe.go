@@ -616,12 +616,6 @@ func (a *App) evictNFOStream(path string) {
 	a.dropNFOCache(path)
 }
 
-func (a *App) evictNFOStreams() {
-	a.nfoMu.Lock()
-	a.nfos = make(map[string]nfoCacheEntry)
-	a.nfoMu.Unlock()
-}
-
 // probeState NFO 里记录的探测状态。
 type probeState struct {
 	Version int

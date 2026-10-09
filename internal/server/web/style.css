@@ -287,7 +287,7 @@ a { color: var(--info); }
 .badge.pending   { color: var(--warn);    background: var(--accent-soft);   border-color: rgba(224, 179, 86, 0.3); }
 .badge.incompatible, .badge.failed { color: var(--danger); background: var(--danger-soft); border-color: rgba(255, 127, 135, 0.3); }
 .badge.manual    { color: var(--info);    background: var(--info-soft);    border-color: rgba(127, 199, 232, 0.3); }
-.badge.skipped   { color: var(--dim);     background: rgba(255, 255, 255, 0.04); border-color: var(--line-strong); }
+.badge.skipped, .badge.cancelled { color: var(--dim); background: rgba(255, 255, 255, 0.04); border-color: var(--line-strong); }
 .badge.running   { color: var(--accent);  background: var(--accent-soft);   border-color: rgba(224, 179, 86, 0.3); }
 
 .protocol {

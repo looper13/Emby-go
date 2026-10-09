@@ -31,7 +31,7 @@ func TestScopedResponsesPreserveOtherLibrariesAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.scanLibraries(0); err != nil {
+	if _, err := app.scanLibraries(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
 	aID, err := app.db.MovieIDByPath(filepath.Join(root, "a.strm"))
@@ -78,7 +78,7 @@ func TestScopedResponsesPreserveOtherLibrariesAndAuthentication(t *testing.T) {
 	// Keep unrelated decoded images and NFO data through a local file event.
 	app.imgThumb.Set("t:"+filepath.Join(otherRoot, "poster.jpg")+":v0:old:10x10:q80", []byte("keep"), time.Hour)
 	app.nfoMu.Lock()
-	app.nfos[filepath.Join(otherRoot, "b.nfo")+"|tag"] = nfoCacheEntry{}
+	app.nfos.put(filepath.Join(otherRoot, "b.nfo"), nfoCacheEntry{})
 	app.nfoMu.Unlock()
 	writeFile(t, filepath.Join(root, "a.nfo"), "<movie><title>Updated A</title></movie>")
 	if err := app.refreshLibraryChanges(context.Background(), first, []librarywatch.Change{{Path: filepath.Join(root, "a.nfo")}}); err != nil {
@@ -109,7 +109,7 @@ func TestScopedResponsesPreserveOtherLibrariesAndAuthentication(t *testing.T) {
 		t.Fatal("unrelated thumbnail evicted")
 	}
 	app.nfoMu.Lock()
-	_, nfoKept := app.nfos[filepath.Join(otherRoot, "b.nfo")+"|tag"]
+	_, nfoKept := app.nfos.get(filepath.Join(otherRoot, "b.nfo"), "", 0, time.Now())
 	app.nfoMu.Unlock()
 	if !nfoKept {
 		t.Fatal("unrelated NFO evicted")
@@ -162,8 +162,8 @@ func TestDiskInvalidationHonorsDirectoryBoundaries(t *testing.T) {
 	aPath, bPath := filepath.Join(a, "poster.jpg"), filepath.Join(b, "poster.jpg")
 	app.tags[aPath] = tagEntry{tag: "a"}
 	app.tags[bPath] = tagEntry{tag: "b"}
-	app.nfos[filepath.Join(a, "a.nfo")+"|tag"] = nfoCacheEntry{}
-	app.nfos[filepath.Join(b, "b.nfo")+"|tag"] = nfoCacheEntry{}
+	app.nfos.put(filepath.Join(a, "a.nfo"), nfoCacheEntry{})
+	app.nfos.put(filepath.Join(b, "b.nfo"), nfoCacheEntry{})
 	aKey, bKey := "t:"+aPath+":v0:v99:10x10:q80", "t:"+bPath+":v0:v99:10x10:q80"
 	app.imgThumb.Set(aKey, []byte("a"), time.Hour)
 	app.imgThumb.Set(bKey, []byte("b"), time.Hour)
@@ -180,7 +180,7 @@ func TestDiskInvalidationHonorsDirectoryBoundaries(t *testing.T) {
 	if _, ok := app.imgThumb.Get(bKey); !ok {
 		t.Fatal("sibling thumbnail evicted")
 	}
-	if len(app.nfos) != 1 {
+	if app.nfos.len() != 1 {
 		t.Fatal("incorrect NFO scope")
 	}
 }
@@ -265,7 +265,7 @@ func TestUnchangedManualScanPreservesDiskAndDetailCaches(t *testing.T) {
 	key := "t:" + imagePath + ":v0:old:10x10:q80"
 	app.imgThumb.Set(key, []byte("keep"), time.Hour)
 	app.tags[imagePath] = tagEntry{tag: "keep"}
-	if _, err := app.scanLibraries(libs[0].ID); err != nil {
+	if _, err := app.scanLibraries(context.Background(), libs[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := app.imgThumb.Get(key); !ok {

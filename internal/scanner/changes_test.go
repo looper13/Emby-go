@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ func TestRefreshFilesUnicodeCDAndLiteralPrefixDeletion(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "ÄMovie-CD1.strm")); err != nil {
 		t.Fatal(err)
 	}
-	result, err := RefreshFiles(database, library, []string{filepath.Join(root, "ÄMovie-CD1.strm")}, nil)
+	result, err := RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "ÄMovie-CD1.strm")}, nil)
 	if err != nil || result != (Result{Added: 1, Deleted: 1, Success: 1}) {
 		t.Fatalf("Unicode CD refresh: %+v %v", result, err)
 	}
@@ -26,7 +27,7 @@ func TestRefreshFilesUnicodeCDAndLiteralPrefixDeletion(t *testing.T) {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
-		result, err := RefreshFiles(database, library, []string{path}, nil)
+		result, err := RefreshFiles(context.Background(), database, library, []string{path}, nil)
 		if err != nil || result != (Result{Deleted: 1}) {
 			t.Fatalf("literal deletion %q: %+v %v", name, result, err)
 		}
@@ -55,7 +56,7 @@ func TestRefreshFilesIsLocalAndHonorsEvents(t *testing.T) {
 	}
 	writeScanFile(t, root, "b.nfo", "<movie><title>Untouched</title></movie>")
 	writeScanFile(t, root, "child/c.strm", "")
-	result, err := RefreshFiles(database, library, []string{aPath}, nil)
+	result, err := RefreshFiles(context.Background(), database, library, []string{aPath}, nil)
 	if err != nil || result != (Result{Updated: 1, Success: 1}) {
 		t.Fatalf("local file refresh = %+v, %v", result, err)
 	}
@@ -71,13 +72,13 @@ func TestRefreshFilesIsLocalAndHonorsEvents(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "b.strm")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RefreshFiles(database, library, []string{aPath}, nil); err != nil {
+	if _, err := RefreshFiles(context.Background(), database, library, []string{aPath}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(visible(t, database)) != 3 {
 		t.Fatal("single-file event purged an unrelated source")
 	}
-	result, err = RefreshFiles(database, library, []string{filepath.Join(root, "b.strm")}, nil)
+	result, err = RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "b.strm")}, nil)
 	if err != nil || result != (Result{Deleted: 1}) {
 		t.Fatalf("local deletion = %+v, %v", result, err)
 	}
@@ -91,12 +92,12 @@ func TestRefreshFilesImageAndUppercaseSTRM(t *testing.T) {
 	writeScanFile(t, root, "child/b.nfo", "<movie><title>B</title></movie>")
 	database, library := scanLibrary(t, root)
 	requireScan(t, database, library, Result{Added: 2, Success: 2})
-	result, err := RefreshFiles(database, library, []string{filepath.Join(root, "a.nfo")}, nil)
+	result, err := RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "a.nfo")}, nil)
 	if err != nil || result != (Result{Updated: 1, Success: 1}) {
 		t.Fatalf("uppercase source matching = %+v, %v", result, err)
 	}
 	writeScanFile(t, root, "poster.jpg", "new image")
-	result, err = RefreshFiles(database, library, []string{filepath.Join(root, "poster.jpg")}, nil)
+	result, err = RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "poster.jpg")}, nil)
 	if err != nil || result != (Result{Updated: 1, Success: 1}) {
 		t.Fatalf("image refresh crossed directory boundary: %+v, %v", result, err)
 	}
@@ -110,14 +111,14 @@ func TestRefreshFilesCDDeletionAndFallback(t *testing.T) {
 	writeScanFile(t, root, "Movie.nfo", "<movie><title>Fallback</title></movie>")
 	database, library := scanLibrary(t, root)
 	requireScan(t, database, library, Result{Added: 2, Success: 1, Pending: 1})
-	result, err := RefreshFiles(database, library, []string{filepath.Join(root, "Movie.nfo")}, nil)
+	result, err := RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "Movie.nfo")}, nil)
 	if err != nil || result != (Result{Updated: 1, Success: 1}) {
 		t.Fatalf("fallback NFO group = %+v, %v", result, err)
 	}
 	if err := os.Remove(filepath.Join(root, "Movie-CD1.strm")); err != nil {
 		t.Fatal(err)
 	}
-	result, err = RefreshFiles(database, library, []string{filepath.Join(root, "Movie-CD1.strm")}, nil)
+	result, err = RefreshFiles(context.Background(), database, library, []string{filepath.Join(root, "Movie-CD1.strm")}, nil)
 	if err != nil || result != (Result{Added: 1, Deleted: 1, Pending: 1}) {
 		t.Fatalf("CD1 deletion = %+v, %v", result, err)
 	}
@@ -140,18 +141,18 @@ func TestRefreshDirectoryScopesAndBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := RefreshDirectory(database, library, filepath.Join(root, "one"), true, nil)
+	result, err := RefreshDirectory(context.Background(), database, library, filepath.Join(root, "one"), true, nil)
 	if err != nil || result != (Result{Deleted: 2}) || len(visible(t, database)) != 1 {
 		t.Fatalf("subtree deletion escaped prefix: %+v, %v", result, err)
 	}
-	if _, err := RefreshDirectory(database, library, filepath.Dir(root), true, nil); err == nil {
+	if _, err := RefreshDirectory(context.Background(), database, library, filepath.Dir(root), true, nil); err == nil {
 		t.Fatal("outside directory should be rejected")
 	}
-	if _, err := RefreshFiles(database, library, []string{filepath.Join(filepath.Dir(root), "outside.strm")}, nil); err == nil {
+	if _, err := RefreshFiles(context.Background(), database, library, []string{filepath.Join(filepath.Dir(root), "outside.strm")}, nil); err == nil {
 		t.Fatal("outside file should be rejected")
 	}
 	library.Path = filepath.Join(root, "offline")
-	if _, err := RefreshDirectory(database, library, library.Path, true, nil); err == nil {
+	if _, err := RefreshDirectory(context.Background(), database, library, library.Path, true, nil); err == nil {
 		t.Fatal("offline root must not purge index")
 	}
 }

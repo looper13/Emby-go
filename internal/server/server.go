@@ -44,9 +44,12 @@ type App struct {
 	// 避免列表/详情请求对媒体盘反复 stat / XML 解析（媒体盘可能较慢）。
 	tagMu        sync.Mutex
 	tags         map[string]tagEntry
-	diskVersions map[string]uint64
-	nfoMu        sync.Mutex
-	nfos         map[string]nfoCacheEntry
+	diskVersions map[string]diskVersionRecord
+	// diskVersionBase 为记录回收后的版本基线；diskVersionSeq 单调分配失效版本。
+	diskVersionBase uint64
+	diskVersionSeq  uint64
+	nfoMu           sync.Mutex
+	nfos            *nfoCache
 
 	// 图片链路的进程内缓存：imgMeta 存「影片 id → 图片路径」「演员名 → 头像路径」
 	// 这类每次请求都要的元信息（原本每张图一次 DB 查询，单连接下会串行排队）；
@@ -104,6 +107,7 @@ type scanStatus struct {
 	LibraryIndex int    `json:"library_index"`
 	Libraries    int    `json:"libraries"`
 	LibraryName  string `json:"library_name"`
+	Phase        string `json:"phase,omitempty"` // walk=正在遍历目录，process=正在处理候选
 	Total        int    `json:"total"`
 	Done         int    `json:"done"`
 	Current      string `json:"current"`
@@ -117,22 +121,16 @@ type scanStatus struct {
 	Deleted      int    `json:"deleted"`
 	StartedAt    string `json:"started_at,omitempty"`
 	FinishedAt   string `json:"finished_at,omitempty"`
+	Cancelled    bool   `json:"cancelled,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
 
-// tagEntry / nfoCacheEntry 为上述短缓存的条目（neg 表示负缓存，TTL 更短）。
+// tagEntry 图片 mtime tag 的短缓存条目（neg 表示路径不存在，TTL 更短）。
 type tagEntry struct {
 	tag     string
 	ts      time.Time
 	neg     bool
 	version uint64
-}
-type nfoCacheEntry struct {
-	streams []gin.H
-	size    int64 // NFO <fileinfo><size>：媒体文件字节数（探测写入）
-	probed  bool  // NFO 里有可用的 <streamdetails>（详情页「是否已探测」）
-	ts      time.Time
-	neg     bool
 }
 
 // New 强制 Redis 为缓存后端：redis_addr 必填，连接失败拒绝启动。
@@ -160,7 +158,7 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	}
 	a := &App{
 		cfg: cfg, db: db, cache: cache.NewManaged(cacheStore),
-		tags: make(map[string]tagEntry), nfos: make(map[string]nfoCacheEntry), probeSeen: make(map[string]struct{}),
+		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
 		imgMeta: cache.NewMemory(imageMetaCacheSize), imgThumb: cache.NewMemory(imageThumbCacheSize),
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
 	}
@@ -241,8 +239,13 @@ func (a *App) checkScrapeBackend() {
 	slog.Info("启动自检：MetaTube 可达", "url", cfg.BaseURL)
 }
 
-// Close 先停调度与在跑的探测任务再关库，避免后台 goroutine 继续写 NFO / 访问已关闭的 DB。
+// Close 先取消 rootCtx 再停调度与后台任务，最后关库，避免后台 goroutine 继续写 NFO / 访问已关闭的 DB。
+//
+// 顺序很关键：计划任务与探测/刮削/扫描的 context 都挂在 rootCtx 下，
+// 而 scheduler.Stop 会等正在执行的任务结束——先取消才能让在跑的扫描提前收尾，
+// 否则一次大库扫描会让停机一直卡到它自然结束。
 func (a *App) Close() {
+	a.rootCancel()
 	if a.sched != nil {
 		a.sched.Stop()
 	}
@@ -251,7 +254,6 @@ func (a *App) Close() {
 		a.probeCancel()
 	}
 	a.probeTaskMu.Unlock()
-	a.rootCancel()
 	a.closeLibraryMonitors()
 	a.db.Close()
 }

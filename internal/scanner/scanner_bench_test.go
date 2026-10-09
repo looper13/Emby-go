@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ func BenchmarkLibraryScan(benchmark *testing.B) {
 				}
 				database, library := open()
 				if mode != "initial" {
-					if _, err := Scan(database, library); err != nil {
+					if _, err := Scan(context.Background(), database, library); err != nil {
 						benchmark.Fatal(err)
 					}
 				}
@@ -63,9 +64,9 @@ func BenchmarkLibraryScan(benchmark *testing.B) {
 					var result Result
 					var err error
 					if mode == "unchanged" {
-						result, err = Scan(database, library)
+						result, err = Scan(context.Background(), database, library)
 					} else {
-						result, err = RebuildWithProgress(database, library, nil)
+						result, err = RebuildWithProgress(context.Background(), database, library, nil)
 					}
 					if err != nil || result.Failed != 0 || result.Added+result.Updated+result.Skipped != count {
 						benchmark.Fatalf("scan=%+v err=%v", result, err)

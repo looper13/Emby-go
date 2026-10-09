@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"io"
 	"mime/multipart"
@@ -61,7 +62,7 @@ func TestImageUploadPreservesSiblingAndRescan(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("upload: %d %s", resp.StatusCode, raw)
 	}
-	if _, err := app.scanLibraries(0); err != nil {
+	if _, err := app.scanLibraries(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range []struct {

@@ -85,6 +85,9 @@ func (m *Managed) Delete(key string) { m.backend.Delete(m.key(key)) }
 
 // Clear invalidates responses only. Existing entries expire normally; no SCAN/DEL.
 func (m *Managed) Clear() { m.generation.Add(1) }
+
+// Backend 暴露底层实现，供诊断端点读取 Redis 之类的运行时状态。
+func (m *Managed) Backend() Cache { return m.backend }
 func (m *Managed) Stats() map[string]Counters {
 	out := map[string]Counters{}
 	m.metrics.Range(func(k, v any) bool {

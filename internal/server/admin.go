@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"database/sql"
+	"emby-go/internal/cache"
 	"emby-go/internal/imageutil"
 	"emby-go/internal/nfo"
 	"emby-go/internal/scanner"
@@ -100,6 +102,11 @@ func (a *App) finishTask(id int64, err error) {
 			continue
 		}
 		a.tasks[i].EndedAt = time.Now().UTC().Format(time.RFC3339)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			a.tasks[i].Status, a.tasks[i].Error = "cancelled", err.Error()
+			slog.Info("任务已取消", "task_id", id, "type", a.tasks[i].Type, "reason", err)
+			return
+		}
 		if err != nil {
 			a.tasks[i].Status, a.tasks[i].Error = "failed", err.Error()
 			slog.Error("任务失败", "task_id", id, "type", a.tasks[i].Type, "error", err)
@@ -129,6 +136,27 @@ func (a *App) finishTaskBusy(id int64, reason string) {
 // errScanBusy 同一时刻只允许一个扫描任务，避免并发写库与进度互相覆盖。
 var errScanBusy = errors.New("扫描正在进行中")
 
+// errScanCancelled 扫描被取消（请求中断、服务器停机或监视器关闭）。不是故障，
+// 但会占一条任务记录，所以用人能看懂的说法而不是 context canceled。
+var errScanCancelled = scanCancellation{}
+
+type scanCancellation struct{}
+
+func (scanCancellation) Error() string { return "扫描已取消" }
+func (scanCancellation) Unwrap() error { return context.Canceled }
+
+// statusClientClosed 请求方已断开（nginx 约定的 499）。扫描被取消时用它回应：
+// 此刻客户端通常已经收不到响应，这个状态码主要是给日志和轮询一个明确说法。
+const statusClientClosed = 499
+
+// scanTaskError 把取消信号翻译成可读说明；其它错误原样返回。
+func scanTaskError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return errScanCancelled
+	}
+	return err
+}
+
 // beginScan / updateScanProgress / endScan 维护管理端可轮询的扫描进度。
 // beginScan 返回 false 表示已有扫描在跑，或有探测/刮削占用着同一批 NFO。
 func (a *App) beginScan(libraries int) bool {
@@ -151,12 +179,14 @@ func (a *App) setScanLibrary(index int, library store.Library) {
 	a.scanStatus.LibraryIndex = index
 	a.scanStatus.LibraryName = library.Name
 	a.scanStatus.Total, a.scanStatus.Done, a.scanStatus.Current = 0, 0, ""
+	a.scanStatus.Phase = ""
 }
 
 func (a *App) updateScanProgress(p scanner.Progress) {
 	a.scanMu.Lock()
 	defer a.scanMu.Unlock()
 	a.scanStatus.LibraryName = p.LibraryName
+	a.scanStatus.Phase = p.Phase
 	a.scanStatus.Total, a.scanStatus.Done, a.scanStatus.Current = p.Total, p.Done, p.Current
 	a.scanStatus.Success, a.scanStatus.Pending = p.Result.Success, p.Result.Pending
 	a.scanStatus.Incompatible, a.scanStatus.Failed = p.Result.Incompatible, p.Result.Failed
@@ -168,9 +198,12 @@ func (a *App) endScan(err error) {
 	a.scanMu.Lock()
 	a.scanStatus.Running = false
 	a.scanStatus.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-	if err != nil {
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		a.scanStatus.Cancelled, a.scanStatus.Error = true, errScanCancelled.Error()
+	case err != nil:
 		a.scanStatus.Error = err.Error()
-	} else {
+	default:
 		a.scanStatus.Done = a.scanStatus.Total
 	}
 	a.scanMu.Unlock()
@@ -186,11 +219,13 @@ func (a *App) adminScanProgress(c *gin.Context) {
 	c.JSON(200, status)
 }
 
-func (a *App) scanLibraries(libraryID int64) (scanner.Result, error) {
-	return a.scanLibrariesWithMode(libraryID, false)
+func (a *App) scanLibraries(ctx context.Context, libraryID int64) (scanner.Result, error) {
+	return a.scanLibrariesWithMode(ctx, libraryID, false)
 }
 
-func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result, error) {
+// scanLibrariesWithMode 扫描指定媒体库（0 表示全部）。ctx 贯通到遍历与处理循环：
+// 取消时已入库的分批保留、删除阶段不执行，返回 context.Canceled。
+func (a *App) scanLibrariesWithMode(ctx context.Context, libraryID int64, full bool) (scanner.Result, error) {
 	libraries, err := a.db.Libraries()
 	if err != nil {
 		return scanner.Result{}, err
@@ -214,13 +249,17 @@ func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result,
 	var scanErr error
 	defer func() { a.endScan(scanErr) }()
 	for index, library := range selected {
+		if err := ctx.Err(); err != nil {
+			scanErr = err
+			break
+		}
 		a.setScanLibrary(index+1, library)
 		slog.Info("正在扫描媒体库", "library_id", library.ID, "name", library.Name, "path", library.Path)
 		scan := scanner.ScanWithProgress
 		if full {
 			scan = scanner.RebuildWithProgress
 		}
-		current, err := scan(a.db, library, a.updateScanProgress)
+		current, err := scan(ctx, a.db, library, a.updateScanProgress)
 		if current.Added+current.Updated+current.Deleted > 0 || err != nil {
 			a.invalidateDiskPaths([]string{library.Path}, true)
 			a.db.InvalidateLibraryMovies(library.ID)
@@ -235,7 +274,12 @@ func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result,
 		result.Skipped += current.Skipped
 		result.Deleted += current.Deleted
 		if err != nil {
-			slog.Error("媒体库扫描失败", "library", library.Name, "error", err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				slog.Info("媒体库扫描已取消", "library", library.Name, "added", current.Added,
+					"updated", current.Updated, "skipped", current.Skipped)
+			} else {
+				slog.Error("媒体库扫描失败", "library", library.Name, "error", err)
+			}
 			scanErr = err
 			break
 		}
@@ -245,9 +289,6 @@ func (a *App) scanLibrariesWithMode(libraryID int64, full bool) (scanner.Result,
 			"added", current.Added, "updated", current.Updated, "skipped", current.Skipped, "deleted", current.Deleted)
 	}
 	// endScan 由上面的 defer 负责调用（panic 时也必须释放）。
-	if result.Added+result.Updated+result.Deleted > 0 || scanErr != nil {
-
-	}
 	return result, scanErr
 }
 
@@ -258,6 +299,8 @@ func (a *App) scanning() bool {
 	return a.scanStatus.Running
 }
 
+// adminScan 手动扫描媒体库。用请求 context：客户端断开（关页面/刷新）即中止遍历，
+// 已入库的分批保留；扫描状态与任务记录都记成「已取消」而不是故障。
 func (a *App) adminScan(c *gin.Context) {
 	if a.scanning() {
 		c.JSON(http.StatusConflict, gin.H{"error": errScanBusy.Error()})
@@ -265,8 +308,8 @@ func (a *App) adminScan(c *gin.Context) {
 	}
 	libraryID, _ := strconv.ParseInt(c.Query("library_id"), 10, 64)
 	taskID := a.startTask("scan")
-	result, err := a.scanLibraries(libraryID)
-	a.finishTask(taskID, err)
+	result, err := a.scanLibraries(c.Request.Context(), libraryID)
+	a.finishTask(taskID, scanTaskError(err))
 	if err != nil {
 		if errors.Is(err, errScanBusy) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -274,6 +317,10 @@ func (a *App) adminScan(c *gin.Context) {
 		}
 		if store.NotFound(err) {
 			c.JSON(404, gin.H{"error": "library not found"})
+			return
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			c.JSON(statusClientClosed, gin.H{"error": errScanCancelled.Error()})
 			return
 		}
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -289,8 +336,8 @@ func (a *App) adminReindex(c *gin.Context) {
 	}
 	slog.Info("开始重建索引")
 	taskID := a.startTask("reindex")
-	result, err := a.scanLibrariesWithMode(0, true)
-	a.finishTask(taskID, err)
+	result, err := a.scanLibrariesWithMode(c.Request.Context(), 0, true)
+	a.finishTask(taskID, scanTaskError(err))
 	if err != nil {
 		if errors.Is(err, errScanBusy) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -298,6 +345,10 @@ func (a *App) adminReindex(c *gin.Context) {
 		}
 		if store.NotFound(err) {
 			c.JSON(200, result)
+			return
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			c.JSON(statusClientClosed, gin.H{"error": errScanCancelled.Error()})
 			return
 		}
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -665,7 +716,7 @@ func (a *App) adminImage(c *gin.Context) {
 }
 
 func (a *App) adminSettings(c *gin.Context) {
-	c.JSON(200, gin.H{
+	settings := gin.H{
 		"listen":                  a.cfg.Addr(),
 		"db_path":                 a.cfg.DBPath,
 		"debug":                   a.cfg.Debug,
@@ -673,10 +724,18 @@ func (a *App) adminSettings(c *gin.Context) {
 		"redis_addr":              a.cfg.RedisAddr,
 		"redis_db":                a.cfg.RedisDB,
 		"redis_online":            true,
+		"redis_failures":          uint64(0),
 		"cache_stats":             a.cache.Stats(),
 		"library_monitor_mode":    a.cfg.MonitorMode(),
 		"disable_library_monitor": a.cfg.DisableLibraryMonitor,
-	})
+	}
+	// 探一次真实连通性：缓存故障时请求仍按未命中继续，只有这里能看出后端已经不可用。
+	// 探活自带超时预算（见 cache.Redis），不会因为 Redis 卡死把设置页一起拖住。
+	if reporter, ok := a.cache.Backend().(cache.HealthReporter); ok {
+		online, failures := reporter.Health()
+		settings["redis_online"], settings["redis_failures"] = online, failures
+	}
+	c.JSON(200, settings)
 }
 
 func (a *App) adminTasks(c *gin.Context) {

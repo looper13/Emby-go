@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,7 +19,7 @@ func TestLargeArtworkMembershipChangesDuringBatch(t *testing.T) {
 	}
 	database, library := scanLibrary(t, root)
 	added := false
-	result, err := ScanWithProgress(database, library, func(progress Progress) {
+	result, err := ScanWithProgress(context.Background(), database, library, func(progress Progress) {
 		if progress.Done == 1 && !added {
 			added = true
 			writeScanFile(t, root, "extrafanart/fanart1.jpg", "image added during scan")
