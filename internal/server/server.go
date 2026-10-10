@@ -268,6 +268,7 @@ func (a *App) routes() {
 	r.GET("/", a.dashboard)
 	r.GET("/admin", a.dashboard)
 	r.GET("/web", a.dashboard)
+	r.GET("/web/index.html", a.dashboard)
 	r.GET("/favicon.ico", a.favicon)
 	r.HEAD("/favicon.ico", a.favicon)
 	r.GET("/web/login.js", a.webAsset)
@@ -380,9 +381,11 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Genres", true, a.genres},
 		{"GET", "/Tags", true, a.tagsList},
 		{"GET", "/Studios", true, a.studios},
+		{"GET", "/Persons", true, a.persons},
 		{"GET", "/Years", true, a.years},
 		{"GET", "/OfficialRatings", true, a.officialRatings},
 		{"GET", "/Library/VirtualFolders", true, a.virtualFolders},
+		{"GET", "/Library/VirtualFolders/Query", true, a.virtualFoldersQuery},
 		{"GET", "/Users/:uid/Items/Resume", true, a.resume},
 		{"GET", "/Shows/NextUp", true, a.nextUp},
 		{"GET", "/Users/:uid/Views", true, a.views},

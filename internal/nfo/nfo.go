@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Actor 对应 <actor>：Thumb 是头像的远端地址，头像真源就在这里——
@@ -225,13 +226,48 @@ func (m MovieMeta) RuntimeSeconds() int64 {
 	return 0
 }
 
+// ReadStats separates filesystem access from XML decoding. Attempts and bytes
+// include failed reads/parses so callers can account for retries and fallbacks.
+type ReadStats struct {
+	Read, Parse   time.Duration
+	Reads, Parses int
+	Bytes         int64
+}
+
 func Read(path string) (MovieMeta, error) {
+	return read(path, nil)
+}
+
+func ReadWithStats(path string) (MovieMeta, ReadStats, error) {
+	var stats ReadStats
+	meta, err := read(path, &stats)
+	return meta, stats, err
+}
+
+func read(path string, stats *ReadStats) (MovieMeta, error) {
+	var started time.Time
+	if stats != nil {
+		started = time.Now()
+		stats.Reads++
+	}
 	b, err := os.ReadFile(path)
+	if stats != nil {
+		stats.Read = time.Since(started)
+		stats.Bytes = int64(len(b))
+	}
 	if err != nil {
 		return MovieMeta{}, err
 	}
 	var m MovieMeta
-	if err := xml.Unmarshal(b, &m); err != nil {
+	if stats != nil {
+		started = time.Now()
+		stats.Parses++
+	}
+	err = xml.Unmarshal(b, &m)
+	if stats != nil {
+		stats.Parse = time.Since(started)
+	}
+	if err != nil {
 		return MovieMeta{}, err
 	}
 	return m, nil

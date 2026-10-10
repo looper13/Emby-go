@@ -70,7 +70,7 @@ func TestPreparedMovieRemainsIndependentOfDisk(test *testing.T) {
 	if err != nil {
 		test.Fatal(err)
 	}
-	entry, outcome := prepareCandidate(store.Library{ID: 1}, candidate{path: path}, nil, "")
+	entry, outcome := prepareCandidate(store.Library{ID: 1}, candidate{path: path}, nil, "", nil)
 	if outcome != (Result{Success: 1}) || entry.Movie.Title != "Original" {
 		test.Fatalf("prepare failed: %+v %+v", entry, outcome)
 	}

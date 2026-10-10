@@ -66,7 +66,7 @@ func (a *App) favicon(c *gin.Context) {
 // 故禁止缓存。
 func (a *App) dashboard(c *gin.Context) {
 	name := "web/login.html"
-	if c.Request.URL.Path == "/admin" {
+	if c.Request.URL.Path == "/admin" || c.Request.URL.Path == "/web/index.html" {
 		name = "web/index.html"
 	}
 	data, err := webFiles.ReadFile(name)

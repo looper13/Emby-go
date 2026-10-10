@@ -121,10 +121,14 @@ library_monitor_mode: polling
 | 字段 | 计时范围 |
 | --- | --- |
 | `total_ms` | 扫描总耗时，包含取消收尾、版本更新 |
-| `walk_ms` | 根目录检查、遍历、STRM 属性读取和分组收集 |
+| `walk_ms` | 根目录检查、目录遍历和 STRM 名称分组收集 |
 | `index_ms` | 读取已有扫描指纹和分段成员 |
 | `source_ms` | 读取前的 NFO 属性与元数据指纹生成 |
 | `prepare_ms` | NFO 读取解析、元数据转换 |
+| `nfo_read_ms` | NFO 文件打开、读取及关闭（`os.ReadFile`），含失败及 CD 回退读取 |
+| `nfo_parse_ms` | XML 解码（`xml.Unmarshal`），含解析失败 |
+| `metadata_ms` | 已解析 NFO 转换成影片字段与演员引用 |
+| `nfo_reads` / `nfo_parses` / `nfo_bytes` | 文件读取尝试数 / XML 解析尝试数 / 实际读取字节数，含失败和回退；跳过项不计 |
 | `verify_ms` | 读取后 NFO 属性与指纹稳定性复核 |
 | `db_ms` / `db_pct` | 所有落库批次的总耗时 / 占扫描总耗时百分比 |
 | `db_begin_ms` / `db_prepare_ms` | 获取事务（含可能的连接等待）/ 准备 SQL |
@@ -133,9 +137,9 @@ library_monitor_mode: polling
 | `cleanup_ms` / `version_ms` | 删除缺失源文件索引 / 发布库缓存版本（都可能包含数据库操作） |
 | `other_ms` | 分组排序、进度回调、日志等未单独计时的开销 |
 
-`db_*` 明细属于 `db_ms`，不要重复相加。`batches` 是尝试落库的非空批次数，`slow_batches` 是耗时至少 1 秒的批次数，`max_batch_ms` 是最慢批次；失败的 SQL 和回滚仍计入耗时，新增/更新数只计已提交的影片。取消、单条读取失败、落库失败也会输出最终汇总；无变化的增量扫描通常为 `batches=0 db_ms=0`，但清理及版本操作单独计时。受系统计时精度影响（尤其 Windows），极短步骤可能显示 0；应结合批次数和其他阶段一起看。
+`nfo_read_ms`、`nfo_parse_ms`、`metadata_ms` 是 `prepare_ms` 的子项，三者之外还有少量准备流程开销；`db_*` 明细属于 `db_ms`，均不要重复相加。`batches` 是尝试落库的非空批次数，`slow_batches` 是耗时至少 1 秒的批次数，`max_batch_ms` 是最慢批次；失败的 SQL 和回滚仍计入耗时，新增/更新数只计已提交的影片。取消、单条读取失败、落库失败也会输出最终汇总；无变化的增量扫描通常为 `batches=0 db_ms=0`，但清理及版本操作单独计时。受系统计时精度影响（尤其 Windows），极短步骤可能显示 0；应结合批次数和其他阶段一起看。
 
-先看汇总里占时最大的阶段：`db_pct` 高时，再比较 SQL 各部分与 `db_commit_ms`；`walk_ms`、`source_ms`、`verify_ms` 高时优先看目录和属性 I/O；`prepare_ms` 高时看 NFO 读取与解析。数据库调用耗时包含可能的锁等待，但 `db_begin_ms`、首条写入或提交慢本身不能证明是写锁竞争。
+先看汇总里占时最大的阶段：`db_pct` 高时，再比较 SQL 各部分与 `db_commit_ms`；`walk_ms`、`source_ms`、`verify_ms` 高时优先看目录和属性 I/O；`prepare_ms` 高时比较 `nfo_read_ms`（文件读取）、`nfo_parse_ms`（XML 解码）、`metadata_ms`（字段转换）：读取占比高时检查挂载盘/网络文件读取；解析占比高时检查 NFO 大小和 XML 处理。读取计时包含文件 API、分配及等待，不能单凭它断言物理磁盘性能。可用 `nfo_read_ms / nfo_reads` 和 `nfo_parse_ms / nfo_parses` 计算平均每次耗时；次数为 0 时无平均值。数据库调用耗时包含可能的锁等待，但 `db_begin_ms`、首条写入或提交慢本身不能证明是写锁竞争。
 
 正常批次详情「扫描落库批次耗时」仅在现有 `debug: true` 配置下输出（修改配置后重启）；至少 1 秒的慢批次在默认级别也输出，同轮最多每 5 秒一条，失败批次始终告警。正常快速局部刷新仅在 debug 下记录开始和汇总，耗时至少 1 秒、取消或失败时默认可见。进展日志在调用返回后的循环检查点输出，单次文件/数据库调用阻塞时不会保证每 5 秒出现一条日志；`RescanOne` 单条重扫不输出这些扫描汇总。
 
@@ -185,12 +189,14 @@ Split/
 - 标签和年份使用 `{Name, Id}`，分级使用 `{Name}`，制片商使用 Studio 项；标签/制片商 ID 与影片列表筛选共用。影片列表支持 `OfficialRatings`（多个值用 `|` 或逗号分隔），与年份、标签、制片商筛选组合，并参与响应缓存键。
 - `GET /Users` 返回当前管理员的 UserDto 数组，需要访问令牌；支持 `IsHidden`、`IsDisabled`、`IsGuest`。`POST /Users/{uid}/Authenticate` 接收 JSON 或表单 `Pw`，校验密码并返回登录令牌；用户 ID 使用本服务返回的 `1`，不接受其它 Emby 服务器的旧用户 ID。
 - `GET /Library/VirtualFolders` 返回实际配置的媒体库数组，含 `Name`、`Locations`、`ItemId`、`Id`、`CollectionType`、`LibraryOptions`。库 ID 与 Views 一致；自动生成的合集视图不作为实际配置目录返回。
+- `GET /Library/VirtualFolders/Query` 返回同一批配置目录的分页对象，包含 `Items`、`TotalRecordCount`、`StartIndex`，支持 `StartIndex`、`Limit`；空页返回 `Items: []`。
+- `GET /Persons` 返回可见影片关联的演员 Person 项，使用现有演员 ID；支持上述媒体库/合集范围、搜索、名称范围、排序和分页。图片优先使用本地演员头像，没有头像时回退到参演影片海报；`EnableImages=false` 可关闭图片标识。演员名来自 SQLite 索引，暂不支持导演等其它人物类型或全部 Emby 高级查询参数。
 - `GET /Items/{id}/ThumbnailSet` 返回 `{AspectRatio: 0, Thumbnails: []}`；当前未生成播放进度预览帧，空集合表示无预览。它与海报缩略图、剧照无关，也不会触发下载或抽帧。未知或不可见影片返回 404。
 - 上述接口同时提供根路径、`/emby` 前缀和全小写路径；除密码登录外均需鉴权。
 
 ## Web 管理后台
 
-`http://127.0.0.1:18080/admin` 提供：
+`http://127.0.0.1:18080/admin`（也可访问 `/web/index.html`，返回相同控制台 HTML，页面登录后使用）提供：
 - 总览统计、媒体库管理（可删除库索引）、扫描/重建索引（带实时进度）
 - 媒体墙（海报墙 + 无限滚动 + 在线播放；状态/协议筛选、搜索、排序、重读源、删索引）
 - 影片详情页（`/admin#item/<id>`，可直链/刷新/浏览器前进后退）：背景图 hero + 播放/探测/刮削/重读源，简介、剧照、演员、相似影片、媒体信息（ffprobe 流信息）、元数据与文件路径分区；点演员/类型/厂商/标签/合集可带该筛选跳回媒体墙（标签同时以芯片显示在标题旁）

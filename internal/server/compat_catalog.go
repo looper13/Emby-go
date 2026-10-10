@@ -22,10 +22,38 @@ func (a *App) users(c *gin.Context) {
 }
 
 func (a *App) virtualFolders(c *gin.Context) {
-	libraries, err := a.db.Libraries()
+	folders, err := a.virtualFolderItems()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	c.JSON(http.StatusOK, folders)
+}
+
+func (a *App) virtualFoldersQuery(c *gin.Context) {
+	folders, err := a.virtualFolderItems()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	start, _ := strconv.Atoi(c.DefaultQuery("StartIndex", "0"))
+	if start < 0 {
+		start = 0
+	}
+	total := len(folders)
+	limit, err := strconv.Atoi(c.DefaultQuery("Limit", strconv.Itoa(total)))
+	if err != nil || limit < 0 {
+		limit = total
+	}
+	pageStart := min(start, total)
+	pageEnd := pageStart + min(limit, total-pageStart)
+	c.JSON(http.StatusOK, gin.H{"Items": folders[pageStart:pageEnd], "TotalRecordCount": total, "StartIndex": start})
+}
+
+func (a *App) virtualFolderItems() ([]gin.H, error) {
+	libraries, err := a.db.Libraries()
+	if err != nil {
+		return nil, err
 	}
 	folders := make([]gin.H, 0, len(libraries))
 	for _, library := range libraries {
@@ -40,7 +68,7 @@ func (a *App) virtualFolders(c *gin.Context) {
 			},
 		})
 	}
-	c.JSON(http.StatusOK, folders)
+	return folders, nil
 }
 
 // ThumbnailSet describes timeline preview frames, not poster/backdrop images.
@@ -67,6 +95,7 @@ func (a *App) thumbnailSet(c *gin.Context) {
 
 func (a *App) tagsList(c *gin.Context)        { a.catalogList(c, "Tag") }
 func (a *App) studios(c *gin.Context)         { a.catalogList(c, "Studio") }
+func (a *App) persons(c *gin.Context)         { a.catalogList(c, "Person") }
 func (a *App) years(c *gin.Context)           { a.catalogList(c, "Year") }
 func (a *App) officialRatings(c *gin.Context) { a.catalogList(c, "OfficialRating") }
 
@@ -106,14 +135,27 @@ func (a *App) catalogList(c *gin.Context, kind string) {
 	minimum := strings.ToLower(c.Query("NameStartsWithOrGreater"))
 	maximum := strings.ToLower(c.Query("NameLessThan"))
 	desc := strings.EqualFold(c.Query("SortOrder"), "Descending")
-	key := responseKey("catalog", a.cacheScope(libraryID), kind, collection, start, limit, term, prefix, minimum, maximum, desc, c.Query("EnableImages"))
+	actorVersion := ""
+	if kind == "Person" {
+		actorVersion = a.db.ActorVersion()
+	}
+	key := responseKey("catalog", a.cacheScope(libraryID), kind, collection, start, limit, term, prefix, minimum, maximum, desc, c.Query("EnableImages"), actorVersion)
 	a.cachedResponse(c, key, 30*time.Second, func() ([]byte, error) {
-		names, err := a.db.CatalogNames(kind, libraryID, collection)
+		var names []string
+		var err error
+		if kind == "Person" {
+			names, err = a.db.Persons(libraryID, collection)
+		} else {
+			names, err = a.db.CatalogNames(kind, libraryID, collection)
+		}
 		if err != nil {
 			return nil, err
 		}
 		filtered := make([]string, 0, len(names))
 		for _, name := range names {
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
 			lower := strings.ToLower(name)
 			if (term == "" || strings.Contains(lower, term)) && (prefix == "" || strings.HasPrefix(lower, prefix)) && (minimum == "" || lower >= minimum) && (maximum == "" || lower < maximum) {
 				filtered = append(filtered, name)
@@ -150,11 +192,17 @@ func (a *App) catalogList(c *gin.Context, kind string) {
 				item["Id"] = entityId(kind, name)
 			case "Year":
 				item["Id"] = name
-			case "Studio":
-				item["Id"], item["Type"], item["IsFolder"], item["ServerId"] = entityId(kind, name), kind, true, a.serverID
+			case "Studio", "Person":
+				item["Id"], item["Type"], item["IsFolder"], item["ServerId"] = entityId(kind, name), kind, kind == "Studio", a.serverID
 				item["ImageTags"] = gin.H{}
 				if !strings.EqualFold(c.Query("EnableImages"), "false") {
-					if poster := a.entityPosterPath(kind, name); poster != "" {
+					avatarTag := ""
+					if kind == "Person" {
+						_, avatarTag = a.personAvatar(name)
+					}
+					if avatarTag != "" {
+						item["ImageTags"] = gin.H{"Primary": avatarTag}
+					} else if poster := a.entityPosterPath(kind, name); poster != "" {
 						item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
 					}
 				}

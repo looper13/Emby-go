@@ -307,7 +307,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			return nil
 		}
 		started = time.Now()
-		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO)
+		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO, &perf.preparation)
 		perf.prepare += time.Since(started)
 		if outcome.Failed != 0 {
 			result.add(outcome)
@@ -498,7 +498,7 @@ func stackedGroup(group []candidate) (candidate, []candidate, bool) {
 
 func scanCandidate(s *store.Store, lib store.Library, item candidate, additionalParts []string, fallbackNFO string, result *Result, paths map[string]struct{}) error {
 	paths[item.path] = struct{}{}
-	entry, outcome := prepareCandidate(lib, item, additionalParts, fallbackNFO)
+	entry, outcome := prepareCandidate(lib, item, additionalParts, fallbackNFO, nil)
 	if outcome.Failed == 0 {
 		if err := s.SaveScannedMovies([]store.ScannedMovie{entry}); err != nil {
 			return err
@@ -508,22 +508,34 @@ func scanCandidate(s *store.Store, lib store.Library, item candidate, additional
 	return nil
 }
 
-func prepareCandidate(lib store.Library, item candidate, additionalParts []string, fallbackNFO string) (store.ScannedMovie, Result) {
+func prepareCandidate(lib store.Library, item candidate, additionalParts []string, fallbackNFO string, timing *preparationStats) (store.ScannedMovie, Result) {
 	result := Result{}
 	movie := store.Movie{LibraryID: lib.ID, SourcePath: item.path, OutputDir: filepath.Dir(item.path), Status: "pending", AdditionalParts: additionalParts}
 	var actors []store.ActorRef
 	nfoPath := strings.TrimSuffix(item.path, filepath.Ext(item.path)) + ".nfo"
-	meta, nfoErr := nfo.Read(nfoPath)
+	readNFO := func(path string) (nfo.MovieMeta, error) {
+		if timing == nil {
+			return nfo.Read(path)
+		}
+		meta, stats, err := nfo.ReadWithStats(path)
+		timing.addNFO(stats)
+		return meta, err
+	}
+	meta, nfoErr := readNFO(nfoPath)
 	if nfoErr != nil && fallbackNFO != "" {
 		nfoPath = fallbackNFO
-		meta, nfoErr = nfo.Read(fallbackNFO)
+		meta, nfoErr = readNFO(fallbackNFO)
 	}
 	switch {
 	case nfoErr == nil:
+		metadataStarted := time.Now()
 		applyMeta(&movie, meta, nfoPath)
 		// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
 		for _, actor := range meta.Actors {
 			actors = append(actors, store.ActorRef{Name: actor.Name, AvatarURL: strings.TrimSpace(actor.Thumb)})
+		}
+		if timing != nil {
+			timing.metadata += time.Since(metadataStarted)
 		}
 		result.Success++
 	case errors.Is(nfoErr, fs.ErrNotExist):

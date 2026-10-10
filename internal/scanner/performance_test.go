@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"testing"
 )
 
@@ -58,6 +59,25 @@ func TestScanPerformanceSummaryIncludesWritesAndSkips(t *testing.T) {
 	if unchanged["skipped"] != float64(1) || unchanged["batches"] != float64(0) || unchanged["db_ms"] != float64(0) {
 		t.Fatalf("unchanged scan reported unnecessary writes: %v", unchanged)
 	}
+	if first["nfo_reads"] != float64(1) || first["nfo_parses"] != float64(1) || first["nfo_bytes"].(float64) <= 0 {
+		t.Fatalf("initial scan omitted NFO work: %v", first)
+	}
+	for _, field := range []string{"nfo_read_ms", "nfo_parse_ms", "metadata_ms", "nfo_reads", "nfo_parses", "nfo_bytes"} {
+		if unchanged[field] != float64(0) {
+			t.Fatalf("unchanged scan reported NFO work for %s: %v", field, unchanged)
+		}
+	}
+	var preparation float64
+	for _, field := range []string{"nfo_read_ms", "nfo_parse_ms", "metadata_ms"} {
+		value, ok := first[field].(float64)
+		if !ok || value < 0 {
+			t.Fatalf("missing/invalid preparation duration %s: %v", field, first)
+		}
+		preparation += value
+	}
+	if preparation > first["prepare_ms"].(float64)+0.01 {
+		t.Fatalf("preparation substeps exceed enclosing stage: %v", first)
+	}
 	var accounted float64
 	for _, field := range []string{"walk_ms", "index_ms", "source_ms", "prepare_ms", "verify_ms", "db_ms", "cleanup_ms", "version_ms", "other_ms"} {
 		value, ok := first[field].(float64)
@@ -71,6 +91,54 @@ func TestScanPerformanceSummaryIncludesWritesAndSkips(t *testing.T) {
 	}
 	if len(performanceRecords(t, output, "扫描落库批次耗时")) != 0 {
 		t.Fatalf("ordinary batches should only be logged at debug: %s", output)
+	}
+}
+
+func TestScanPerformanceIncludesNFOFallbackAndFailures(t *testing.T) {
+	valid := "<movie><title>Fallback</title></movie>"
+	broken := "<movie><title>Broken"
+	for _, mode := range []string{"missing-primary", "broken-primary", "both-missing", "broken-fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			output := capturePerformanceLogs(t)
+			root := t.TempDir()
+			writeScanFile(t, root, "movie-CD1.strm", "https://media.test/cd1.mp4")
+			writeScanFile(t, root, "movie-CD2.strm", "https://media.test/cd2.mp4")
+			want := Result{Added: 1, Success: 1}
+			parses, bytes := 1, len(valid)
+			switch mode {
+			case "missing-primary":
+				writeScanFile(t, root, "movie.nfo", valid)
+			case "broken-primary":
+				writeScanFile(t, root, "movie-CD1.nfo", broken)
+				writeScanFile(t, root, "movie.nfo", valid)
+				parses, bytes = 2, len(broken)+len(valid)
+			case "both-missing":
+				want, parses, bytes = Result{Added: 1, Pending: 1}, 0, 0
+			case "broken-fallback":
+				writeScanFile(t, root, "movie.nfo", broken)
+				want, bytes = Result{Failed: 1}, len(broken)
+			}
+			database, library := scanLibrary(t, root)
+			requireScan(t, database, library, want)
+			records := performanceRecords(t, output, "扫描性能汇总")
+			if len(records) != 1 {
+				t.Fatalf("missing summary: %s", output)
+			}
+			summary := records[0]
+			if summary["nfo_reads"] != float64(2) || summary["nfo_parses"] != float64(parses) || summary["nfo_bytes"] != float64(bytes) {
+				t.Fatalf("fallback/failed attempts missing: %v", summary)
+			}
+			if parses == 0 && summary["nfo_parse_ms"] != float64(0) {
+				t.Fatalf("missing files should not be parsed: %v", summary)
+			}
+			if want.Failed > 0 {
+				if summary["status"] != "failed" || summary["batches"] != float64(0) || summary["metadata_ms"] != float64(0) {
+					t.Fatalf("failed NFO was converted or persisted: %v", summary)
+				}
+			} else if movie := visible(t, database); want.Success > 0 && (len(movie) != 1 || movie[0].NFOPath != filepath.Join(root, "movie.nfo")) {
+				t.Fatalf("fallback metadata changed: %+v", movie)
+			}
+		})
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"emby-go/internal/nfo"
 	"emby-go/internal/store"
 )
 
@@ -16,12 +17,26 @@ const performanceLogInterval = 5 * time.Second
 
 var scanSequence atomic.Uint64
 
+type preparationStats struct {
+	nfo      nfo.ReadStats
+	metadata time.Duration
+}
+
+func (p *preparationStats) addNFO(stats nfo.ReadStats) {
+	p.nfo.Read += stats.Read
+	p.nfo.Parse += stats.Parse
+	p.nfo.Reads += stats.Reads
+	p.nfo.Parses += stats.Parses
+	p.nfo.Bytes += stats.Bytes
+}
+
 type scanPerformance struct {
 	logger                                      *slog.Logger
 	started, lastReport, lastSlowBatch          time.Time
 	wholeLibrary                                bool
 	walk, index, source, prepare, verify        time.Duration
 	cleanup, version                            time.Duration
+	preparation                                 preparationStats
 	write                                       store.ScanWriteStats
 	batches, processed, candidates, slowBatches int
 	maxBatch                                    time.Duration
@@ -94,6 +109,9 @@ func (p *scanPerformance) attrs(result Result) []any {
 		"total_ms", milliseconds(total), "walk_ms", milliseconds(p.walk),
 		"index_ms", milliseconds(p.index), "source_ms", milliseconds(p.source),
 		"prepare_ms", milliseconds(p.prepare), "verify_ms", milliseconds(p.verify),
+		"nfo_read_ms", milliseconds(p.preparation.nfo.Read), "nfo_parse_ms", milliseconds(p.preparation.nfo.Parse),
+		"metadata_ms", milliseconds(p.preparation.metadata),
+		"nfo_reads", p.preparation.nfo.Reads, "nfo_parses", p.preparation.nfo.Parses, "nfo_bytes", p.preparation.nfo.Bytes,
 		"cleanup_ms", milliseconds(p.cleanup), "version_ms", milliseconds(p.version),
 		"other_ms", milliseconds(other), "db_pct", math.Round(float64(p.write.Total)*10000/float64(max(total, 1))) / 100,
 		"batches", p.batches, "slow_batches", p.slowBatches, "max_batch_ms", milliseconds(p.maxBatch),
