@@ -1,0 +1,22 @@
+<script setup lang="ts">
+import { onMounted, onScopeDispose, ref } from 'vue';
+import { useScrapePreviewStore } from '../../stores/scrape-preview'; import { useTasksStore } from '../../stores/tasks';
+import CandidateList from './CandidateList.vue'; import ScrapeDiff from './ScrapeDiff.vue'; import MediaImage from '../media/MediaImage.vue';
+const state = useScrapePreviewStore(), tasks = useTasksStore(); const shell = ref<HTMLElement>(), closeButton = ref<HTMLButtonElement>();
+let previousOverflow = '';
+function keyboard(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); state.close(); return; }
+  if (event.key !== 'Tab' || !shell.value) return;
+  const all = Array.from(shell.value.querySelectorAll<HTMLElement>('button, input, select, a[href], [tabindex]:not([tabindex="-1"])')).filter(el => !el.hasAttribute('disabled') && el.getClientRects().length > 0);
+  const first = all[0], last = all.at(-1); if (event.shiftKey && (document.activeElement === first || !shell.value.contains(document.activeElement))) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && (document.activeElement === last || !shell.value.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+}
+onMounted(() => { previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden'; closeButton.value?.focus(); window.addEventListener('keydown', keyboard, true); });
+onScopeDispose(() => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', keyboard, true); });
+</script>
+<template><div id="scrape-overlay" class="scrape-overlay" @click.self="state.close()"><div ref="shell" class="scrape-modal" style="height:min(740px,calc(100dvh - 48px))" role="dialog" aria-modal="true" aria-labelledby="scrape-preview-title"><div class="scrape-head"><strong id="scrape-preview-title">刮削预览与确认</strong><button id="scrape-close" ref="closeButton" class="icon-btn" title="取消 (Esc)" @click="state.close()">✕</button></div><div id="scrape-body" class="scrape-body" style="flex:1;min-height:0">
+  <p v-if="state.error" class="hint" role="alert" style="color:var(--danger)">{{ state.error }} <button class="btn btn-sm" @click="state.current && state.open(state.current.movieId, state.current.confirmed)">重试</button></p>
+  <p v-if="state.loading" class="hint">{{ state.preview ? '正在读取详情…' : '正在搜索候选…' }}</p>
+  <p v-if="state.preview && !state.preview.candidates.length" class="hint">没有搜到候选（搜索词：{{ state.preview.query || '—' }}）。可先在详情里补番号，或在 NFO 里填好番号后重试。</p>
+  <div v-if="state.preview?.candidates.length" class="scrape-cols"><CandidateList :candidates="state.preview.candidates" :provider="state.inspect?.provider" :id="state.inspect?.id" :query="state.preview.query" :expected="state.preview.expected_number" :disabled="state.writing" @select="state.select" /><div v-if="state.inspect" class="scrape-detail"><div class="scrape-detail-head"><MediaImage v-if="state.inspect.poster" :src="state.inspect.poster" alt="候选海报" /><div><h3 style="margin:0 0 6px">{{ state.inspect.title || '—' }}</h3><p class="hint" style="margin:0 0 8px">{{ [state.inspect.number, state.inspect.provider, state.inspect.release_date, state.inspect.runtime ? state.inspect.runtime + ' 分钟' : '', state.inspect.score ? '★ ' + state.inspect.score : ''].filter(Boolean).join(' · ') }}</p><p class="detail-plot">{{ state.inspect.summary || '（无简介）' }}</p></div></div><ScrapeDiff :fields="state.inspect.fields" /><div><h3 class="scrape-h3">图片</h3><div class="scrape-images"><div v-for="image in state.inspect.images" :key="image.name" class="scrape-image" :class="{'is-kept':image.exists}"><MediaImage v-if="image.preview" :src="image.preview" alt="" /><span v-else class="noimg"></span><span>{{ image.name }}{{ image.exists ? '（已存在，只补缺失时不覆盖）' : '' }}</span></div></div></div></div></div>
+</div><div class="scrape-foot" style="padding:16px;flex-shrink:0;border-top:1px solid var(--line)"><label v-if="state.inspect" class="switch-lg"><input id="scrape-force" v-model="state.overwrite" type="checkbox" :disabled="state.writing"> 强制覆盖（不勾选 = 只补缺失）</label><button id="scrape-cancel-btn" class="btn" @click="state.close()">取消</button><button id="scrape-confirm" class="btn btn-accent" :disabled="!state.inspect || state.loading || state.writing || tasks.mutationBusy" @click="state.confirm()">{{ state.writing ? '正在写入…' : '确认写入' }}</button></div>
+</div></div></template>

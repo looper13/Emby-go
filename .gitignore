@@ -5,6 +5,18 @@
 *.exe~
 /dist/
 
+# Vue source is tracked; generated output and browser evidence are not.
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.ui-build.lock/
+/frontend/playwright-report/
+/frontend/test-results/
+/internal/server/web_dist/
+/internal/server/web_dist.next/
+/internal/server/web_dist.previous/
+/vue-migration/screenshots/
+/vue-migration/artifacts/
+
 # 第三方参考源码（体积大，不随仓库同步）
 /src/
 

@@ -1,0 +1,109 @@
+{
+  "actors": [
+    {
+      "name": "Actor Two",
+      "has_image": false
+    },
+    {
+      "name": "演员乙",
+      "has_image": false
+    },
+    {
+      "name": "演员甲",
+      "has_image": false
+    }
+  ],
+  "files": [
+    {
+      "index": 1,
+      "path": "TEMP_LEGACY\\media\\L005\\ABF-005.strm",
+      "name": "ABF-005.strm",
+      "role": "main",
+      "size": 37,
+      "streams": [
+        {
+          "Index": 0,
+          "IsDefault": true,
+          "IsExternal": false,
+          "IsForced": false,
+          "Type": "Video"
+        }
+      ],
+      "probed": false
+    }
+  ],
+  "has_userdata": false,
+  "images": [
+    {
+      "Filename": "poster.png",
+      "ImageTag": "511f184b98427ee539d721a25e9dc6d3",
+      "ImageType": "Primary",
+      "Path": "TEMP_LEGACY\\media\\L005\\poster.png"
+    },
+    {
+      "Filename": "fanart.png",
+      "ImageIndex": 0,
+      "ImageTag": "06e2a84c4e33b30f71f748025c783e27",
+      "ImageType": "Backdrop",
+      "Path": "TEMP_LEGACY\\media\\L005\\fanart.png"
+    }
+  ],
+  "library_name": "Live Fixtures",
+  "modified_at": "2026-10-10T09:20:31+08:00",
+  "movie": {
+    "id": 5,
+    "library_id": 1,
+    "source_path": "TEMP_LEGACY\\media\\L005\\ABF-005.strm",
+    "source_protocol": "http",
+    "source_container": "mp4",
+    "Status": "success",
+    "NFOPath": "TEMP_LEGACY\\media\\L005\\ABF-005.nfo",
+    "OutputDir": "TEMP_LEGACY\\media\\L005",
+    "Number": "ABF-005",
+    "Title": "ABF-005 深夜的测试影片",
+    "OriginalTitle": "ABF-005 深夜的测试影片",
+    "Plot": "L5 的剧情简介：用于媒体墙与详情页夹具采集（混合中文 plot 内容）。",
+    "Year": 2020,
+    "Premiere": "2020-05-15",
+    "Rating": 5.5,
+    "Director": "Director-ABF-005",
+    "Series": "",
+    "Maker": "",
+    "Label": "",
+    "collection": "",
+    "Genres": [
+      "Drama",
+      "剧情"
+    ],
+    "Tags": [
+      "Tag-A",
+      "深夜系列"
+    ],
+    "Studios": [
+      "Studio A"
+    ],
+    "Taglines": null,
+    "official_rating": "",
+    "sortname": "",
+    "provider_id": "",
+    "PosterPath": "TEMP_LEGACY\\media\\L005\\poster.png",
+    "BackdropPath": "TEMP_LEGACY\\media\\L005\\fanart.png",
+    "BackdropPaths": [
+      "TEMP_LEGACY\\media\\L005\\fanart.png"
+    ],
+    "LandscapePath": "",
+    "trailer_url": "",
+    "cover_url": "",
+    "RuntimeSeconds": 3900,
+    "AdditionalParts": null,
+    "created_at": "2026-10-10T01:23:51Z",
+    "updated_at": "2026-10-10T01:23:51Z"
+  },
+  "playable": true,
+  "userdata": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "Played": false,
+    "IsFavorite": false
+  }
+}

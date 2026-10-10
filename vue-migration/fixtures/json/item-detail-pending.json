@@ -1,0 +1,72 @@
+{
+  "actors": [],
+  "files": [
+    {
+      "index": 1,
+      "path": "TEMP_LEGACY\\media\\L301\\ABF-301.strm",
+      "name": "ABF-301.strm",
+      "role": "main",
+      "size": 37,
+      "streams": [
+        {
+          "Index": 0,
+          "IsDefault": true,
+          "IsExternal": false,
+          "IsForced": false,
+          "Type": "Video"
+        }
+      ],
+      "probed": false
+    }
+  ],
+  "has_userdata": false,
+  "images": [],
+  "library_name": "Live Fixtures",
+  "modified_at": "2026-10-10T09:21:09+08:00",
+  "movie": {
+    "id": 301,
+    "library_id": 1,
+    "source_path": "TEMP_LEGACY\\media\\L301\\ABF-301.strm",
+    "source_protocol": "http",
+    "source_container": "mp4",
+    "Status": "pending",
+    "NFOPath": "",
+    "OutputDir": "TEMP_LEGACY\\media\\L301",
+    "Number": "",
+    "Title": "",
+    "OriginalTitle": "",
+    "Plot": "",
+    "Year": 0,
+    "Premiere": "",
+    "Rating": 0,
+    "Director": "",
+    "Series": "",
+    "Maker": "",
+    "Label": "",
+    "collection": "",
+    "Genres": null,
+    "Tags": null,
+    "Studios": null,
+    "Taglines": null,
+    "official_rating": "",
+    "sortname": "",
+    "provider_id": "",
+    "PosterPath": "",
+    "BackdropPath": "",
+    "BackdropPaths": null,
+    "LandscapePath": "",
+    "trailer_url": "",
+    "cover_url": "",
+    "RuntimeSeconds": 0,
+    "AdditionalParts": null,
+    "created_at": "2026-10-10T01:23:51Z",
+    "updated_at": "2026-10-10T01:23:51Z"
+  },
+  "playable": false,
+  "userdata": {
+    "PlaybackPositionTicks": 0,
+    "PlayCount": 0,
+    "Played": false,
+    "IsFavorite": false
+  }
+}

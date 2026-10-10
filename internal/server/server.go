@@ -265,16 +265,13 @@ func (a *App) routes() {
 	r := a.router
 
 	// Web 管理前端与内部初始化端点（无 /emby 前缀）
-	r.GET("/", a.dashboard)
-	r.GET("/admin", a.dashboard)
-	r.GET("/web", a.dashboard)
-	r.GET("/web/index.html", a.dashboard)
 	r.GET("/favicon.ico", a.favicon)
 	r.HEAD("/favicon.ico", a.favicon)
 	r.GET("/web/login.js", a.webAsset)
 	r.GET("/web/app.js", a.webAsset)
 	r.GET("/web/style.css", a.webAsset)
 	r.GET("/web/vendor/artplayer.min.js", a.webAsset)
+	registerWebUIRoutes(r, webUIFiles)
 	r.GET("/api/auth/status", noStore, a.authStatus)
 	r.POST("/api/auth/initialize", noStore, a.initialize)
 	// 刮削预览用的图片代理刻意不挂鉴权：它要能直接放进 <img src>，而浏览器不会给

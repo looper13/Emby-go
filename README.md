@@ -11,11 +11,27 @@
 
 ### 构建
 
+Vue 3 控制台已覆盖媒体墙、详情、播放器、管理、任务与刮削页面。`/`、`/web`、`/admin`、`/web/index.html` 返回 Vue 外壳；前两者认证成功后进入 `/admin`，旧 hash/query 书签仍可恢复。迁移入口 `/admin-vue` 重定向至 `/admin`，保留查询及 fragment。进展及未验项见 [P7 实施记录](vue-migration/P7/progress.md) 和 [Vue 迁移开发计划](frontend-vue-migration-plan.md)。
+
+发行版必须使用 `embedui`，构建机器需要 Go 1.25+、Node **24.14.1** 与 npm **11.11.0**，运行机器不需要 Node/npm：
+
 ```bash
-go build -o metatube ./cmd/metatube
+npm --prefix frontend ci
+npm --prefix frontend run typecheck
+npm --prefix frontend run test:unit -- --run
+npm --prefix frontend run build
+go build -tags embedui -o metatube ./cmd/metatube
 ```
 
-Linux amd64 部署可直接执行 `bash build.sh`，产物为 `dist/emby-go-linux-amd64`。systemd 服务模板和完整安装、权限、升级说明见 [Linux 部署](deploy/README.md)。
+Linux amd64 部署可直接执行 `bash build.sh`，产物为 `dist/emby-go-linux-amd64`。systemd 服务模板和完整安装、权限、升级说明见 [Linux 部署](deploy/README.md)。Linux systemd 冒烟及回滚尚待隔离 Linux 环境验证。
+
+默认 `go build -o metatube ./cmd/metatube` 用于后端开发，不需要 Node；开发 UI 读取包目录中的 `web_dist` 真实构建产物。缺少资源时上述页面返回 503，业务 API 仍可用。旧 `internal/server/web/`、`web_test/` 暂作冻结比对基线保留，待 Linux 验收后完成移除；正式页面不加载旧脚本。
+
+本地热更新：`npm --prefix frontend run dev`，访问命令显示地址的 `/web/ui/` 路径。Go 默认代理目标为 `http://127.0.0.1:18080`，可通过 `EMBY_DEV_PROXY` 指向隔离测试服务。浏览器同源不同端口的登录状态不共享。`build.sh`、`build.bat` 和 release workflow 会先构建一次 Vue 再嵌入二进制；Vite 只清理 `frontend/dist`，不会清理旧 `web/`。
+
+不连接现有库的预览：`npm --prefix frontend run dev:isolated`，自动建立临时 Go/Redis/媒体目录并打印一次性账号，Ctrl+C 后清理。浏览器集成：设置 `PW_CHANNEL=msedge`（本机 Edge）后执行 `npm --prefix frontend run test:e2e`；默认使用已安装的 Playwright Chromium。测试只访问临时实例。
+
+注意现有 `TestRedisBehavior` 硬编码使用本机 6379 的 DB 15 并清理缓存键。在带真实 Redis 数据的开发机器上使用 `npm --prefix frontend run test:go-regression`，该命令显式排除此项并记录未运行原因，不把它记为通过；完整测试只应在专用环境中运行。
 
 ### 运行
 
@@ -260,11 +276,18 @@ server_domains: []        # 前端“服务器域名切换”候选
 
 ```bash
 go vet ./...
-go test ./...
-node --test internal/server/web_test/app.test.cjs
+npm --prefix frontend run test:go-regression
+npm --prefix frontend run typecheck
+npm --prefix frontend run test:unit -- --run
+npm --prefix frontend run test:build
+npm --prefix frontend run build
+go vet -tags embedui ./...
+npm --prefix frontend run test:e2e
 ```
 
-前端回归使用 Node 内置测试运行器，无需安装 npm 依赖；覆盖页面请求隔离、媒体墙恢复与重试、详情展开状态、图片选择和播放器错误处理。布局仍需浏览器验证。
+Vue 回归使用 Vitest/Vue Test Utils 和真实 embedui 服务的 Playwright 场景。Windows PowerShell 设置 `$env:PW_CHANNEL='msedge'` 后运行浏览器测试。大库检查设置 `$env:EMBY_E2E_MEDIA_COUNT='8000'`，只运行 `performance.spec.ts`；常规全套默认使用 307 条夹具，明确跳过大库及未指定旧二进制的回滚场景。冻结旧版的 17 项基线仍可用 `node --test internal/server/web_test/app.test.cjs` 独立比对。
+
+`npm --prefix frontend run test:release` 从当前源码建立不含依赖/生成资源的临时副本，执行 `npm ci` 后生成五平台 embedui 二进制及固定迁移前提交 `5c457893698e74928277d013931f55a2aafb1c84` 的旧版回滚二进制（可用 `EMBY_RELEASE_PREVIOUS_REF` 指定其他基准），结果位于忽略目录 `vue-migration/artifacts/P7/release/`。这是干净源码导出验证；提交后的真实干净检出仍待复验。用 `EMBY_E2E_BINARY` 指定生成的 Windows 发行二进制，`EMBY_E2E_ROLLBACK_BIN` 指定旧版，即可在同一临时数据库中验证回滚。交叉编译不代表 Linux/macOS 已运行。
 
 ### 发布（GitHub Actions）
 

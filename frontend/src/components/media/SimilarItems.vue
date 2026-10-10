@@ -1,0 +1,5 @@
+<script setup lang="ts">
+import type { SimilarDto } from '../../api/contracts'; import { imageURL } from '../../lib/image-url'; import { fmtDuration } from '../../lib/media'; import MediaImage from './MediaImage.vue';
+defineProps<{ items: SimilarDto[] }>(); const emit = defineEmits<{ open: [id: string] }>();
+</script>
+<template><section id="item-similar" class="detail-section" :hidden="!items.length"><h3 v-if="items.length">相似影片 <small>{{ items.length }}</small></h3><div v-if="items.length" class="similar-row"><button v-for="item in items" :key="item.Id" class="similar-card" :data-similar="item.Id" :title="item.Name" @click="emit('open', item.Id)"><span class="similar-poster"><MediaImage v-if="item.ImageTags?.Primary" :src="imageURL(item.Id, 'Primary', 320, item.ImageTags.Primary)" loading="lazy" alt="" /></span><strong>{{ item.Name || item.Id }}</strong><small>{{ [item.ProductionYear, item.RunTimeTicks ? fmtDuration(item.RunTimeTicks / 10000000) : '', item.CommunityRating ? `★ ${item.CommunityRating}` : ''].filter(Boolean).join(' · ') }}</small></button></div></section></template>

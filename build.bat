@@ -1,5 +1,19 @@
 @echo off
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
+
+node frontend\scripts\check-toolchain.mjs
+if errorlevel 1 exit /b 1
+call npm --prefix frontend ci
+if errorlevel 1 exit /b 1
+call npm --prefix frontend run typecheck
+if errorlevel 1 exit /b 1
+call npm --prefix frontend run test:unit -- --run
+if errorlevel 1 exit /b 1
+call npm --prefix frontend run test:build
+if errorlevel 1 exit /b 1
+call npm --prefix frontend run build
+if errorlevel 1 exit /b 1
 
 REM ======================================================
 REM         Emby-Go Build Script
@@ -46,19 +60,26 @@ for %%T in (windows/amd64 linux/amd64) do (
         echo Building !OUTFILE!
         echo ---------------------------------------------------
 
-        go build -o "!OUTFILE!" -ldflags "!LDFLAGS!" ./cmd/metatube
+        set TEMPFILE=!OUTFILE!.tmp-!RANDOM!
+        go build -tags embedui -o "!TEMPFILE!" -ldflags "!LDFLAGS!" ./cmd/metatube
         if errorlevel 1 (
             echo.
             echo Build failed: !GOOS!/!GOARCH!
-            pause
+            if exist "!TEMPFILE!" del /q "!TEMPFILE!"
             exit /b 1
         )
 
         where upx >nul 2>nul
         if !errorlevel!==0 (
             echo Compressing with UPX...
-            upx --best --lzma "!OUTFILE!"
+            upx --best --lzma "!TEMPFILE!"
+            if errorlevel 1 (
+                del /q "!TEMPFILE!"
+                exit /b 1
+            )
         )
+        move /y "!TEMPFILE!" "!OUTFILE!" >nul
+        if errorlevel 1 exit /b 1
     )
 )
 
@@ -69,4 +90,4 @@ echo Binaries in: %OUTDIR%
 echo ===========================================
 echo.
 
-pause
+exit /b 0

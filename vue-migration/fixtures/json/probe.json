@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "body": "",
+      "created_at": "2026-10-10T01:24:00Z",
+      "id": 1,
+      "method": "GET",
+      "path": "/no-such-path",
+      "query": ""
+    }
+  ]
+}

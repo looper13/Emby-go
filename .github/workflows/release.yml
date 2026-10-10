@@ -22,6 +22,30 @@ jobs:
           go-version: '1.25.x'
           cache: true
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked npm
+        run: npm install --global npm@11.11.0
+
+      - name: Build and verify UI
+        run: |
+          node frontend/scripts/check-toolchain.mjs
+          npm --prefix frontend ci
+          npm --prefix frontend run typecheck
+          npm --prefix frontend run test:unit -- --run
+          npm --prefix frontend run test:build
+          npm --prefix frontend run build
+          node --test internal/server/web_test/app.test.cjs
+          go vet ./...
+          go test ./...
+          go vet -tags embedui ./...
+          go test -tags embedui ./...
+
       - name: Build binaries
         run: |
           mkdir -p dist
@@ -37,7 +61,7 @@ jobs:
             name="${rest#*/}"
             echo ">> ${goos}/${goarch} -> dist/${name}"
             CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
-              -trimpath \
+              -tags embedui -trimpath \
               -ldflags "-s -w -X main.version=${version}" \
               -o "dist/${name}" ./cmd/metatube
           done

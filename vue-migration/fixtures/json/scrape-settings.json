@@ -1,0 +1,38 @@
+{
+  "avatars_dir": "TEMP_LEGACY\\avatars",
+  "concurrency": 2,
+  "configured": false,
+  "defaults": {
+    "BaseURL": "",
+    "Token": "",
+    "TimeoutSeconds": 30,
+    "Concurrency": 2,
+    "DownloadImages": true,
+    "ImageQuality": 90,
+    "AvatarsDir": "",
+    "Overwrite": false,
+    "TranslateTitle": true,
+    "TranslatePlot": true,
+    "Translate": {
+      "APIURL": "",
+      "APIKey": "",
+      "TargetLang": "ZH",
+      "Timeout": 30000000000
+    }
+  },
+  "download_images": true,
+  "image_quality": 90,
+  "metatube_token": "",
+  "metatube_url": "",
+  "overwrite": false,
+  "timeout_seconds": 30,
+  "translate": {
+    "api_key": "",
+    "api_url": "",
+    "configured": false,
+    "summary": true,
+    "target_lang": "ZH",
+    "timeout_seconds": 30,
+    "title": true
+  }
+}

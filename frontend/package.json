@@ -1,0 +1,42 @@
+{
+  "name": "emby-go-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "24.14.1",
+    "npm": "11.11.0"
+  },
+  "packageManager": "npm@11.11.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "vue-tsc --noEmit",
+    "test:unit": "vitest",
+    "test:build": "node --test scripts/build.test.mjs",
+    "test:e2e": "playwright test",
+    "dev:isolated": "node scripts/preview-local.mjs",
+    "test:go-build": "node scripts/verify-go.mjs",
+    "test:release": "node scripts/verify-release.mjs",
+    "test:go-regression": "node scripts/verify-regression.mjs",
+    "build": "node scripts/build.mjs",
+    "check:toolchain": "node scripts/check-toolchain.mjs"
+  },
+  "dependencies": {
+    "@lucide/vue": "1.54.0",
+    "pinia": "3.0.4",
+    "vue": "3.5.43",
+    "vue-router": "4.6.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@types/node": "24.19.2",
+    "@vitejs/plugin-vue": "6.0.9",
+    "@vue/test-utils": "2.4.6",
+    "jsdom": "26.1.0",
+    "parse5": "7.3.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.11",
+    "vue-tsc": "3.3.12"
+  }
+}

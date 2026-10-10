@@ -186,9 +186,12 @@ func TestEmbyEmptyBrowseQueries(t *testing.T) {
 }
 
 func TestWebIndexCompatibility(t *testing.T) {
+	original := webUIFiles
+	webUIFiles = webUIFixture(t)
+	t.Cleanup(func() { webUIFiles = original })
 	_, ts, _ := newProbeTestApp(t, t.TempDir())
 	resp, raw := embyRaw(t, ts, "GET", "/web/index.html", "", "")
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" || resp.Header.Get("Cache-Control") != "no-store" || !strings.Contains(string(raw), `id="app-shell"`) {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" || resp.Header.Get("Cache-Control") != "no-store" || string(raw) != string(webUIFixture(t)["index.html"].Data) {
 		t.Fatalf("index: %d %v %s", resp.StatusCode, resp.Header, raw)
 	}
 	_, admin := embyRaw(t, ts, "GET", "/admin", "", "")

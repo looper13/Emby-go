@@ -1,0 +1,29 @@
+{
+  "$comment": "CT-02 实体 ID 对照夹具。后端 server.entityId = lowercase(kind) + ':' + base64.RawURLEncoding(UTF-8(name))（internal/server/library.go:1215-1218）；前端 entityIdOf 用 btoa + URL-safe 替换 + 去 padding（app.js:899-904）。expected 于 2026-10-10 由 Go 标准库 base64.RawURLEncoding 直接生成（与后端同一 stdlib 调用），source=go-stdlib；P4 必须用仓库内 server.entityId 复核后再固定。",
+  "cases": [
+    {"id": "ascii-alice", "input": {"kind": "person", "name": "Alice"}, "expected": "person:QWxpY2U", "source": "go-stdlib", "note": ""},
+    {"id": "ascii-a", "input": {"kind": "person", "name": "A"}, "expected": "person:QQ", "source": "go-stdlib", "note": "1 字节 → 2 字符无 padding"},
+    {"id": "ascii-ab", "input": {"kind": "person", "name": "AB"}, "expected": "person:QUI", "source": "go-stdlib", "note": ""},
+    {"id": "ascii-bob", "input": {"kind": "person", "name": "Bob"}, "expected": "person:Qm9i", "source": "go-stdlib", "note": ""},
+    {"id": "genre-drama", "input": {"kind": "genre", "name": "Drama"}, "expected": "genre:RHJhbWE", "source": "go-stdlib", "note": ""},
+    {"id": "kind-uppercase-lowered", "input": {"kind": "Genre", "name": "Drama"}, "expected": "genre:RHJhbWE", "source": "go-stdlib", "note": "后端 ToLower(kind)；前端调用方须自始至终传小写"},
+    {"id": "ascii-plus", "input": {"kind": "person", "name": "+"}, "expected": "person:Kw", "source": "go-stdlib", "note": "标准 base64 为 Kw=="},
+    {"id": "ascii-slash", "input": {"kind": "person", "name": "/"}, "expected": "person:Lw", "source": "go-stdlib", "note": "标准 base64 为 Lw=="},
+    {"id": "plus-to-dash", "input": {"kind": "person", "name": "😀"}, "expected": "person:8J-YgA", "source": "go-stdlib", "note": "标准 base64 8J+YgA==，'+' → '-'；非 BMP 字符"},
+    {"id": "plus-to-dash-2", "input": {"kind": "person", "name": "🎬"}, "expected": "person:8J-OrA", "source": "go-stdlib", "note": "标准 base64 8J+OrA=="},
+    {"id": "slash-to-underscore", "input": {"kind": "person", "name": "ÿÿ"}, "expected": "person:w7_Dvw", "source": "go-stdlib", "note": "标准 base64 w7/Dvw==，'/' → '_'；U+00FF×2"},
+    {"id": "slash-to-underscore-2", "input": {"kind": "person", "name": "ÿÿÿ"}, "expected": "person:w7_Dv8O_", "source": "go-stdlib", "note": "标准 base64 w7/Dv8O/，两处 '/' → '_'"},
+    {"id": "cjk-name", "input": {"kind": "person", "name": "波多野结衣"}, "expected": "person:5rOi5aSa6YeO57uT6KGj", "source": "go-stdlib", "note": "UTF-8 多字节"},
+    {"id": "cjk-short", "input": {"kind": "person", "name": "波多"}, "expected": "person:5rOi5aSa", "source": "go-stdlib", "note": ""},
+    {"id": "ws-kept", "input": {"kind": "person", "name": "  A  "}, "expected": "person:ICBBICA", "source": "go-stdlib", "note": "不 trim/normalize：前后空白原样编码；前端 btoa 结果必须相同"},
+    {"id": "no-plus-slash", "input": {"kind": "person", "name": "★"}, "expected": "person:4piF", "source": "go-stdlib", "note": "无 padding 无替换的对照样本"},
+    {"id": "tag-cjk", "input": {"kind": "tag", "name": "剧情"}, "expected": "tag:5Ymn5oOF", "source": "go-stdlib", "note": ""},
+    {"id": "studio-space", "input": {"kind": "studio", "name": "Studio X"}, "expected": "studio:U3R1ZGlvIFg", "source": "go-stdlib", "note": "名称含空格（编码前不处理）"},
+    {"id": "collection-colon", "input": {"kind": "collection", "name": "系列:一号"}, "expected": "collection:57O75YiXOuS4gOWPtw", "source": "go-stdlib", "note": "名称含冒号（仅 kind 与名称间冒号是分隔符，名称内冒号照常编码）"}
+  ],
+  "acceptance": [
+    "同一输入两端字符串完全相等（含 kind 段与冒号）",
+    "person 实体 id 用于 /Items/:id/Images/Primary 时能取到头像或代表图（后端 virtual entity 分支，media.go:100-113）",
+    "前端不得对名称 trim/normalize/统一大小写"
+  ]
+}

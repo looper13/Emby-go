@@ -5,7 +5,7 @@ usage() {
   printf '%s\n' \
     'Usage: bash build.sh' \
     'Builds a Linux amd64 binary in dist/emby-go-linux-amd64.' \
-    'Requires Go 1.25 or newer. Optional environment: VERSION, OUT_DIR.'
+    'Requires Go 1.25+, Node 24.14.1, npm 11.11.0. Optional: VERSION, OUT_DIR.'
 }
 
 if (( $# > 0 )); then
@@ -25,6 +25,17 @@ fi
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$root"
 
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  printf '%s\n' 'Error: Node and npm are required on the build machine.' >&2
+  exit 1
+fi
+node frontend/scripts/check-toolchain.mjs
+npm --prefix frontend ci
+npm --prefix frontend run typecheck
+npm --prefix frontend run test:unit -- --run
+npm --prefix frontend run test:build
+npm --prefix frontend run build
+
 version="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || printf 'dev')}"
 commit="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
 build_time="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -43,7 +54,7 @@ trap 'rm -f -- "$temporary"' EXIT
 printf 'Building linux/amd64: version=%s commit=%s built=%s\n' "$version" "$commit" "$build_time"
 # Match release builds without CGO; v1 also runs on older x86-64 CPUs.
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build \
-  -mod=readonly -trimpath -buildvcs=false \
+  -tags embedui -mod=readonly -trimpath -buildvcs=false \
   -ldflags "-s -w -X main.version=$version -X main.commit=$commit -X main.buildTime=$build_time" \
   -o "$temporary" ./cmd/metatube
 

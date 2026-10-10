@@ -5,7 +5,7 @@
 > **媒体源只支持 `http(s)` 的 `.strm`**；`ed2k` 等非 HTTP 内容视为**不兼容**，在扫库/记录页提示，不进 Emby。
 > Web 提供**管理后台**（非影院浏览端），浏览海报墙通过 Yamby 等 Emby 客户端完成。
 > 支持规模 7000 → 1 万部。原则：不背历史包袱，大胆重构。
-> **技术选型：Go + Gin + SQLite(modernc) + 原生 JS 嵌入单二进制。**
+> **技术选型：Go + Gin + SQLite(modernc) + Vue 3 / TypeScript / Vite；发行版以 embedui 嵌入单二进制。** 前端当前实现及验收以 [Vue 迁移工作区](vue-migration/README.md) 为准；本文其余早期规划不作为当前功能清单。
 
 ## 1. 定位与边界（已确认）
 
@@ -83,7 +83,7 @@ api_probe(                                       -- 未知接口探针（环形/
 | 缓存 | **可选 Redis**（`github.com/redis/go-redis/v9`），共用 `internal/cache` 接口 | 默认 `memory`(进程内 LRU) 零外部依赖；改 `driver=redis` 即启用 |
 | 缓存一致性 | 单写者 bump 版本号；**缓存只作加速，真源 = SQLite/NFO** | 换缓存后端不失失效语义 |
 | 配置 | YAML（`gopkg.in/yaml.v3`） | 沿用 |
-| Web 前端 | `go:embed` 内嵌原生 HTML/JS/CSS | 单二进制，无构建链 |
+| Web 前端 | Vue 3 + TypeScript + Vite + Router + Pinia；`embedui` 内嵌生成资源 | 构建机需要锁定 Node/npm，运行机只需单二进制 |
 | HTTP 客户端 | `net/http`（自定义 Transport，区分直连/代理） | 302 为主；转发兜底按需 |
 | 并发/任务 | goroutine + channel + `golang.org/x/sync/errgroup` | 自研调度，无需外部队列 |
 | 日志 | `log/slog`（结构化 + 请求日志中间件） | 标准库 |

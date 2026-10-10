@@ -1,0 +1,22 @@
+{
+  "cache": "redis",
+  "cache_stats": {
+    "token": {
+      "hits": 8,
+      "misses": 0,
+      "loads": 0,
+      "shared": 0,
+      "load_errors": 0,
+      "load_milliseconds": 0
+    }
+  },
+  "db_path": "TEMP_LEGACY/emby-go.db",
+  "debug": false,
+  "disable_library_monitor": true,
+  "library_monitor_mode": "realtime",
+  "listen": ":18099",
+  "redis_addr": "127.0.0.1:6391",
+  "redis_db": 0,
+  "redis_failures": 0,
+  "redis_online": true
+}

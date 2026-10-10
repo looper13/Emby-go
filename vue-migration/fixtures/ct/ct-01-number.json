@@ -1,0 +1,24 @@
+{
+  "$comment": "CT-01 番号归一化/标题去重对照夹具。expected_carries=前端 titleCarriesNumber(title,number)（展示层是否重复显示番号）；expected_join=后端 scraper.joinNumberTitle(number,title) 输出。source=go-test 取自现有 Go 测试表；derived=按实现推导，P4 由 Go 生成同组输出校验。",
+  "cases": [
+    {"id": "exact", "input": {"title": "ABF-018 标题", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018 标题", "source": "go-test", "note": "internal/scraper/scraper_test.go:138"},
+    {"id": "compact-lead", "input": {"title": "ABF018 标题", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018 标题", "source": "go-test", "note": "scraper_test.go:139"},
+    {"id": "underscore-lead", "input": {"title": "abf_018 标题", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018 标题", "source": "go-test", "note": "scraper_test.go:140"},
+    {"id": "cjk-paren", "input": {"title": "abf-018（标题）", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018（标题）", "source": "go-test", "note": "scraper_test.go:141"},
+    {"id": "dot-after-lead", "input": {"title": "abf-018. 标题", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018 标题", "source": "go-test", "note": "scraper_test.go:142；前端 compactNumber 删点，后端 Normalize+compact 同理"},
+    {"id": "lower-nospace", "input": {"title": "abf018 标题", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018 标题", "source": "go-test", "note": "scraper_test.go:143"},
+    {"id": "number-as-passed", "input": {"title": "ABF-018 标题", "number": "ABF018"}, "expected_carries": true, "expected_join": "ABF018 标题", "source": "go-test", "note": "scraper_test.go:145；前缀形态随传入番号"},
+    {"id": "prefix-partial-0182", "input": {"title": "ABF-0182 标题", "number": "ABF-018"}, "expected_carries": false, "expected_join": "ABF-018 ABF-0182 标题", "source": "go-test", "note": "scraper_test.go:147；反例：不得误认"},
+    {"id": "prefix-partial-X", "input": {"title": "ABF-018X 标题", "number": "ABF-018"}, "expected_carries": false, "expected_join": "ABF-018 ABF-018X 标题", "source": "go-test", "note": "scraper_test.go:148；反例：不得误认"},
+    {"id": "prefix-shorter", "input": {"title": "ABF-01 标题", "number": "ABF-018"}, "expected_carries": false, "expected_join": "ABF-018 ABF-01 标题", "source": "go-test", "note": "scraper_test.go:149"},
+    {"id": "title-is-number", "input": {"title": "ABF-018", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018", "source": "go-test", "note": "scraper_test.go:151"},
+    {"id": "padded-title", "input": {"title": "   ABF-018 标题  ", "number": "ABF-018"}, "expected_carries": true, "expected_join": "ABF-018 标题", "source": "go-test", "note": "scraper_test.go:152；前端对 title 先 trim"},
+    {"id": "number-mid-title", "input": {"title": "标题 ABF-018", "number": "ABF-018"}, "expected_carries": false, "expected_join": "ABF-018 标题 ABF-018", "source": "go-test", "note": "scraper_test.go:153；番号不在开头"},
+    {"id": "empty-number", "input": {"title": "标题", "number": ""}, "expected_carries": false, "expected_join": "标题", "source": "go-test", "note": "scraper_test.go:133；空番号一律 false"},
+    {"id": "empty-title", "input": {"title": "", "number": "ABF-018"}, "expected_carries": false, "expected_join": "ABF-018", "source": "go-test", "note": "scraper_test.go:134"},
+    {"id": "both-empty", "input": {"title": "", "number": ""}, "expected_carries": false, "expected_join": "", "source": "go-test", "note": "scraper_test.go:135"},
+    {"id": "noise-suffix-c", "input": {"title": "ABF-018-c 标题", "number": "ABF-018"}, "expected_carries": false, "expected_join": "ABF-018 ABF-018-c 标题", "source": "derived", "note": "SameNumber 用例来自 metatube/number_test.go:35（ABF-018-c 视为不同）；join 结果按实现推导"},
+    {"id": "series-T28", "input": {"title": "T28036 标题", "number": "T28-036"}, "expected_carries": true, "expected_join": "T28-036 标题", "source": "derived", "note": "dashedNumber 系列规则（apply.go:335）；前端 compact 去连字符后两边均为 T28036，结论一致"},
+    {"id": "series-alias-259LUXU", "input": {"title": "259LUXU1234 标题", "number": "LUXU-1234"}, "expected_carries": false, "expected_join": "LUXU-1234 标题", "divergence": true, "source": "derived", "note": "已知差异：后端 dashedNumber 把 lead 改写为 LUXU-1234 后 SameNumber=true（合并）；前端 compact 比较 259LUXU1234 != LUXU1234（会重复显示番号）。仅当 NFO 由外部工具写入此形态时才可见。P4 决策：默认保持等价移植并记录"}
+  ]
+}

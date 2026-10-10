@@ -1,0 +1,84 @@
+{
+  "files": [
+    {
+      "index": 1,
+      "info": {
+        "audio": {
+          "bitrate": 45212,
+          "channel_layout": "stereo",
+          "channels": 2,
+          "codec": "aac",
+          "codec_tag": "mp4a",
+          "default": true,
+          "forced": false,
+          "language": "und",
+          "profile": "LC",
+          "sampling_rate": 44100
+        },
+        "bitrate": 148160,
+        "duration_seconds": 0,
+        "format": "mov,mp4,m4a,3gp,3g2,mj2",
+        "size_bytes": 9260,
+        "video": {
+          "aspect_ratio": "4:3",
+          "bit_depth": 8,
+          "bitrate": 74160,
+          "codec": "h264",
+          "codec_tag": "avc1",
+          "default": true,
+          "forced": false,
+          "framerate": 10,
+          "height": 240,
+          "language": "und",
+          "level": 30,
+          "pixel_format": "yuv420p",
+          "profile": "High",
+          "ref_frames": 0,
+          "scan_type": "progressive",
+          "width": 320
+        }
+      },
+      "kind": "primary",
+      "mediainfo_path": "TEMP_LEGACY\\media\\L307\\mediainfo.json",
+      "path": "TEMP_LEGACY\\media\\L307\\ABF-307.strm"
+    }
+  ],
+  "id": 307,
+  "info": {
+    "audio": {
+      "bitrate": 45212,
+      "channel_layout": "stereo",
+      "channels": 2,
+      "codec": "aac",
+      "codec_tag": "mp4a",
+      "default": true,
+      "forced": false,
+      "language": "und",
+      "profile": "LC",
+      "sampling_rate": 44100
+    },
+    "bitrate": 148160,
+    "duration_seconds": 0,
+    "format": "mov,mp4,m4a,3gp,3g2,mj2",
+    "size_bytes": 9260,
+    "video": {
+      "aspect_ratio": "4:3",
+      "bit_depth": 8,
+      "bitrate": 74160,
+      "codec": "h264",
+      "codec_tag": "avc1",
+      "default": true,
+      "forced": false,
+      "framerate": 10,
+      "height": 240,
+      "language": "und",
+      "level": 30,
+      "pixel_format": "yuv420p",
+      "profile": "High",
+      "ref_frames": 0,
+      "scan_type": "progressive",
+      "width": 320
+    }
+  },
+  "nfo_path": "TEMP_LEGACY\\media\\L307\\ABF-307.nfo"
+}

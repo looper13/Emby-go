@@ -4,7 +4,7 @@
 
 ## 1. 准备依赖
 
-- 构建机器：Go 1.25 或更新版本、Bash。运行机器不需要 Go，也不需要 Node/npm。
+- 构建机器：Go 1.25 或更新版本、Bash、Node 24.14.1、npm 11.11.0。运行机器不需要 Go，也不需要 Node/npm。
 - 运行机器：可连接的 Redis，连接失败时程序会退出，systemd 每 5 秒重试。
 - 使用媒体信息探测时需安装 FFmpeg 中的 `ffprobe`；HTTPS 媒体源需要系统 CA 证书。
 
@@ -28,6 +28,10 @@ VERSION=1.0.0 OUT_DIR=dist bash build.sh
 ```
 
 固定生成 `dist/emby-go-linux-amd64`，包含版本、Git 提交及 UTC 构建时间。未指定版本时使用 Git 描述，无 Git 信息时为 `dev`。关闭 CGO，使用 amd64 v1 指令基线，不进行 UPX 压缩。脚本也可在其他架构主机或 Windows Git Bash 中交叉编译；失败时保留上一次成功产物。
+
+脚本先执行前端锁文件安装、类型与单元检查、Vite 构建及资源校验，再以 `-tags embedui` 编译。不要把默认 `go build` 生成的开发二进制作为发行版：默认构建不嵌入 Vue 资源。正式入口 `/`、`/web`、`/admin`、`/web/index.html` 已切换为 Vue；`/admin-vue` 重定向至 `/admin`。运行机无需 Node/npm。
+
+当前五平台交叉编译及 Windows 隔离回滚验证见 [P7 实施记录](../vue-migration/P7/progress.md)；Linux systemd 冒烟和 Linux 旧二进制回滚尚未运行，不能据此声称 Linux 部署已验收。
 
 交叉编译后把二进制、`config.example.yaml` 和 `deploy/emby-go.service` 传到 Linux 主机，安装时保持下列命令使用的相对路径。
 
@@ -126,3 +130,7 @@ sudo systemctl status emby-go --no-pager
 ```
 
 升级只替换二进制，不覆盖私人配置、数据库或媒体文件。自定义 `db_path`、演员头像目录和媒体库不在默认备份范围时，应另外备份；发生数据库迁移后，回滚不能只替换旧二进制，还要恢复对应版本的数据备份。
+
+本次 Vue 迁移没有数据库迁移。需要退回旧 UI 时，在任务结束后停服，把预先保存的旧二进制恢复至 `/usr/local/bin/emby-go` 后启动服务；确认 `/` 可重新登录、`/admin#items` 可浏览媒体墙与详情，认证 API 仍返回 JSON。新 UI 已执行的 NFO、图片或业务写入不会因回滚二进制而撤销。这个 Linux 演练仍待实际环境验证。
+
+版本切换后，旧标签页若加载已不存在的播放器 chunk，会提示刷新并保留当前输入，不自动刷新。确认编辑已保存、手动扫描已结束后再点击“刷新页面”。

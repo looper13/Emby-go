@@ -1,0 +1,45 @@
+{
+  "$comment": "CT-03 覆盖语义验证清单（P5 在临时 NFO/图片目录用真实服务验证）。三者区别于：请求体缺省 overwrite 键 → 取全局配置；显式 false → 只补缺失；显式 true → 强制覆盖。后端契约锚点：internal/server/scrape.go:503-520（*bool）、scrape.go:216-218（批量）、scrape_settings.go:136-137（设置）。",
+  "cases": [
+    {
+      "scenario": "explicit-false-keeps-existing",
+      "setup": "全局 scrape.overwrite=true；影片 NFO 已有 title/plot/图片 poster.webp；用本地 MetaTube 桩返回候选",
+      "action": "POST /api/admin/items/:id/scrape {provider,id,overwrite:false}",
+      "expect": "已有字段/图片保留不被覆盖；仅缺失字段补齐（与 overwrite:true 的结果必须不同，证明显式 false 生效）"
+    },
+    {
+      "scenario": "explicit-true-overwrites",
+      "setup": "同上",
+      "action": "POST /api/admin/items/:id/scrape {provider,id,overwrite:true}",
+      "expect": "按后端规则覆盖已有字段；同名图片被替换（invalidateImageTag 使墙/详情 tag 变化）"
+    },
+    {
+      "scenario": "omitted-inherits-global",
+      "setup": "全局 overwrite=false 与 true 两次",
+      "action": "POST /api/admin/items/:id/scrape {provider,id}（不带 overwrite 键）",
+      "expect": "全局 false 时行为=只补缺失；全局 true 时行为=覆盖。缺省 ≠ 恒定 false"
+    },
+    {
+      "scenario": "images-exists-not-overwritten",
+      "setup": "inspect.images[].exists=true（poster/fanart/landscape 已存在）",
+      "action": "overwrite:false 确认写入",
+      "expect": "exists 图片保持原文件；overwrite:true 时替换"
+    },
+    {
+      "scenario": "preview-cancel-zero-write",
+      "setup": "已打开预览（GET preview + POST inspect）",
+      "action": "关闭/取消预览（Esc、✕、遮罩任一）",
+      "expect": "无任何 POST /scrape 写入请求；NFO 与图片 mtime 不变；无翻译/下载副作用"
+    },
+    {
+      "scenario": "batch-run-pointer",
+      "setup": "全局 overwrite=true",
+      "action": "分别 POST /api/admin/scrape/run 带 {overwrite:false}、{overwrite:true}、缺省",
+      "expect": "false → 本批只补缺失；true → 本批覆盖；缺省 → 跟随全局 true。三者日志中的 overwrite 值可核对"
+    }
+  ],
+  "acceptance": [
+    "TS 侧实现禁止 value || default 模式（显式 false 必须与缺省区分），UI 复选框三态与后端语义一致",
+    "确认请求只在点击确认后发出；failures 样例与 toast 文案与基线一致"
+  ]
+}

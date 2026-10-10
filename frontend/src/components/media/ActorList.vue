@@ -1,0 +1,5 @@
+<script setup lang="ts">
+import type { ActorDto } from '../../api/contracts'; import { entityIdOf } from '../../lib/media'; import { imageURL } from '../../lib/image-url'; import MediaImage from './MediaImage.vue';
+defineProps<{ actors: ActorDto[] }>(); const emit = defineEmits<{ entity: [key: string, value: string] }>();
+</script>
+<template><section class="detail-section"><h3>演员 <small>{{ actors.length }}</small></h3><div v-if="actors.length" class="avatar-grid"><button v-for="actor in actors" :key="actor.name" class="avatar-card" data-entity-key="person" :data-entity-value="actor.name" @click="emit('entity', 'person', actor.name)"><MediaImage v-if="actor.has_image" :src="imageURL(entityIdOf('person', actor.name), 'Primary', 200, actor.image_tag)" loading="lazy" alt="" /><span v-else class="avatar-fallback">{{ (actor.name || '?').trim().slice(0, 1) }}</span><small>{{ actor.name }}</small></button></div><p v-else class="hint" style="margin:8px 0 0">NFO 中没有演员信息。</p></section></template>

@@ -1,0 +1,11 @@
+{
+  "items": [],
+  "total": 0,
+  "types": {
+    "probe": "媒体信息探测",
+    "reindex": "全量重建索引",
+    "scan": "增量扫描媒体库",
+    "scrape": "内置刮削",
+    "scrape_avatars": "演员头像补全"
+  }
+}
