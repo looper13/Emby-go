@@ -15,13 +15,18 @@ import (
 
 // Progress 批量刮削的进度快照（调用方负责节流展示）。
 type Progress struct {
-	Total       int
-	Done        int
-	Success     int
-	Skipped     int
-	Failed      int
-	Consecutive int // 当前连续失败数
-	Current     string
+	Total          int
+	Done           int
+	Success        int
+	Skipped        int
+	Failed         int
+	Partial        int
+	Unmatched      int
+	Ambiguous      int
+	Unavailable    int
+	DownloadFailed int
+	Consecutive    int // 当前连续失败数
+	Current        string
 }
 
 // ItemResult 单部影片的刮削结果。

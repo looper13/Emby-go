@@ -2,12 +2,14 @@
 
 一个用 **Go** 重写的、兼容 **Emby API** 的轻量媒体库服务端，面向 **AV / FC2 类 NFO + `.strm` 媒体库**（海报墙浏览走 Emby 客户端）。
 
-- 元数据真源 = **现成 NFO**（`<title>/<genre>/<studio>/<actor>/<set>` 等），不内置刮削器
+- 影片元数据真源 = **NFO**（`<title>/<genre>/<studio>/<actor>/<set>` 等），可通过管理端配置 MetaTube 补全元数据
 - 媒体只支持 `http(s)://` 的 `.strm`；播放走 **302 直拉**（服务端零带宽，不转码）
 - 单二进制、单端口，Redis 为必选缓存后端；内置深色 Web 管理后台
 - 兼容端点覆盖：认证、媒体库/影片墙、详情、图片、合集(BoxSet)、进度/续播、搜索/过滤等 Emby 客户端浏览主链路
 
 ## 快速开始
+
+演员头像支持 GFriends 与 MetaTube，资料默认保存在数据库同级 `actors/`，可预览并复制导入旧头像。设置、恢复与备份见 [演员资料说明](ACTOR-ASSETS.md)，图片和索引的来源条件见 [第三方数据说明](THIRD-PARTY-DATA.md)。
 
 ### 构建
 
@@ -48,7 +50,7 @@ Linux amd64 部署可直接执行 `bash build.sh`，产物为 `dist/emby-go-linu
 cp config.example.yaml config.yaml
 ```
 
-监听端口在配置文件的 `port`（或 `listen`）中设置，命令行只负责选择配置文件。浏览器打开 `http://127.0.0.1:<port>` 走初始化向导（创建管理员账号）。
+监听端口在配置文件的 `port` 中设置，命令行只负责选择配置文件。浏览器打开 `http://127.0.0.1:<port>` 走初始化向导（创建管理员账号）。初始化后，可在“设置 → 实例配置”中编辑配置并保存，详见 [配置页面说明](SYSTEM-CONFIG.md)。
 
 ### 目录约定
 
@@ -91,7 +93,7 @@ NFO 的 `<runtime>` 与视频 `<duration>` 按分钟读取，兼容纯整数及 
 
 ### 兼容模式（30 秒轮询）
 
-群晖系统、SMB/NFS 等远程文件系统挂载，以及出现「监控不工作」问题时，可以改用兼容模式，不依赖操作系统文件通知。在 `config.yaml` 中设置并重启服务：
+群晖系统、SMB/NFS 等远程文件系统挂载，以及出现「监控不工作」问题时，可以改用兼容模式，不依赖操作系统文件通知。在设置页选择“兼容模式”并保存即可重建监听；也可在 `config.yaml` 中设置并重启服务：
 
 ```yaml
 disable_library_monitor: false

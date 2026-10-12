@@ -2073,10 +2073,21 @@ func (s *Store) SetScrapeResult(movieID int64, message string) error {
 // 没有对应影片就没有写 NFO 头像真源的地方，处理了也留不住。
 // libraryID>0 时只统计该库内的演员。
 func (s *Store) ActorsMissingAvatar(libraryID int64, limit int) ([]string, error) {
+	return s.actorNames(libraryID, limit, true)
+}
+
+// ActorNames includes actors with remote URLs: a local portrait or pending repair may still be missing.
+func (s *Store) ActorNames(libraryID int64) ([]string, error) {
+	return s.actorNames(libraryID, 0, false)
+}
+func (s *Store) actorNames(libraryID int64, limit int, missing bool) ([]string, error) {
 	query := `SELECT DISTINCT a.name FROM actors a
 		JOIN movie_actors ma ON ma.actor_name = a.name
 		JOIN movies m ON m.id = ma.movie_id
-		WHERE COALESCE(a.avatar_url,'')='' AND m.status IN ('success','manual')`
+		WHERE m.status IN ('success','manual')`
+	if missing {
+		query += " AND COALESCE(a.avatar_url,'')=''"
+	}
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND m.library_id=?"

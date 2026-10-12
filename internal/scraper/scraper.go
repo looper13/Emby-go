@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"emby-go/internal/gfriends"
 	"emby-go/internal/metatube"
 	"emby-go/internal/store"
 	"emby-go/internal/translate"
@@ -35,6 +36,9 @@ type Config struct {
 	DownloadImages bool
 	ImageQuality   int
 	AvatarsDir     string
+	ActorsDir      string
+	AvatarSource   string
+	GFriends       gfriends.Config
 	Overwrite      bool // 覆盖策略：false=只补缺失（默认）
 
 	TranslateTitle bool
@@ -114,6 +118,23 @@ func New(cfg Config, st *store.Store) *Scraper {
 // Configured 判断是否具备刮削条件（缺地址或 token 时调用方应给出明确提示）。
 func (c Config) Configured() bool {
 	return strings.TrimSpace(c.BaseURL) != "" && strings.TrimSpace(c.Token) != ""
+}
+
+func (c Config) AvatarMode() string {
+	if c.AvatarSource == "" {
+		return "metatube"
+	}
+	return c.AvatarSource
+}
+func (c Config) AvatarConfigured() bool {
+	switch c.AvatarMode() {
+	case "metatube":
+		return c.Configured()
+	case "gfriends", "gfriends_then_metatube":
+		return c.GFriends.Validate() == nil
+	default:
+		return false
+	}
 }
 
 // Client 暴露底层客户端，供管理端「测试连接」使用。

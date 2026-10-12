@@ -43,6 +43,8 @@ func (a *App) adminLibraries(c *gin.Context) {
 
 // adminDeleteLibrary 删除媒体库及其影片索引（不删磁盘文件），随后清缓存。
 func (a *App) adminDeleteLibrary(c *gin.Context) {
+	a.configEditMu.Lock()
+	defer a.configEditMu.Unlock()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "not found"})
@@ -67,6 +69,8 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 }
 
 func (a *App) adminAddLibrary(c *gin.Context) {
+	a.configEditMu.Lock()
+	defer a.configEditMu.Unlock()
 	var req struct{ Name, Path string }
 	if c.ShouldBindJSON(&req) != nil || req.Name == "" || req.Path == "" {
 		c.JSON(400, gin.H{"error": "name and path required"})
@@ -719,18 +723,19 @@ func (a *App) adminImage(c *gin.Context) {
 }
 
 func (a *App) adminSettings(c *gin.Context) {
+	cfg := a.configSnapshot()
 	settings := gin.H{
-		"listen":                  a.cfg.Addr(),
-		"db_path":                 a.cfg.DBPath,
-		"debug":                   a.cfg.Debug,
+		"listen":                  cfg.Addr(),
+		"db_path":                 cfg.DBPath,
+		"debug":                   cfg.Debug,
 		"cache":                   "redis",
-		"redis_addr":              a.cfg.RedisAddr,
-		"redis_db":                a.cfg.RedisDB,
+		"redis_addr":              cfg.RedisAddr,
+		"redis_db":                cfg.RedisDB,
 		"redis_online":            true,
 		"redis_failures":          uint64(0),
 		"cache_stats":             a.cache.Stats(),
-		"library_monitor_mode":    a.cfg.MonitorMode(),
-		"disable_library_monitor": a.cfg.DisableLibraryMonitor,
+		"library_monitor_mode":    cfg.MonitorMode(),
+		"disable_library_monitor": cfg.DisableLibraryMonitor,
 	}
 	// 探一次真实连通性：缓存故障时请求仍按未命中继续，只有这里能看出后端已经不可用。
 	// 探活自带超时预算（见 cache.Redis），不会因为 Redis 卡死把设置页一起拖住。

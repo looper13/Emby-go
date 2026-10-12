@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"emby-go/internal/gfriends"
 	"emby-go/internal/scraper"
 )
 
@@ -15,6 +16,10 @@ import (
 // 按需求 B5：**config.yaml 不设 scrape 段**，DB 只存用户改过的值，
 // 缺省一律走 scraper.DefaultConfig()——这样以后新增配置项，老库自动获得默认值，无需迁移。
 const (
+	settingAvatarSource   = "scrape.avatar_source"
+	settingGFriendsIndex  = "scrape.gfriends.index_url"
+	settingGFriendsBase   = "scrape.gfriends.base_url"
+	settingGFriendsHours  = "scrape.gfriends.refresh_hours"
 	settingMetatubeURL    = "scrape.metatube_url"
 	settingMetatubeToken  = "scrape.metatube_token"
 	settingTimeout        = "scrape.timeout_seconds"
@@ -77,6 +82,9 @@ func (a *App) scrapeConfig() scraper.Config {
 	// 头像目录统一走 a.avatarsDir()：详情接口与头像任务必须落在同一个目录，
 	// 否则会出现「头像写进去了但详情页看不到」。
 	cfg.AvatarsDir = a.avatarsDir()
+	cfg.ActorsDir = a.actorAssets().Dir
+	cfg.AvatarSource = settingString(values, settingAvatarSource, "metatube")
+	cfg.GFriends = gfriends.Config{IndexURL: settingString(values, settingGFriendsIndex, gfriends.DefaultIndexURL), BaseURL: settingString(values, settingGFriendsBase, gfriends.DefaultBaseURL), RefreshHours: settingInt(values, settingGFriendsHours, 24)}
 
 	cfg.TranslateTitle = settingBool(values, settingTranslateTitle, cfg.TranslateTitle)
 	cfg.TranslatePlot = settingBool(values, settingTranslateSummary, cfg.TranslatePlot)
@@ -103,16 +111,21 @@ func maskSecret(secret string) string {
 func (a *App) adminScrapeSettings(c *gin.Context) {
 	cfg := a.scrapeConfig()
 	c.JSON(http.StatusOK, gin.H{
-		"metatube_url":    cfg.BaseURL,
-		"metatube_token":  maskSecret(cfg.Token),
-		"timeout_seconds": cfg.TimeoutSeconds,
-		"concurrency":     cfg.Concurrency,
-		"download_images": cfg.DownloadImages,
-		"image_quality":   cfg.ImageQuality,
-		"avatars_dir":     cfg.AvatarsDir,
-		"overwrite":       cfg.Overwrite,
-		"configured":      cfg.Configured(),
-		"defaults":        scraper.DefaultConfig(),
+		"metatube_url":      cfg.BaseURL,
+		"metatube_token":    maskSecret(cfg.Token),
+		"timeout_seconds":   cfg.TimeoutSeconds,
+		"concurrency":       cfg.Concurrency,
+		"download_images":   cfg.DownloadImages,
+		"image_quality":     cfg.ImageQuality,
+		"avatars_dir":       cfg.AvatarsDir,
+		"actor_storage_dir": cfg.ActorsDir,
+		"avatar_source":     cfg.AvatarMode(),
+		"avatar_configured": cfg.AvatarConfigured(),
+		"gfriends":          cfg.GFriends,
+		"gfriends_status":   gfriends.New(cfg.ActorsDir, cfg.GFriends, cfg.Timeout()).DiskStatus(),
+		"overwrite":         cfg.Overwrite,
+		"configured":        cfg.Configured(),
+		"defaults":          scraper.DefaultConfig(),
 		"translate": gin.H{
 			"title":           cfg.TranslateTitle,
 			"summary":         cfg.TranslatePlot,
@@ -127,6 +140,12 @@ func (a *App) adminScrapeSettings(c *gin.Context) {
 
 // scrapeSettingsRequest 保存配置的入参。密钥字段留空 = 不修改（需求 A6 #42）。
 type scrapeSettingsRequest struct {
+	AvatarSource *string `json:"avatar_source"`
+	GFriends     *struct {
+		IndexURL     *string `json:"index_url"`
+		BaseURL      *string `json:"base_url"`
+		RefreshHours *int    `json:"refresh_hours"`
+	} `json:"gfriends"`
 	MetatubeURL    *string `json:"metatube_url"`
 	MetatubeToken  *string `json:"metatube_token"`
 	TimeoutSeconds *int    `json:"timeout_seconds"`
@@ -181,6 +200,31 @@ func (a *App) adminSaveScrapeSettings(c *gin.Context) {
 		writes[settingMetatubeToken] = strings.TrimSpace(*req.MetatubeToken)
 	}
 	putString(settingAvatarsDir, req.AvatarsDir)
+	if req.AvatarSource != nil {
+		switch *req.AvatarSource {
+		case "metatube", "gfriends", "gfriends_then_metatube":
+			putString(settingAvatarSource, req.AvatarSource)
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效头像来源"})
+			return
+		}
+	}
+	if gf := req.GFriends; gf != nil {
+		for _, value := range []*string{gf.IndexURL, gf.BaseURL} {
+			if value != nil && strings.TrimSpace(*value) != "" {
+				if err := gfriends.ValidateURL(strings.TrimSpace(*value)); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+			}
+		}
+		putString(settingGFriendsIndex, gf.IndexURL)
+		putString(settingGFriendsBase, gf.BaseURL)
+		if err := putInt(settingGFriendsHours, gf.RefreshHours, 1, 720); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	if err := putInt(settingTimeout, req.TimeoutSeconds, 1, 600); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

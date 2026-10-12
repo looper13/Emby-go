@@ -24,6 +24,9 @@
 /docs/
 
 # Runtime data (SQLite WAL/shm 一并忽略)
+/actors/
+/avatars/
+/.work-cache/
 *.db
 *.db-shm
 *.db-wal

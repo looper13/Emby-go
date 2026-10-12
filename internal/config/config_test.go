@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+func TestActorStorageResolution(t *testing.T) {
+	base := t.TempDir()
+	for _, dir := range []string{"", "photos", filepath.Join(base, "external")} {
+		cfg := Config{DBPath: filepath.Join(base, "db", "app.db"), ActorsDir: dir}
+		if err := cfg.ResolveStorage(); err != nil {
+			t.Fatal(err)
+		}
+		want := dir
+		if want == "" {
+			want = "actors"
+		}
+		if !filepath.IsAbs(want) {
+			want = filepath.Join(base, "db", want)
+		}
+		if cfg.ActorsDir != want || !filepath.IsAbs(cfg.DBPath) {
+			t.Fatalf("got %+v want %q", cfg, want)
+		}
+	}
+}
+
 func TestPersistServerIDReplaceInPlace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	src := "# 注释保留\nlisten: \":18080\"\ndb_path: \"emby-go.db\"\nserver_name: \"My\"\nserver_id: \"\"\nredis_addr: \"127.0.0.1:6379\"\n"

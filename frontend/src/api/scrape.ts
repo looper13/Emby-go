@@ -4,14 +4,22 @@ export const optionalString = (v: unknown) => v == null ? '' : string(v);
 export const list = (v: unknown): unknown[] => v == null ? [] : Array.isArray(v) ? v : invalid();
 const finite = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : invalid();
 export interface TranslateSettings { title: boolean; summary: boolean; target_lang: string; api_url: string; api_key: string; timeout_seconds: number; configured?: boolean }
-export interface ScrapeSettings { metatube_url: string; metatube_token: string; timeout_seconds: number; concurrency: number; image_quality: number; avatars_dir: string; download_images: boolean; overwrite: boolean; configured?: boolean; translate: TranslateSettings }
+export type AvatarSource = 'metatube' | 'gfriends' | 'gfriends_then_metatube';
+export type SourceTest = 'metatube' | 'translate' | 'gfriends';
+export interface GFriendsStatus { version: string; updated_at: string; groups: number; entries: number; stale: boolean; error: string }
+export interface ActorImportPreview { total: number; ready: number; existing: number; conflicts: number; damaged: number; missing: number; samples: string[]; source: string; destination: string }
+export interface ScrapeSettings { metatube_url: string; metatube_token: string; timeout_seconds: number; concurrency: number; image_quality: number; avatars_dir: string; actor_storage_dir: string; avatar_source: AvatarSource; avatar_configured: boolean; gfriends: { index_url: string; base_url: string; refresh_hours: number }; gfriends_status?: GFriendsStatus; download_images: boolean; overwrite: boolean; configured?: boolean; translate: TranslateSettings }
+export function parseGFriendsStatus(value: unknown): GFriendsStatus { const v = record(value); return { version: string(v.version), updated_at: string(v.updated_at), groups: count(v.groups), entries: count(v.entries), stale: boolean(v.stale), error: optionalString(v.error) }; }
 export interface Candidate { provider: string; id: string; number: string; title: string; score: number; thumb: string; exact: boolean }
 export interface Preview { movie_id: number; query: string; expected_number: string; recommended: number; candidates: Candidate[] }
 export interface FieldDiff { key: string; label: string; old: string; next: string; change: boolean }
 export interface Inspect { provider: string; id: string; title: string; number: string; summary: string; poster: string; score: number; release_date: string; runtime: number; overwrite: boolean; fields: FieldDiff[]; images: { name: string; preview: string; exists: boolean }[] }
 export function parseScrapeSettings(value: unknown): ScrapeSettings {
   const v = record(value), t = record(v.translate);
+  const mode = v.avatar_source ?? 'metatube'; if (!['metatube','gfriends','gfriends_then_metatube'].includes(String(mode))) return invalid();
+  const gf = v.gfriends == null ? {index_url:'https://raw.githubusercontent.com/gfriends/gfriends/master/Filetree.json',base_url:'https://raw.githubusercontent.com/gfriends/gfriends/master/',refresh_hours:24} : record(v.gfriends);
   return { metatube_url: string(v.metatube_url), metatube_token: string(v.metatube_token), timeout_seconds: count(v.timeout_seconds), concurrency: count(v.concurrency), image_quality: count(v.image_quality), avatars_dir: string(v.avatars_dir), download_images: boolean(v.download_images), overwrite: boolean(v.overwrite), configured: boolean(v.configured),
+    actor_storage_dir: optionalString(v.actor_storage_dir), avatar_source: mode as AvatarSource, avatar_configured: v.avatar_configured == null ? boolean(v.configured) : boolean(v.avatar_configured), gfriends: {index_url:string(gf.index_url),base_url:string(gf.base_url),refresh_hours:count(gf.refresh_hours)}, gfriends_status: v.gfriends_status == null ? undefined : parseGFriendsStatus(v.gfriends_status),
     translate: { title: boolean(t.title), summary: boolean(t.summary), target_lang: string(t.target_lang), api_url: string(t.api_url), api_key: string(t.api_key), timeout_seconds: count(t.timeout_seconds), configured: boolean(t.configured) } };
 }
 export function parsePreview(value: unknown): Preview {
@@ -25,11 +33,12 @@ export function parseInspect(value: unknown): Inspect {
     fields: list(v.fields).map(item => { const f = record(item); return { key: string(f.key), label: string(f.label), old: string(f.old), next: string(f.next), change: boolean(f.change) }; }),
     images: list(v.images).map(item => { const i = record(item); return { name: string(i.name), preview: optionalString(i.preview), exists: boolean(i.exists) }; }) };
 }
-const request = (path: string, method = 'GET', json?: unknown, signal?: AbortSignal) => apiClient.request(`/api/admin/${path}`, { auth: 'required', method, json, signal, readOnly: path.endsWith('/inspect') || path === 'scrape/test' });
+const request = (path: string, method = 'GET', json?: unknown, signal?: AbortSignal) => apiClient.request(`/api/admin/${path}`, { auth: 'required', method, json, signal, readOnly: path.endsWith('/inspect') || path === 'scrape/test' || path === 'actors/import/preview' });
 export const scrapeApi = {
   settings: async (signal?: AbortSignal) => parseScrapeSettings(await request('scrape/settings', 'GET', undefined, signal)),
   save: async (json: ScrapeSettings) => parseScrapeSettings(await request('scrape/settings', 'PUT', json)),
-  async test(target: 'metatube' | 'translate') { const v = record(await request('scrape/test', 'POST', { target })); return { ok: boolean(v.ok), detail: optionalString(v.detail), error: optionalString(v.error), elapsed_ms: v.elapsed_ms == null ? 0 : count(v.elapsed_ms) }; },
+  async test(target: SourceTest) { const v = record(await request('scrape/test', 'POST', { target })); return { ok: boolean(v.ok), detail: optionalString(v.detail), error: optionalString(v.error), elapsed_ms: v.elapsed_ms == null ? 0 : count(v.elapsed_ms), status: v.status == null ? undefined : parseGFriendsStatus(v.status) }; },
+  async importPreview(signal?: AbortSignal): Promise<ActorImportPreview> { const v = record(await request('actors/import/preview','POST',{},signal)); return {total:count(v.total),ready:count(v.ready),existing:count(v.existing),conflicts:count(v.conflicts),damaged:count(v.damaged),missing:count(v.missing),samples:list(v.samples).map(string),source:string(v.source),destination:string(v.destination)}; },
   async candidates(library_id: number, only_missing: boolean, signal?: AbortSignal) { return count(record(await request(`scrape/candidates?${new URLSearchParams({ library_id: String(library_id), only_missing: String(only_missing) })}`, 'GET', undefined, signal)).total); },
   preview: async (id: number, signal: AbortSignal) => parsePreview(await request(`items/${id}/scrape/preview`, 'GET', undefined, signal)),
   inspect: async (id: number, provider: string, candidateId: string, signal: AbortSignal) => parseInspect(await request(`items/${id}/scrape/inspect`, 'POST', { provider, id: candidateId }, signal)),

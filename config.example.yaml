@@ -4,6 +4,8 @@
 #   ./metatube            # 默认读 config.yaml
 #   ./metatube -c x.yaml  # 或指定其它配置文件
 # 注意：直接以本文件运行会把自动生成的 server_id 回写到本文件，请勿直接运行本示例。
+# 初始化后可在“设置 → 实例配置”编辑并保存；需要配置文件及父目录写权限。
+# 服务名、域名、监控与探测参数无需重启；端口、debug、存储及 Redis 重启生效。
 
 # 监听端口
 port: 18080
@@ -16,6 +18,10 @@ library_monitor_mode: realtime
 
 # SQLite 数据文件路径（相对路径基于进程启动目录）
 db_path: "emby-go.db"
+
+# 演员资料根目录：留空为数据库同级 actors/；相对路径以数据库目录为基准。
+# 重启生效，修改路径不会自动搬迁已有资料。备份时一并保存此目录。
+actors_dir: ""
 
 # 站点名（Emby 客户端登录后显示的名称）
 server_name: "Emby-go"

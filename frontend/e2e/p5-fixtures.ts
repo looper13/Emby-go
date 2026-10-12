@@ -67,7 +67,7 @@ async function backend(live: Live) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const directory = path.join(live.root, `p5-${randomUUID()}`); await mkdir(directory);
-  const settings = { metatube_url: url, metatube_token: secret, timeout_seconds: 10, concurrency: 1, image_quality: 80, avatars_dir: path.join(directory, 'avatars'), download_images: true, overwrite: true,
+  const settings = { avatar_source: 'metatube', metatube_url: url, metatube_token: secret, timeout_seconds: 10, concurrency: 1, image_quality: 80, avatars_dir: path.join(directory, 'avatars'), download_images: true, overwrite: true,
     translate: { title: false, summary: false, target_lang: 'ZH', api_url: url, api_key: secret, timeout_seconds: 5 } };
   const previous = await live.request('/api/admin/scrape/settings');
   let libraryId = 0;

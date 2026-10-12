@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"emby-go/internal/gfriends"
 	"emby-go/internal/metatube"
 	"emby-go/internal/scanner"
 	"emby-go/internal/scraper"
@@ -30,19 +31,24 @@ import (
 
 // scrapeStatus 刮削任务的进度快照，供管理端轮询。
 type scrapeStatus struct {
-	Running    bool     `json:"running"`
-	Kind       string   `json:"kind"` // scrape / scrape_avatars
-	Total      int      `json:"total"`
-	Done       int      `json:"done"`
-	Success    int      `json:"success"`
-	Skipped    int      `json:"skipped"`
-	Failed     int      `json:"failed"`
-	Current    string   `json:"current"`
-	StartedAt  string   `json:"started_at,omitempty"`
-	FinishedAt string   `json:"finished_at,omitempty"`
-	Error      string   `json:"error,omitempty"`
-	Cancelled  bool     `json:"cancelled"`
-	Failures   []string `json:"failures,omitempty"` // 失败/待确认样例，限流留存
+	Running        bool     `json:"running"`
+	Kind           string   `json:"kind"` // scrape / scrape_avatars
+	Total          int      `json:"total"`
+	Done           int      `json:"done"`
+	Success        int      `json:"success"`
+	Skipped        int      `json:"skipped"`
+	Failed         int      `json:"failed"`
+	Partial        int      `json:"partial"`
+	Unmatched      int      `json:"unmatched"`
+	Ambiguous      int      `json:"ambiguous"`
+	Unavailable    int      `json:"unavailable"`
+	DownloadFailed int      `json:"download_failed"`
+	Current        string   `json:"current"`
+	StartedAt      string   `json:"started_at,omitempty"`
+	FinishedAt     string   `json:"finished_at,omitempty"`
+	Error          string   `json:"error,omitempty"`
+	Cancelled      bool     `json:"cancelled"`
+	Failures       []string `json:"failures,omitempty"` // 失败/待确认样例，限流留存
 }
 
 const maxScrapeFailureSamples = 20
@@ -96,6 +102,8 @@ func (a *App) nfoBusyOwner() string {
 		return "刮削"
 	case "scrape_avatars":
 		return "演员头像任务"
+	case "actor_import":
+		return "旧头像导入"
 	case "edit", "manual", "image", "reread":
 		return "媒体库编辑"
 	}
@@ -122,6 +130,7 @@ func (a *App) updateScrapeProgress(progress scraper.Progress) {
 	status := &a.scrapeStatus
 	status.Total, status.Done = progress.Total, progress.Done
 	status.Success, status.Skipped, status.Failed = progress.Success, progress.Skipped, progress.Failed
+	status.Partial, status.Unmatched, status.Ambiguous, status.Unavailable, status.DownloadFailed = progress.Partial, progress.Unmatched, progress.Ambiguous, progress.Unavailable, progress.DownloadFailed
 	status.Current = progress.Current
 }
 
@@ -381,15 +390,15 @@ func (a *App) adminScrapeAvatars(c *gin.Context) {
 		req.LibraryID, _ = strconv.ParseInt(value, 10, 64)
 	}
 	cfg := a.scrapeConfig()
-	if !cfg.Configured() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址或 token"})
+	if !cfg.AvatarConfigured() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "头像来源未配置"})
 		return
 	}
 	if owner := a.nfoBusyOwner(); owner != "" {
 		c.JSON(http.StatusConflict, gin.H{"error": owner + "正在进行中，请稍后再试"})
 		return
 	}
-	names, err := a.db.ActorsMissingAvatar(req.LibraryID, req.Limit)
+	names, err := scraper.New(cfg, a.db).AvatarCandidates(req.LibraryID, req.Limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -654,6 +663,13 @@ func (a *App) adminScrapeTest(c *gin.Context) {
 	defer cancel()
 	start := time.Now()
 	switch strings.ToLower(strings.TrimSpace(req.Target)) {
+	case "gfriends":
+		_, status, err := gfriends.New(cfg.ActorsDir, cfg.GFriends, cfg.Timeout()).Snapshot(ctx, true)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error(), "elapsed_ms": elapsedMS(start)})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": !status.Stale, "error": status.Error, "detail": fmt.Sprintf("GFriends：%d 个来源，%d 条映射", status.Groups, status.Entries), "elapsed_ms": elapsedMS(start), "status": status})
 	case "translate":
 		if !cfg.Translate.Enabled() {
 			c.JSON(http.StatusOK, gin.H{"ok": false, "error": "未配置翻译 api_url / api_key"})

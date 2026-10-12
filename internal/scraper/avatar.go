@@ -1,85 +1,173 @@
 package scraper
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"unicode"
 
+	"emby-go/internal/actorassets"
 	"emby-go/internal/avatar"
-	"emby-go/internal/imageutil"
+	"emby-go/internal/gfriends"
 	"emby-go/internal/metatube"
 	"emby-go/internal/nfo"
 	"emby-go/internal/scanner"
 	"emby-go/internal/store"
 )
 
-// 演员头像任务（需求 5g）：独立于影片刮削，可单独设 cron。
-//
-// 落盘三步：① 写 NFO 的 <actor><thumb>（远端 URL，真源）→ ② 下载转 webp 存 avatars/
-// → ③ 单文件重扫刷新 DB 索引与 People[].PrimaryImageTag。
-//
-// 匹配口径刻意从严：头像是「人脸」，错配的观感远差于缺失，而且没有人工复核环节，
-// 所以要求姓名或别名归一化后精确相等，宁可不做也不做错。
-
-// AvatarResult 一个演员的头像处理结果。
 type AvatarResult struct {
 	Actor     string
 	Provider  string
 	AvatarURL string
 	Image     string
 	Movies    int
-	Status    string // success / skipped / failed
+	Status    string
 	Reason    string
+	Category  string // unmatched / ambiguous / unavailable / download_failed / partial
+}
+type avatarPrepared struct {
+	result   AvatarResult
+	manifest actorassets.Manifest
+	bytes    []byte
+	pending  *actorassets.Pending
+	previous string
+	existing bool
 }
 
-// RunAvatars 批量补全头像：只处理「头像为空」的演员，已存在的不重复下载（幂等）。
-func (s *Scraper) RunAvatars(ctx context.Context, libraryID int64, limit int,
-	onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
-	if !s.cfg.Configured() {
-		return Progress{}, errors.New("未配置 MetaTube 地址或 token")
+func (s *Scraper) assets() *actorassets.Store {
+	dir := s.cfg.ActorsDir
+	if dir == "" {
+		dir = filepath.Join(filepath.Dir(s.cfg.AvatarsDir), "actors")
 	}
+	return actorassets.New(dir)
+}
+
+// AvatarCandidates applies the limit after examining local files, tags and journals.
+func (s *Scraper) AvatarCandidates(libraryID int64, limit int) ([]string, error) {
 	if s.store == nil {
-		return Progress{}, errors.New("缺少存储，无法读取演员列表")
+		return nil, errors.New("缺少演员存储")
 	}
-	names, err := s.store.ActorsMissingAvatar(libraryID, limit)
+	names, err := s.store.ActorNames(libraryID)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	assets := s.assets()
+	for _, name := range names {
+		if _, err := assets.Pending(name); os.IsNotExist(err) {
+			if _, tag, err := assets.Resolve(name); err == nil {
+				a, err := s.store.ActorAvatar(name)
+				if err == nil && a.AvatarTag == tag {
+					continue
+				}
+			}
+		}
+		out = append(out, name)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+func (s *Scraper) RunAvatars(ctx context.Context, libraryID int64, limit int, onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
+	if !s.cfg.AvatarConfigured() {
+		return Progress{}, errors.New("头像来源未配置")
+	}
+	names, err := s.AvatarCandidates(libraryID, limit)
 	if err != nil {
 		return Progress{}, err
 	}
-	return s.runAvatars(ctx, names, onProgress, onItem)
+	return s.RunAvatarsFor(ctx, names, onProgress, onItem)
+}
+func (s *Scraper) RunAvatarsFor(ctx context.Context, names []string, onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
+	if !s.cfg.AvatarConfigured() {
+		return Progress{}, errors.New("头像来源未配置")
+	}
+	return s.runActorAssets(ctx, names, false, onProgress, onItem)
+}
+func (s *Scraper) runActorAssets(ctx context.Context, names []string, importOnly bool, onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
+	if s.store == nil {
+		return Progress{}, errors.New("缺少演员存储")
+	}
+	release, err := s.assets().Acquire(ctx)
+	if err != nil {
+		return Progress{}, err
+	}
+	defer release()
+	return s.runActorAssetsLocked(ctx, names, importOnly, onProgress, onItem)
 }
 
-// RunAvatarsFor 只处理指定的演员名（单条路径与测试用）。
-func (s *Scraper) RunAvatarsFor(ctx context.Context, names []string,
-	onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
-	if !s.cfg.Configured() {
-		return Progress{}, errors.New("未配置 MetaTube 地址或 token")
+func (s *Scraper) runActorAssetsLocked(ctx context.Context, names []string, importOnly bool, onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
+	all, err := s.store.ActorNames(0)
+	if err != nil {
+		return Progress{}, err
 	}
-	return s.runAvatars(ctx, names, onProgress, onItem)
-}
-
-func (s *Scraper) runAvatars(ctx context.Context, names []string,
-	onProgress func(Progress), onItem func(AvatarResult)) (Progress, error) {
-	progress := Progress{Total: len(names)}
-	if len(names) == 0 {
-		return progress, nil
+	collisions := legacyCollisions(all)
+	seen := map[string]bool{}
+	unique := []string{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n != "" && !seen[n] {
+			seen[n] = true
+			unique = append(unique, n)
+		}
 	}
-
-	var (
-		mu      sync.Mutex
-		aborted atomic.Bool
-		done    atomic.Int64
-	)
-	emit := func(result AvatarResult) {
-		count := int(done.Add(1))
-		mu.Lock()
-		progress.Done = count
+	progress := Progress{Total: len(unique)}
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	client := gfriends.New(s.assets().Dir, s.cfg.GFriends, s.cfg.Timeout())
+	var once sync.Once
+	var index *gfriends.Index
+	var indexErr error
+	getIndex := func() (*gfriends.Index, error) {
+		once.Do(func() { index, _, indexErr = client.Snapshot(workCtx, false) })
+		return index, indexErr
+	}
+	jobs := make(chan string)
+	ready := make(chan avatarPrepared, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range jobs {
+				if workCtx.Err() != nil {
+					return
+				}
+				p := s.prepareAvatar(workCtx, name, collisions[avatar.FileName(name)], importOnly, client, getIndex)
+				select {
+				case ready <- p:
+				case <-workCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, name := range unique {
+			select {
+			case jobs <- name:
+			case <-workCtx.Done():
+				return
+			}
+		}
+	}()
+	go func() { wg.Wait(); close(ready) }()
+	aborted := false
+	// This is the only publication/NFO/SQLite writer in the task.
+	for prepared := range ready {
+		if workCtx.Err() != nil {
+			continue
+		}
+		result := prepared.result
+		if result.Status == "" {
+			result = s.commitAvatar(workCtx, prepared, importOnly)
+		}
+		progress.Done++
 		progress.Current = result.Actor
 		switch result.Status {
 		case StatusSuccess:
@@ -92,195 +180,436 @@ func (s *Scraper) runAvatars(ctx context.Context, names []string,
 			progress.Failed++
 			progress.Consecutive++
 		}
-		snapshot := progress
-		mu.Unlock()
-		if onProgress != nil {
-			onProgress(snapshot)
+		switch result.Category {
+		case "unmatched":
+			progress.Unmatched++
+		case "ambiguous":
+			progress.Ambiguous++
+		case "unavailable":
+			progress.Unavailable++
+		case "download_failed":
+			progress.DownloadFailed++
+		case "partial":
+			progress.Partial++
 		}
 		if onItem != nil {
 			onItem(result)
 		}
-		if result.Status == StatusFailed {
-			mu.Lock()
-			consecutive := progress.Consecutive
-			mu.Unlock()
-			if consecutive >= MaxConsecutiveFailures {
-				if aborted.CompareAndSwap(false, true) {
-					slog.Warn("头像任务触发熔断：连续失败过多，中止本次任务", "consecutive", consecutive)
-				}
-			}
+		if onProgress != nil {
+			onProgress(progress)
+		}
+		if progress.Consecutive >= MaxConsecutiveFailures {
+			aborted = true
+			cancel()
 		}
 	}
-
-	jobs := make(chan string)
-	var wg sync.WaitGroup
-	for i := 0; i < s.cfg.Workers(); i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for name := range jobs {
-				if ctx.Err() != nil || aborted.Load() {
-					continue
-				}
-				emit(s.scrapeAvatar(ctx, name))
-			}
-		}()
+	if ctx.Err() != nil {
+		return progress, ctx.Err()
 	}
-	for _, name := range names {
-		if ctx.Err() != nil || aborted.Load() {
-			break
-		}
-		jobs <- name
+	if aborted {
+		return progress, errors.New("连续头像处理失败，任务已中止")
 	}
-	close(jobs)
-	wg.Wait()
-
-	if aborted.Load() {
-		return progress, fmt.Errorf("连续 %d 个演员头像失败，疑似 MetaTube 不可达或 token 失效，任务已提前中止", MaxConsecutiveFailures)
+	if progress.Failed > 0 {
+		return progress, fmt.Errorf("%d 个演员处理失败，其中 %d 个部分完成，可再次运行恢复", progress.Failed, progress.Partial)
 	}
-	return progress, ctx.Err()
+	return progress, nil
 }
-
-// scrapeAvatar 处理单个演员。
-func (s *Scraper) scrapeAvatar(ctx context.Context, name string) AvatarResult {
-	result := AvatarResult{Actor: name}
+func legacyCollisions(names []string) map[string]bool {
+	counts := map[string]int{}
+	for _, n := range names {
+		counts[avatar.FileName(n)]++
+	}
+	out := map[string]bool{}
+	for k, v := range counts {
+		out[k] = v > 1
+	}
+	return out
+}
+func preparedFailure(p avatarPrepared, category, reason string, skip bool) avatarPrepared {
+	p.result.Status = StatusFailed
+	if skip {
+		p.result.Status = StatusSkipped
+	}
+	p.result.Category = category
+	p.result.Reason = reason
+	return p
+}
+func (s *Scraper) prepareAvatar(ctx context.Context, name string, collision, importOnly bool, client *gfriends.Client, getIndex func() (*gfriends.Index, error)) avatarPrepared {
+	p := avatarPrepared{result: AvatarResult{Actor: name}}
+	assets := s.assets()
+	if pending, err := assets.Pending(name); err == nil {
+		if importOnly && pending.Manifest.Avatar.Origin != "legacy_local" {
+			return preparedFailure(p, "partial", "存在网络头像待恢复，请先运行头像任务", true)
+		}
+		p.pending = pending
+		p.manifest = pending.Manifest
+		return p
+	} else if !os.IsNotExist(err) {
+		return preparedFailure(p, "partial", err.Error(), false)
+	}
+	if _, _, err := assets.Resolve(name); err == nil {
+		p.manifest, _ = assets.Load(name)
+		p.existing = true
+		return p
+	}
+	if m, err := assets.Load(name); err == nil && m.Avatar != nil {
+		p.previous = m.Avatar.SHA256
+		if importOnly {
+			return preparedFailure(p, "partial", "已有清单但图片缺失，请运行头像修复", false)
+		}
+		if m.Avatar.SourceURL == "" {
+			return preparedFailure(p, "partial", "本地资产损坏且没有可恢复的来源地址", false)
+		}
+		data, err := client.Download(ctx, m.Avatar.SourceURL)
+		if err != nil {
+			return preparedFailure(p, "download_failed", err.Error(), false)
+		}
+		p.manifest, p.bytes, err = actorassets.Prepare(name, data, *m.Avatar, m.Aliases)
+		if err != nil {
+			return preparedFailure(p, "download_failed", err.Error(), false)
+		}
+		p.manifest.CreatedAt = m.CreatedAt
+		p.manifest.NFOConflicts = m.NFOConflicts
+		return p
+	} else if err != nil && !os.IsNotExist(err) {
+		return preparedFailure(p, "partial", err.Error(), false)
+	}
+	legacy, err := actorassets.ReadBounded(s.cfg.AvatarsDir, avatar.FileName(name), actorassets.MaxImageBytes)
+	if err == nil {
+		if collision {
+			return preparedFailure(p, "ambiguous", "多个演员共享旧头像文件名，需人工确认", true)
+		}
+		p.manifest, p.bytes, err = actorassets.Prepare(name, legacy, actorassets.Avatar{Origin: "legacy_local"}, nil)
+		if err != nil {
+			return preparedFailure(p, "download_failed", "旧头像损坏: "+err.Error(), false)
+		}
+		return p
+	}
+	if !os.IsNotExist(err) {
+		return preparedFailure(p, "download_failed", "读取旧头像失败: "+err.Error(), false)
+	}
+	if importOnly {
+		return preparedFailure(p, "unmatched", "没有旧头像", true)
+	}
+	// Read current NFOs; a cached URL cannot overrule conflicting film selections.
+	urls, err := s.actorThumbs(name)
+	if err != nil {
+		return preparedFailure(p, "partial", err.Error(), false)
+	}
+	if len(urls) > 1 {
+		return preparedFailure(p, "ambiguous", "影片 NFO 中已有不同头像地址，保留原选择", true)
+	}
+	if len(urls) == 1 {
+		for raw := range urls {
+			data, err := client.Download(ctx, raw)
+			if err != nil {
+				return preparedFailure(p, "download_failed", err.Error(), false)
+			}
+			p.manifest, p.bytes, err = actorassets.Prepare(name, data, actorassets.Avatar{Origin: "nfo", SourceURL: raw}, nil)
+			if err != nil {
+				return preparedFailure(p, "download_failed", err.Error(), false)
+			}
+			return p
+		}
+	}
+	if s.cfg.AvatarMode() != "metatube" {
+		idx, err := getIndex()
+		reason := "unavailable"
+		if err == nil {
+			list, status := idx.Match(name)
+			reason = status
+			if status == "ambiguous" {
+				return preparedFailure(p, status, "GFriends 姓名指向多个人物，已跳过", true)
+			}
+			if status == "matched" {
+				var last error
+				for _, candidate := range list[:min(3, len(list))] {
+					raw, e := gfriends.ImageURL(s.cfg.GFriends.Defaults().BaseURL, candidate)
+					if e != nil {
+						last = e
+						continue
+					}
+					data, e := client.Download(ctx, raw)
+					if e != nil {
+						last = e
+						continue
+					}
+					aliases := sourcedAliases(name, "gfriends/"+candidate.Group, candidate.Name, candidate.TargetName)
+					p.manifest, p.bytes, e = actorassets.Prepare(name, data, actorassets.Avatar{Origin: "gfriends", SourceURL: raw, Group: candidate.Group, SourceFile: candidate.File, IndexVersion: idx.Version, IndexTimestamp: idx.Timestamp.String()}, aliases)
+					if e == nil {
+						return p
+					}
+					last = e
+				}
+				return preparedFailure(p, "download_failed", fmt.Sprint(last), false)
+			}
+		}
+		if s.cfg.AvatarMode() != "gfriends_then_metatube" || !s.cfg.Configured() {
+			message := "GFriends 无精确匹配"
+			if err != nil {
+				message = err.Error()
+			}
+			return preparedFailure(p, reason, message, reason == "unmatched")
+		}
+	}
 	results, err := s.client.SearchActors(ctx, name, "", true)
 	if err != nil {
-		return s.avatarFailure(result, "演员搜索失败: "+err.Error())
+		return preparedFailure(p, "unavailable", err.Error(), false)
 	}
 	match, ok := matchActor(results, name)
 	if !ok {
-		result.Status, result.Reason = StatusSkipped, "无姓名/别名精确匹配的演员"
-		slog.Warn("头像任务跳过：无精确匹配", "actor", name, "candidates", len(results))
-		return result
+		return preparedFailure(p, "unmatched", "MetaTube 无唯一姓名/别名匹配", true)
 	}
 	if len(match.Images) == 0 {
-		result.Status, result.Reason = StatusSkipped, "该演员没有图片"
-		return result
+		return preparedFailure(p, "unmatched", "演员没有图片", true)
 	}
-	result.Provider, result.AvatarURL = match.Provider, strings.TrimSpace(match.Images[0])
-	if result.AvatarURL == "" {
-		result.Status, result.Reason = StatusSkipped, "图片地址为空"
-		return result
-	}
-
-	data, err := s.client.Download(ctx, result.AvatarURL, maxImageBytes)
+	data, err := client.Download(ctx, match.Images[0])
 	if err != nil {
-		return s.avatarFailure(result, "下载头像失败: "+err.Error())
+		return preparedFailure(p, "download_failed", err.Error(), false)
 	}
-	dir := s.avatarsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return s.avatarFailure(result, "创建头像目录失败: "+err.Error())
-	}
-	dest := avatar.Path(dir, name)
-	if err := writeWebP(data, dest); err != nil {
-		return s.avatarFailure(result, "写入头像失败: "+err.Error())
-	}
-	result.Image = dest
-
-	// 写 NFO 真源 + 刷新索引（每部参演影片各一份 NFO）。
-	movies, err := s.store.MoviesByActor(name)
+	aliases := sourcedAliases(name, "metatube/"+match.Provider, append([]string{match.Name}, match.Aliases...)...)
+	p.manifest, p.bytes, err = actorassets.Prepare(name, data, actorassets.Avatar{Origin: "metatube", SourceURL: match.Images[0]}, aliases)
 	if err != nil {
-		return s.avatarFailure(result, "查询参演影片失败: "+err.Error())
+		return preparedFailure(p, "download_failed", err.Error(), false)
 	}
-	for _, movie := range movies {
-		if strings.TrimSpace(movie.NFOPath) == "" {
-			continue
-		}
-		changed, err := nfo.SetActorThumb(movie.NFOPath, name, result.AvatarURL)
-		if err != nil {
-			slog.Warn("写入演员头像真源失败", "actor", name, "nfo", movie.NFOPath, "error", err)
-			continue
-		}
-		if !changed {
-			continue
-		}
-		if err := s.rescan(movie); err != nil {
-			slog.Warn("头像写入后重扫失败", "actor", name, "movie_id", movie.ID, "error", err)
-			continue
-		}
-		result.Movies++
-	}
-	// 索引里的头像标识与远端地址最后写：重扫会把 <thumb> 带进 actors.avatar_url，
-	// 但重扫不认识本地副本，avatar_tag 只能由这里补。
-	if err := s.store.SetActorAvatar(name, result.AvatarURL, avatar.Tag(data)); err != nil {
-		return s.avatarFailure(result, "写入头像索引失败: "+err.Error())
-	}
-	result.Status = StatusSuccess
-	slog.Info("演员头像已更新", "actor", name, "provider", match.Provider, "movies", result.Movies)
-	return result
+	return p
 }
 
-// rescan 单文件重扫，刷新该片的 DB 索引（含演员与头像地址）。
+// Only the uniquely matched provider record supplies aliases. Do not join other
+// local actors or collect names from unrelated index entries.
+func sourcedAliases(name, source string, names ...string) []actorassets.Alias {
+	seen := map[string]bool{strings.TrimSpace(name): true}
+	var aliases []actorassets.Alias
+	for _, alias := range names {
+		alias = strings.TrimSpace(alias)
+		if alias != "" && !seen[alias] {
+			aliases = append(aliases, actorassets.Alias{Name: alias, Source: source})
+			seen[alias] = true
+		}
+	}
+	return aliases
+}
+
+func (s *Scraper) actorThumbs(name string) (map[string]bool, error) {
+	urls := map[string]bool{}
+	movies, err := s.store.MoviesByActor(name)
+	if err != nil {
+		return nil, err
+	}
+	for _, movie := range movies {
+		if err := s.validateActorMovie(movie); err != nil {
+			return nil, err
+		}
+		meta, err := nfo.Read(movie.NFOPath)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range meta.Actors {
+			if strings.TrimSpace(a.Name) == name && strings.TrimSpace(a.Thumb) != "" {
+				urls[strings.TrimSpace(a.Thumb)] = true
+			}
+		}
+	}
+	return urls, nil
+}
+func (s *Scraper) validateActorMovie(movie store.Movie) error {
+	lib, err := s.store.Library(movie.LibraryID)
+	if err != nil {
+		return err
+	}
+	root, err := filepath.EvalSymlinks(lib.Path)
+	if err != nil {
+		return err
+	}
+	for _, p := range []string{movie.SourcePath, movie.NFOPath} {
+		resolved, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, resolved)
+		if err != nil || !filepath.IsLocal(rel) {
+			return errors.New("影片路径不在当前媒体库内")
+		}
+	}
+	return nil
+}
+func (s *Scraper) commitAvatar(ctx context.Context, p avatarPrepared, importOnly bool) AvatarResult {
+	r := p.result
+	assets := s.assets()
+	fail := func(err error) AvatarResult {
+		r.Status = StatusFailed
+		r.Category = "partial"
+		r.Reason = err.Error()
+		return r
+	}
+	actor, err := s.store.ActorAvatar(r.Actor)
+	if err != nil {
+		return fail(err)
+	}
+	if actor.Name == "" {
+		r.Status = StatusSkipped
+		r.Reason = "演员已不在当前索引中"
+		return r
+	}
+	if p.existing {
+		_, tag, err := assets.Resolve(r.Actor)
+		if err != nil {
+			return fail(err)
+		}
+		if actor.AvatarTag != tag {
+			if err := s.store.SetActorAvatar(r.Actor, "", tag); err != nil {
+				return fail(err)
+			}
+			r.Status = StatusSuccess
+			return r
+		}
+		r.Status = StatusSkipped
+		r.Reason = "已有完整头像，已保留"
+		return r
+	}
+	if p.pending == nil {
+		pending, err := assets.Stage(p.manifest, p.bytes, p.previous)
+		if err != nil {
+			return fail(err)
+		}
+		p.pending = &pending
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := assets.Publish(p.pending); err != nil {
+		return fail(err)
+	}
+	path, tag, err := assets.Resolve(r.Actor)
+	if err != nil {
+		return fail(err)
+	}
+	r.Image = path
+	r.AvatarURL = p.manifest.Avatar.SourceURL
+	r.Provider = p.manifest.Avatar.Origin
+	// Imported images have no remote provenance and never rewrite film NFO.
+	if !importOnly && p.manifest.Avatar.Origin != "legacy_local" && r.AvatarURL != "" {
+		p.pending.Stage = "pending_nfo"
+		if err := assets.SavePending(p.pending); err != nil {
+			return fail(err)
+		}
+		movies, err := s.store.MoviesByActor(r.Actor)
+		if err != nil {
+			return fail(err)
+		}
+		p.pending.RemainingSources = nil
+		for _, movie := range movies {
+			p.pending.RemainingSources = append(p.pending.RemainingSources, actorassets.Hash([]byte(movie.SourcePath)))
+		}
+		if err := assets.SavePending(p.pending); err != nil {
+			return fail(err)
+		}
+		var failures []error
+		var conflicts []actorassets.ThumbConflict
+		for _, movie := range movies {
+			if ctx.Err() != nil {
+				failures = append(failures, ctx.Err())
+				break
+			}
+			if err := s.validateActorMovie(movie); err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			meta, err := nfo.Read(movie.NFOPath)
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			present := false
+			for _, a := range meta.Actors {
+				if strings.TrimSpace(a.Name) == r.Actor {
+					present = true
+					if strings.TrimSpace(a.Thumb) != "" && strings.TrimSpace(a.Thumb) != r.AvatarURL {
+						conflicts = append(conflicts, actorassets.ThumbConflict{SourceKey: actorassets.Hash([]byte(movie.SourcePath)), URL: actorassets.SafeURL(a.Thumb)})
+					}
+				}
+			}
+			if !present {
+				completeSource(p.pending, movie.SourcePath)
+				continue
+			}
+			_, err = nfo.FillActorThumb(movie.NFOPath, r.Actor, r.AvatarURL)
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			// Re-read even an unchanged NFO: a previous run may have stopped after writing it.
+			if err := s.rescan(movie); err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			r.Movies++
+			completeSource(p.pending, movie.SourcePath)
+			if err := assets.SavePending(p.pending); err != nil {
+				failures = append(failures, err)
+				break
+			}
+		}
+		if err := assets.RecordConflicts(p.pending, conflicts); err != nil {
+			failures = append(failures, err)
+		}
+		if err := errors.Join(failures...); err != nil {
+			_ = s.store.SetActorAvatar(r.Actor, "", tag)
+			return fail(err)
+		}
+		p.pending.Stage = "pending_rescan"
+		if err := assets.SavePending(p.pending); err != nil {
+			return fail(err)
+		}
+	}
+	if err := s.store.SetActorAvatar(r.Actor, "", tag); err != nil {
+		return fail(err)
+	}
+	p.pending.Stage = "complete"
+	if err := assets.SavePending(p.pending); err != nil {
+		return fail(err)
+	}
+	if err := assets.Complete(r.Actor); err != nil {
+		return fail(err)
+	}
+	r.Status = StatusSuccess
+	return r
+}
+
+func completeSource(p *actorassets.Pending, path string) {
+	key := actorassets.Hash([]byte(path))
+	remaining := p.RemainingSources[:0]
+	for _, value := range p.RemainingSources {
+		if value != key {
+			remaining = append(remaining, value)
+		}
+	}
+	p.RemainingSources = remaining
+}
 func (s *Scraper) rescan(movie store.Movie) error {
 	library, err := s.store.Library(movie.LibraryID)
 	if err != nil {
 		return err
 	}
-	_, err = scanner.RescanOne(s.store, library, movie.SourcePath)
+	result, err := scanner.RescanOne(s.store, library, movie.SourcePath)
+	if err == nil && result.Failed > 0 {
+		return errors.New("头像写入后重扫失败")
+	}
 	return err
 }
-
-func (s *Scraper) avatarFailure(result AvatarResult, reason string) AvatarResult {
-	result.Status, result.Reason = StatusFailed, reason
-	slog.Warn("演员头像处理失败", "actor", result.Actor, "reason", reason)
-	return result
-}
-
-// avatarsDir 头像目录；未配置时与数据库同级（需求 A4 #20）。
-func (s *Scraper) avatarsDir() string {
-	if dir := strings.TrimSpace(s.cfg.AvatarsDir); dir != "" {
-		return dir
-	}
-	return "avatars"
-}
-
-// matchActor 在搜索结果里找姓名或别名与查询名精确匹配的那条。
-// 归一化只做「全角转半角 + 去空白 + 小写」，不做模糊匹配——
-// 头像是人脸，错配比缺失更糟（需求 5g 的匹配口径）。
+func foldName(raw string) string { return gfriends.Fold(raw) }
 func matchActor(results []metatube.ActorSearchResult, query string) (metatube.ActorSearchResult, bool) {
-	want := foldName(query)
+	var found metatube.ActorSearchResult
+	count := 0
 	for _, item := range results {
-		if foldName(item.Name) == want {
-			return item, true
-		}
+		matched := foldName(item.Name) == foldName(query)
 		for _, alias := range item.Aliases {
-			if foldName(alias) == want {
-				return item, true
-			}
+			matched = matched || foldName(alias) == foldName(query)
+		}
+		if matched {
+			found = item
+			count++
 		}
 	}
-	return metatube.ActorSearchResult{}, false
-}
-
-// foldName 归一化演员名：全角转半角、去所有空白、转小写。
-func foldName(raw string) string {
-	var builder strings.Builder
-	for _, char := range strings.TrimSpace(raw) {
-		switch {
-		case char == 0x3000: // 全角空格
-			continue
-		case char >= 0xFF01 && char <= 0xFF5E: // 全角 ASCII
-			char -= 0xFEE0
-		case unicode.IsSpace(char):
-			continue
-		}
-		builder.WriteRune(unicode.ToLower(char))
-	}
-	return builder.String()
-}
-
-// writeWebP 把下载到的图片字节转 webp 落盘（临时文件 + 原子 rename）。
-// 下载失败或转码失败都不会留下半截文件。
-func writeWebP(data []byte, dest string) error {
-	tmp := dest + ".tmp"
-	if err := imageutil.EncodeWebP(bytes.NewReader(data), tmp); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("转 webp 失败: %w", err)
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return found, count == 1
 }

@@ -23,8 +23,8 @@ UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-# The application persists its generated server_id into this existing file.
-ReadWritePaths=/etc/emby-go/config.yaml
+# Atomic config saves create a temporary file then rename it in this directory.
+ReadWritePaths=/etc/emby-go
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=emby-go

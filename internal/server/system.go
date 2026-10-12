@@ -18,7 +18,7 @@ func (a *App) publicInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"LocalAddresses":  []string{},
 		"RemoteAddresses": []string{},
-		"ServerName":      a.serverName,
+		"ServerName":      a.currentServerName(),
 		"Version":         embyVersion,
 		"ProductName":     "Emby-go",
 		"Id":              a.serverID,
@@ -54,7 +54,7 @@ func (a *App) info(c *gin.Context) {
 	local := scheme + "://" + c.Request.Host
 	c.JSON(http.StatusOK, gin.H{
 		"Id":                         a.serverID,
-		"ServerName":                 a.serverName,
+		"ServerName":                 a.currentServerName(),
 		"Version":                    embyVersion,
 		"OperatingSystem":            runtime.GOOS,
 		"OperatingSystemDisplayName": osName,
@@ -124,7 +124,7 @@ type serverDomainsResponse struct {
 }
 
 func (a *App) serverDomains(c *gin.Context) {
-	domains := a.cfg.ServerDomains
+	domains := a.configSnapshot().ServerDomains
 	if domains == nil {
 		domains = []config.ServerDomain{}
 	}

@@ -56,6 +56,7 @@ func (a *App) virtualFolderItems() ([]gin.H, error) {
 		return nil, err
 	}
 	folders := make([]gin.H, 0, len(libraries))
+	cfg := a.configSnapshot()
 	for _, library := range libraries {
 		id := externalLibraryID(library.ID)
 		folders = append(folders, gin.H{
@@ -63,7 +64,7 @@ func (a *App) virtualFolderItems() ([]gin.H, error) {
 			"CollectionType": "movies", "ItemId": id, "Id": id,
 			"LibraryOptions": gin.H{
 				"ContentType": "movies", "PathInfos": []gin.H{{"Path": library.Path}},
-				"EnableRealtimeMonitor":        !a.cfg.DisableLibraryMonitor && a.cfg.MonitorMode() == librarywatch.ModeRealtime,
+				"EnableRealtimeMonitor":        !cfg.DisableLibraryMonitor && cfg.MonitorMode() == librarywatch.ModeRealtime,
 				"EnableChapterImageExtraction": false, "ExtractChapterImagesDuringLibraryScan": false,
 			},
 		})

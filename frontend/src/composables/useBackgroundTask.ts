@@ -19,7 +19,7 @@ export function useBackgroundTask(kind: BackgroundKind, blocked: () => boolean, 
     progress.value = null; state.visible = state.unavailable = state.submitting = state.cancelling = false; failures = 0; tracking = false;
   }
   function announce(p: BackgroundProgress) {
-    const label = kind === 'probe' ? '探测' : p.kind === 'scrape_avatars' ? '头像任务' : '刮削';
+    const label = kind === 'probe' ? '探测' : p.kind === 'actor_import' ? '旧头像导入' : p.kind === 'scrape_avatars' ? '头像任务' : '刮削';
     toasts.show(`${label}${p.cancelled ? '已中止' : p.aborted ? '已因连续失败中止' : '完成'}：成功 ${p.success} / 跳过 ${p.skipped} / 失败 ${p.failed}${p.error ? ' · ' + p.error : ''}`, p.failed || (p.error && !p.cancelled) ? 'error' : 'ok');
     if (p.failures[0]) toasts.show(`失败/待确认示例：${p.failures[0]}`, 'error');
     completed();
@@ -47,7 +47,7 @@ export function useBackgroundTask(kind: BackgroundKind, blocked: () => boolean, 
     });
     reading = promise; return promise;
   }
-  async function run(payload: Record<string, unknown>, avatar = false) {
+  async function run(payload: Record<string, unknown>, avatar: boolean | 'import' = false) {
     if (state.busy || blocked()) return false;
     generation++; clearTimers(); readController?.abort(); reading = undefined;
     const epoch = generation, controller = new AbortController(); writeController = controller;
@@ -56,7 +56,7 @@ export function useBackgroundTask(kind: BackgroundKind, blocked: () => boolean, 
       const result = await backgroundApi.start(kind, avatar, payload, controller.signal);
       if (epoch !== generation) return false;
       if (!result.total) { state.visible = false; toasts.show(result.message || '没有符合条件的条目'); }
-      else { tracking = true; toasts.show(`${kind === 'probe' ? '探测' : avatar ? '头像任务' : '刮削'}已启动（${result.total} ${avatar ? '个演员' : '条'}）`); }
+      else { tracking = true; toasts.show(`${kind === 'probe' ? '探测' : avatar === 'import' ? '旧头像导入' : avatar ? '头像任务' : '刮削'}已启动（${result.total} ${avatar ? '个演员' : '条'}）`); }
       return true;
     } catch (cause) {
       if (epoch === generation) { state.visible = false; toasts.show(cause instanceof Error ? cause.message : '启动失败', 'error'); }

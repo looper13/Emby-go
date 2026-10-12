@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"emby-go/internal/actorassets"
 	"emby-go/internal/avatar"
 	"emby-go/internal/imageutil"
 	"emby-go/internal/store"
@@ -30,7 +31,13 @@ func (a *App) avatarsDir() string {
 	if dir, err := a.db.Setting(settingAvatarsDir); err == nil && strings.TrimSpace(dir) != "" {
 		return strings.TrimSpace(dir)
 	}
-	return avatar.DefaultDir(a.cfg.DBPath)
+	return avatar.DefaultDir(a.configSnapshot().DBPath)
+}
+
+func (a *App) actorAssets() *actorassets.Store {
+	cfg := a.configSnapshot()
+	_ = cfg.ResolveStorage()
+	return actorassets.New(cfg.ActorsDir)
 }
 
 // personAvatar 返回演员本地头像副本的路径与内容标识。
@@ -64,6 +71,9 @@ func (a *App) loadPersonAvatar(name string) (string, string) {
 	actor, err := a.db.ActorAvatar(name)
 	if err != nil || actor.Name == "" {
 		return "", ""
+	}
+	if path, tag, err := a.actorAssets().Resolve(actor.Name); err == nil {
+		return path, tag
 	}
 	path := avatar.Path(a.avatarsDir(), actor.Name)
 	if info, err := os.Stat(path); err != nil || info.IsDir() {
@@ -705,7 +715,7 @@ func (a *App) peopleOfActors(m store.Movie, actors []store.ActorRef, loaded bool
 			continue
 		}
 		person := gin.H{"Name": name, "Id": entityId("Person", name), "Type": "Actor"}
-		if tag := actor.AvatarTag; tag != "" {
+		if _, tag := a.personAvatar(name); tag != "" {
 			person["PrimaryImageTag"] = tag
 		}
 		people = append(people, person)

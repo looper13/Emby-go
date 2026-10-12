@@ -14,9 +14,9 @@ import (
 	"emby-go/internal/store"
 )
 
-func (a *App) startLibraryMonitoring() {
-	if a.cfg.DisableLibraryMonitor || a.rootCtx.Err() != nil {
-		return
+func (a *App) startLibraryMonitoring() []string {
+	if a.configSnapshot().DisableLibraryMonitor || a.rootCtx.Err() != nil {
+		return nil
 	}
 	a.watchMu.Lock()
 	if a.monitors == nil {
@@ -26,20 +26,25 @@ func (a *App) startLibraryMonitoring() {
 	libraries, err := a.db.Libraries()
 	if err != nil {
 		slog.Warn("装载媒体库监听失败", "error", err)
-		return
+		return []string{"装载媒体库监听失败：" + err.Error()}
 	}
+	var warnings []string
 	for _, library := range libraries {
-		a.watchLibrary(library)
+		if err := a.watchLibrary(library); err != nil {
+			warnings = append(warnings, library.Name+"："+err.Error())
+		}
 	}
+	return warnings
 }
 
-func (a *App) watchLibrary(library store.Library) {
+func (a *App) watchLibrary(library store.Library) error {
 	a.watchMu.Lock()
 	defer a.watchMu.Unlock()
-	if a.monitors == nil || a.monitors[library.ID] != nil || a.rootCtx.Err() != nil {
-		return
+	cfg := a.configSnapshot()
+	if cfg.DisableLibraryMonitor || a.monitors == nil || a.monitors[library.ID] != nil || a.rootCtx.Err() != nil {
+		return nil
 	}
-	mode := a.cfg.MonitorMode()
+	mode := cfg.MonitorMode()
 	monitor, err := librarywatch.New(a.rootCtx, library.Path, librarywatch.Options{Mode: mode}, func(ctx context.Context, changes []librarywatch.Change) error {
 		return a.refreshLibraryChanges(ctx, library, changes)
 	}, func(err error) {
@@ -53,10 +58,11 @@ func (a *App) watchLibrary(library store.Library) {
 	})
 	if err != nil {
 		slog.Warn("启动媒体库监听失败，可使用定时扫描", "library_id", library.ID, "error", err)
-		return
+		return err
 	}
 	a.monitors[library.ID] = monitor
 	slog.Info("已启动媒体库监控", "library_id", library.ID, "path", library.Path, "mode", mode)
+	return nil
 }
 
 func (a *App) stopLibraryMonitor(id int64) bool {
@@ -88,7 +94,7 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		return errScanBusy
 	}
 	taskType := "watch"
-	if a.cfg.MonitorMode() == librarywatch.ModePolling {
+	if a.configSnapshot().MonitorMode() == librarywatch.ModePolling {
 		taskType = "poll"
 	}
 	taskID := a.startTask(taskType)

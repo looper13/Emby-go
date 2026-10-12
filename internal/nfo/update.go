@@ -350,6 +350,15 @@ func renderActors(actors []Actor, indent string) []string {
 // 演员不存在或已是同值时不做任何写入，返回 false。
 // 之所以不做「读出全部演员 → 整体重写 actor 块」：那会丢掉我们没建模的 actor 子元素。
 func SetActorThumb(path, name, thumb string) (bool, error) {
+	return setActorThumb(path, name, thumb, false)
+}
+
+// FillActorThumb preserves existing selections, including a different nonempty URL.
+func FillActorThumb(path, name, thumb string) (bool, error) {
+	return setActorThumb(path, name, thumb, true)
+}
+
+func setActorThumb(path, name, thumb string, onlyEmpty bool) (bool, error) {
 	name = strings.TrimSpace(name)
 	thumb = strings.TrimSpace(thumb)
 	if name == "" || thumb == "" {
@@ -373,6 +382,9 @@ func SetActorThumb(path, name, thumb string) (bool, error) {
 		if ScrapedTagValue(block, "thumb") == thumb {
 			return false, nil
 		}
+		if onlyEmpty && ScrapedTagValue(block, "thumb") != "" {
+			return false, nil
+		}
 		replaced := upsertScalarIn(block, "thumb", thumb, actorChildIndent(block), "</actor>")
 		text = text[:loc[0]] + replaced + text[loc[1]:]
 		changed = true
@@ -380,6 +392,15 @@ func SetActorThumb(path, name, thumb string) (bool, error) {
 	}
 	if !changed {
 		return false, nil
+	}
+	if onlyEmpty {
+		info, err := os.Stat(path)
+		if err != nil {
+			return false, err
+		}
+		if info.Mode().Perm()&0222 == 0 {
+			return false, fmt.Errorf("NFO is read-only: %s", path)
+		}
 	}
 	return true, writeFileAtomic(path, text)
 }

@@ -132,7 +132,7 @@ func (a *App) prepareProbe(req probeRequest) (probePlan, error) {
 	}
 	// ffprobe 在任务启动前就解析并自检：缺 ffprobe 或它无法执行时直接给明确错误，
 	// 而不是让成千上万条目逐个失败一遍（那既浪费时间又难归因）。
-	ffprobe, err := probe.LookPath(a.cfg.FFProbePath)
+	ffprobe, err := probe.LookPath(a.configSnapshot().FFProbePath)
 	if err != nil {
 		return probePlan{}, err
 	}
@@ -239,7 +239,7 @@ func (a *App) adminProbeMediaItem(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "该影片没有 NFO，探测结果无处写入；请先完成元数据刮削"})
 		return
 	}
-	ffprobe, err := probe.LookPath(a.cfg.FFProbePath)
+	ffprobe, err := probe.LookPath(a.configSnapshot().FFProbePath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -263,7 +263,7 @@ func (a *App) adminProbeMediaItem(c *gin.Context) {
 			failures = append(failures, item.label()+"：源不是 http(s) 地址")
 			continue
 		}
-		result, runErr := probe.Run(ctx, ffprobe, url, a.cfg.ProbeTimeout())
+		result, runErr := probe.Run(ctx, ffprobe, url, a.configSnapshot().ProbeTimeout())
 		if runErr != nil {
 			failures = append(failures, item.label()+"："+runErr.Error())
 			continue
@@ -354,7 +354,8 @@ func (a *App) runProbe(taskID int64, ffprobe string, targets []probeTarget, only
 	jobs := make(chan probeTarget)
 	touched := make(chan int64, len(targets))
 	var wg sync.WaitGroup
-	for i := 0; i < a.cfg.ProbeWorkers(); i++ {
+	workers := a.configSnapshot().ProbeWorkers()
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -485,7 +486,7 @@ func (a *App) probeOne(ctx context.Context, ffprobe string, target probeTarget, 
 		}
 	}
 
-	result, err := probe.Run(ctx, ffprobe, url, a.cfg.ProbeTimeout())
+	result, err := probe.Run(ctx, ffprobe, url, a.configSnapshot().ProbeTimeout())
 	if err != nil {
 		a.probeFailure(movie, target.label()+"："+err.Error())
 		return

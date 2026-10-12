@@ -43,7 +43,7 @@ id -u emby-go >/dev/null 2>&1 || sudo useradd --system --gid emby-go \
   --home-dir /var/lib/emby-go --no-create-home --shell /usr/sbin/nologin emby-go
 
 sudo install -o root -g root -m 0755 dist/emby-go-linux-amd64 /usr/local/bin/emby-go
-sudo install -d -o root -g emby-go -m 0750 /etc/emby-go
+sudo install -d -o emby-go -g emby-go -m 0750 /etc/emby-go
 sudo install -d -o emby-go -g emby-go -m 0750 /var/lib/emby-go
 
 # 保留已存在的私人配置，避免覆盖 Redis 密码和 server_id。
@@ -53,7 +53,7 @@ fi
 sudoedit /etc/emby-go/config.yaml
 ```
 
-核对配置中的 `port`、`redis_addr`、`redis_password`、`redis_db`，推荐将 `db_path` 设为 `/var/lib/emby-go/emby-go.db`。保留示例的相对路径 `emby-go.db` 也会写入同一目录。配置文件需要允许 `emby-go` 用户读写，因为程序首次启动会回写 `server_id`；已有配置迁移时也需检查其所有者和权限。
+核对配置中的 `port`、`redis_addr`、`redis_password`、`redis_db`，推荐将 `db_path` 设为 `/var/lib/emby-go/emby-go.db`。保留示例的相对路径 `emby-go.db` 也会写入同一目录。配置文件和 `/etc/emby-go` 目录需要允许 `emby-go` 用户读写：设置页保存及首次回写 `server_id` 使用同目录临时文件加原子替换。已有部署升级时，将目录所有者调整为 `emby-go:emby-go`（0750），配置文件设为 0640，并使用新版服务文件的 `ReadWritePaths=/etc/emby-go`；仅允许写单个文件不足以原子替换。
 
 服务端默认端口为 **18080**。服务以非 root 用户运行，监听 80/443 时请使用反向代理，不要改成 root 运行。首次管理员初始化前，不要将服务端口直接暴露到公网。
 
@@ -85,7 +85,7 @@ sudo systemctl status emby-go --no-pager
 
 `emby-go` 用户需要媒体目录及父目录的读取、遍历权限。刮削、探测、手动补录还需要媒体目录写权限，才能写入 NFO、图片和 `mediainfo.json`。可将它加入现有媒体共享组并配置目录组权限；不要对整个媒体库执行递归 `chmod 777` 或无差别改变所有者。修改用户组后重启服务生效。
 
-服务没有隐藏 `/home`，但使用了独立的 `/tmp`，且 `/usr`、`/boot`、`/etc` 默认只读（配置文件除外）。媒体库和自定义演员头像目录建议放在 `/srv`、`/mnt` 或其他专用数据目录，不要放在临时目录或这些受保护的系统目录中。
+服务没有隐藏 `/home`，但使用了独立的 `/tmp`，且 `/usr`、`/boot`、`/etc` 默认只读（`/etc/emby-go` 配置目录除外）。媒体库和自定义演员头像目录建议放在 `/srv`、`/mnt` 或其他专用数据目录，不要放在临时目录或这些受保护的系统目录中。
 
 网络挂载应由系统管理（例如 `/etc/fstab`），不能只挂载在某个桌面登录会话中。需要在服务启动前等待挂载时，运行 `sudo systemctl edit emby-go`，按实际路径添加：
 
@@ -110,7 +110,7 @@ sudo journalctl -u emby-go -f
 /usr/local/bin/emby-go -version
 ```
 
-上面是各自独立的管理命令，不需要依次执行。配置改动需要重启；服务文件改动还需 `daemon-reload`。连续重启时先检查 Redis 连通性、配置文件权限、数据目录权限和端口占用。
+上面是各自独立的管理命令，不需要依次执行。设置页注明的热更新项保存后即应用，端口、调试、数据库、演员目录及 Redis 配置需重启；直接编辑 YAML 仍需重启。服务文件改动还需 `daemon-reload`。连续重启时先检查 Redis 连通性、配置目录权限、数据目录权限和端口占用。
 
 升级前等待扫描、刮削、探测任务结束。当前程序没有信号驱动的优雅停机，`TimeoutStopSec` 不表示应用会等待写入完成；停止服务也会终止它启动的 `ffprobe` 子进程。
 
@@ -130,6 +130,8 @@ sudo systemctl status emby-go --no-pager
 ```
 
 升级只替换二进制，不覆盖私人配置、数据库或媒体文件。自定义 `db_path`、演员头像目录和媒体库不在默认备份范围时，应另外备份；发生数据库迁移后，回滚不能只替换旧二进制，还要恢复对应版本的数据备份。
+
+演员资料默认位于数据库同级 `actors/`（默认部署为 `/var/lib/emby-go/actors`），通过顶层 `actors_dir` 修改，重启生效且不会自动搬迁。目录需由服务账号可写，且一个根目录只允许一个实例写入。备份应包含 `people/`、未完成的 `pending.json`、`migrations/` 及仍在使用的旧 `avatars/`；自定义路径需额外加入备份。恢复数据库后扫描 NFO 可重新关联本地人物头像，无需联网下载。回滚旧版本仍可使用保留的旧头像，但旧版本不认识新资料目录，详见 [演员资料与回滚说明](../ACTOR-ASSETS.md)。
 
 本次 Vue 迁移没有数据库迁移。需要退回旧 UI 时，在任务结束后停服，把预先保存的旧二进制恢复至 `/usr/local/bin/emby-go` 后启动服务；确认 `/` 可重新登录、`/admin#items` 可浏览媒体墙与详情，认证 API 仍返回 JSON。新 UI 已执行的 NFO、图片或业务写入不会因回滚二进制而撤销。这个 Linux 演练仍待实际环境验证。
 

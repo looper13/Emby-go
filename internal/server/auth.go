@@ -196,7 +196,7 @@ func (a *App) authenticateCredentials(c *gin.Context, username, password string)
 // 这里按真实 Emby 的形状给一份完整策略，本服务是单管理员，故 IsAdministrator 恒为 true。
 func (a *App) userDto() gin.H {
 	return gin.H{
-		"Id": "1", "Name": a.currentAdminName(), "ServerName": a.serverName,
+		"Id": "1", "Name": a.currentAdminName(), "ServerName": a.currentServerName(),
 		"ServerId": a.serverID, "HasPassword": true,
 		"HasConfiguredPassword": true, "HasConfiguredEasyPassword": false,
 		"EnableAutoLogin": false, "LastLoginDate": "", "LastActivityDate": "",

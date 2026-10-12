@@ -5,12 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"emby-go/internal/avatar"
 	"emby-go/internal/store"
 )
 
@@ -84,15 +82,10 @@ func (a *App) adminItemDetail(c *gin.Context) {
 
 	actors := make([]detailActor, 0, 8)
 	if list, err := a.db.Actors(movie.ID); err == nil {
-		dir := a.avatarsDir()
 		for _, actor := range list {
 			item := detailActor{Name: actor.Name, AvatarURL: actor.AvatarURL}
-			// 头像任务只在下载成功后才写 avatar_tag，有 tag 即认为本地有副本，
-			// 这里不再逐演员 os.Stat——几十个演员就是几十次磁盘 stat，每次开抽屉都要重来。
-			if tag := strings.TrimSpace(actor.AvatarTag); tag != "" {
-				if path := avatar.Path(dir, actor.Name); path != "" {
-					item.HasImage, item.ImageTag = true, tag
-				}
+			if path, tag := a.personAvatar(actor.Name); path != "" {
+				item.HasImage, item.ImageTag = true, tag
 			}
 			actors = append(actors, item)
 		}

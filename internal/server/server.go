@@ -26,6 +26,9 @@ import (
 )
 
 type App struct {
+	cfgMu           sync.RWMutex
+	configEditMu    sync.Mutex // serializes file updates and monitor reconfiguration
+	configWarnings  []string   // guarded by configEditMu; retained until monitor reconfiguration
 	cfg             config.Config
 	db              *store.Store
 	router          *gin.Engine
@@ -35,7 +38,6 @@ type App struct {
 	adminMu         sync.RWMutex // 保护 adminName：初始化/登录写，其它 handler 并发读
 	adminName       string
 	serverID        string
-	serverName      string
 	taskMu          sync.Mutex
 	tasks           []task
 	nextTaskID      int64
@@ -165,10 +167,6 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
 	}
 	a.rootCtx, a.rootCancel = context.WithCancel(context.Background())
-	a.serverName = cfg.ServerName
-	if a.serverName == "" {
-		a.serverName = "Emby-go"
-	}
 	a.serverID = cfg.ServerID
 	if a.serverID == "" {
 		// 未显式配置则在本库生成稳定 UUID，避免重启漂移（客户端以 ServerId 识别实例）。
@@ -303,11 +301,15 @@ func (a *App) routes() {
 	admin.DELETE("/apikeys/:key", a.adminDeleteAPIKey)
 	admin.GET("/status", a.adminStatus)
 	admin.GET("/settings", a.adminSettings)
+	admin.GET("/config", a.adminConfig)
+	admin.PUT("/config", a.adminSaveConfig)
 	admin.GET("/tasks", a.adminTasks)
 	// 刮削（R4）：配置 + 批量/头像任务 + 单条预览确认 + 图片代理。
 	admin.GET("/scrape/settings", a.adminScrapeSettings)
 	admin.PUT("/scrape/settings", a.adminSaveScrapeSettings)
 	admin.POST("/scrape/test", a.adminScrapeTest)
+	admin.POST("/actors/import/preview", a.adminActorImportPreview)
+	admin.POST("/actors/import", a.adminActorImport)
 	admin.GET("/scrape/candidates", a.adminScrapeCandidates)
 	admin.POST("/scrape/run", a.adminScrapeRun)
 	admin.POST("/scrape/avatars", a.adminScrapeAvatars)

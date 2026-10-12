@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
-	"regexp"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +23,7 @@ type Config struct {
 
 	Port          int            `yaml:"port"` // 监听端口（如 18080）
 	DBPath        string         `yaml:"db_path"`
+	ActorsDir     string         `yaml:"actors_dir"`
 	ServerName    string         `yaml:"server_name"` // 对外站点名（System/Info 的 ServerName）
 	ServerID      string         `yaml:"server_id"`   // Emby ServerId；留空则首次启动生成稳定 UUID 存 DB 并回写
 	Debug         bool           `yaml:"debug"`       // 开启后启用 gin 调试模式与详细请求日志
@@ -83,9 +84,16 @@ func (cfg Config) MonitorMode() string {
 
 // Redis 为必选缓存后端：服务启动时即连接并 Ping，连不上直接拒绝启动。
 func Load(path string) (Config, error) {
+	if path != "" {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return Config{}, err
+		}
+		path = absolute
+	}
 	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", path: path}
 	if path == "" {
-		return cfg, nil
+		return cfg, cfg.ResolveStorage()
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -102,33 +110,54 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("library_monitor_mode 必须为 realtime 或 polling，当前为 %q", cfg.LibraryMonitorMode)
 	}
 	cfg.path = path
-	return cfg, nil
+	return cfg, cfg.ResolveStorage()
 }
 
-// PersistServerID 把自动生成的 ServerId 手术式写回配置文件对应行，保留注释与其它字段。
+// ResolveStorage anchors relative actor storage to the database, never to the config file.
+func (c *Config) ResolveStorage() error {
+	if strings.TrimSpace(c.DBPath) == "" {
+		c.DBPath = "emby-go.db"
+	}
+	db, err := filepath.Abs(c.DBPath)
+	if err != nil {
+		return err
+	}
+	c.DBPath = db
+	dir := strings.TrimSpace(c.ActorsDir)
+	if dir == "" {
+		dir = "actors"
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(filepath.Dir(db), dir)
+	}
+	c.ActorsDir = filepath.Clean(dir)
+	return nil
+}
+
+// PersistServerID 把自动生成的 ServerId 原子写回 YAML，保留注释与其它字段。
 // 无配置文件来源（path 为空）或写失败时返回错误，由调用方决定是否忽略。
 func (c Config) PersistServerID(serverID string) error {
 	if c.path == "" {
 		return nil
 	}
-	file, err := os.ReadFile(c.path)
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	doc, _, _, err := c.readDocument()
 	if err != nil {
 		return err
 	}
-	line := regexp.MustCompile(`(?m)^[ \t]*server_id[ \t]*:[^\r\n]*$`)
-	quoted := `server_id: "` + serverID + `"`
-	if line.Match(file) {
-		return os.WriteFile(c.path, line.ReplaceAll(file, []byte(quoted)), 0644)
+	if err := setNode(doc, "server_id", serverID); err != nil {
+		return err
 	}
-	// 文件里没有 server_id 键：在 server_name 行后补一行（保证顶层缩进），否则追加到文件末尾。
-	lines := strings.Split(string(file), "\n")
-	insert := len(lines)
-	for i, ln := range lines {
-		if strings.HasPrefix(ln, "server_name:") {
-			insert = i + 1
-			break
+	root := doc.Content[0]
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value == "server_id" {
+			root.Content[i+1].Style = yaml.DoubleQuotedStyle
 		}
 	}
-	lines = append(lines[:insert], append([]string{quoted}, lines[insert:]...)...)
-	return os.WriteFile(c.path, []byte(strings.Join(lines, "\n")), 0644)
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	return c.replaceFile(data)
 }

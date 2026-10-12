@@ -9,6 +9,8 @@ import ManualPage from '../src/pages/ManualPage.vue';
 import ApiKeysPage from '../src/pages/ApiKeysPage.vue';
 import ProbePage from '../src/pages/ProbePage.vue';
 import SettingsPage from '../src/pages/SettingsPage.vue';
+import { systemConfigApi } from '../src/api/system-config';
+import { configFixture } from './fixtures/system-config';
 import { useToastStore } from '../src/stores/toasts';
 import libraries from '../../vue-migration/fixtures/json/libraries.json';
 import settings from '../../vue-migration/fixtures/json/settings.json';
@@ -90,9 +92,10 @@ describe('management interaction ownership', () => {
     await w.get('#clear-probes').trigger('click'); await w.get('#clear-probes').trigger('click'); expect(clear).toHaveBeenCalledTimes(1);
     pending.resolve(null); await flushPromises(); expect(read).toHaveBeenCalledTimes(2); expect(w.text()).toContain('暂无探针记录');
   });
-  it('keeps settings read-only and excludes authentication cache statistics', async () => {
+  it('keeps runtime statistics separate from editable config and excludes authentication cache statistics', async () => {
+    vi.spyOn(systemConfigApi, 'read').mockResolvedValue(configFixture());
     vi.spyOn(adminApi, 'settings').mockResolvedValue({ ...settings, cache_stats: { token: { hits: 99, misses: 0, shared: 9 }, apikey: { hits: 99, misses: 0, shared: 9 }, items: { hits: 3, misses: 1, shared: 2 } } });
     const w = page(SettingsPage); await flushPromises(); expect(w.text()).toContain('75.0% · 命中 3 / 未命中 1'); expect(w.text()).toContain('2 次');
-    expect(w.find('form').exists()).toBe(false); expect(w.find('input').exists()).toBe(false); expect(w.find('button').exists()).toBe(false);
+    expect(w.find('#system-config-form').exists()).toBe(true); expect(w.text()).toContain('当前运行状态');
   });
 });

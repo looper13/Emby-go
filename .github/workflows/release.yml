@@ -69,5 +69,11 @@ jobs:
       - name: Upload binaries to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # Explicit binary allowlist: never publish actor images, indexes or runtime data.
+          files: |
+            dist/emby-go-linux-amd64
+            dist/emby-go-linux-arm64
+            dist/emby-go-windows-amd64.exe
+            dist/emby-go-darwin-amd64
+            dist/emby-go-darwin-arm64
           generate_release_notes: true

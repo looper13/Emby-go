@@ -445,8 +445,8 @@ func (a *App) runScheduledScrape(task scheduler.Task) error {
 // runScheduledScrapeAvatars 定时补演员头像。
 func (a *App) runScheduledScrapeAvatars(task scheduler.Task) error {
 	cfg := a.scrapeConfig()
-	if !cfg.Configured() {
-		return errors.New("未配置 MetaTube 地址或 token")
+	if !cfg.AvatarConfigured() {
+		return errors.New("头像来源未配置")
 	}
 	libraryID := paramInt64(task.Params, "library_id")
 	limit := int(paramInt64(task.Params, "limit"))
@@ -454,7 +454,7 @@ func (a *App) runScheduledScrapeAvatars(task scheduler.Task) error {
 	if owner := a.nfoBusyOwner(); owner != "" {
 		return scheduler.ErrBusy
 	}
-	names, err := a.db.ActorsMissingAvatar(libraryID, limit)
+	names, err := scraper.New(cfg, a.db).AvatarCandidates(libraryID, limit)
 	if err != nil {
 		return err
 	}
