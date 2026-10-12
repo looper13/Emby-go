@@ -404,6 +404,21 @@ func (a *App) collectionFolderDTO(l store.Library) gin.H {
 			"IsFavorite": false, "Played": false,
 		},
 	}
+	if l.SourceType == store.SourceAnime {
+		delete(item, "CollectionType")
+		rows := a.animeProjection()
+		parents := map[int64]bool{}
+		unplayed = 0
+		for _, p := range rows {
+			parents[p.SubjectID] = true
+			if !p.Played {
+				unplayed++
+			}
+		}
+		item["ChildCount"], item["RecursiveItemCount"] = len(parents), len(rows)
+		item["UserData"].(gin.H)["UnplayedItemCount"] = unplayed
+		return item
+	}
 	if cover := a.libraryCoverPath(l); cover != "" {
 		item["ImageTags"] = gin.H{"Primary": a.posterTag(cover)}
 		item["PrimaryImageAspectRatio"] = a.cachedCoverRatio(cover)
@@ -473,8 +488,17 @@ func (a *App) counts(c *gin.Context) {
 		return
 	}
 	collections := a.cachedCollections()
+	projection := a.animeProjection()
+	series := map[int64]bool{}
+	episodeCount := 0
+	for _, p := range projection {
+		if p.EpisodeID > 0 {
+			episodeCount++
+			series[p.SubjectID] = true
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"MovieCount": total, "SeriesCount": 0, "EpisodeCount": 0, "GameCount": 0,
+		"MovieCount": total - episodeCount, "SeriesCount": len(series), "EpisodeCount": episodeCount, "GameCount": 0,
 		"ArtistCount": 0, "ProgramCount": 0, "GameSystemCount": 0, "TrailerCount": 0,
 		"SongCount": 0, "AlbumCount": 0, "MusicVideoCount": 0, "BoxSetCount": len(collections),
 		"BookCount": 0, "ItemCount": 0,
@@ -495,6 +519,9 @@ func (a *App) resume(c *gin.Context) {
 	if !a.validUser(c) {
 		return
 	}
+	if a.animePlaylist(c, true) {
+		return
+	}
 	start, _ := strconv.Atoi(c.DefaultQuery("StartIndex", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "30"))
 	if start < 0 {
@@ -512,18 +539,24 @@ func (a *App) resume(c *gin.Context) {
 	actorMap, _ := a.db.ActorsFor(movieIDs(movies))
 	items := make([]gin.H, 0, len(movies))
 	for _, movie := range movies {
-		items = append(items, a.embyItemActors(movie, dataMap[movie.ID], actorMap[movie.ID], true))
+		item := a.embyItemActors(movie, dataMap[movie.ID], actorMap[movie.ID], true)
+		if c.Query("ParentId") == "" {
+			if projected := a.projectAnimeMovie(c, movie.ID); projected != nil {
+				item = projected
+			}
+		}
+		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"Items": items, "TotalRecordCount": total, "StartIndex": start})
 }
 
-// nextUp 无剧集库，恒为空结果（Emby 客户端主屏会调用）。
+// nextUp returns the next playable main episode from a started series.
 func (a *App) nextUp(c *gin.Context) {
 	if userID := c.Query("UserId"); userID != "" && userID != "1" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
-	a.emptyItems(c)
+	a.animeNextUp(c)
 }
 
 // similar 返回与当前影片共享 流派/标签/制片商 的近似影片。
@@ -871,6 +904,9 @@ func (a *App) latest(c *gin.Context) {
 	if !a.validUser(c) {
 		return
 	}
+	if a.animePlaylist(c, false) {
+		return
+	}
 	// ParentId 可能是媒体库外部 id（libraryIDBase+内部 id）或旧内部 id，统一换算。
 	libraryID, _ := parseParentScope(c.Query("ParentId"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "20"))
@@ -890,6 +926,11 @@ func (a *App) latest(c *gin.Context) {
 	for _, m := range movies {
 		item := a.embyItemActors(m, dataMap[m.ID], actorMap[m.ID], true)
 		a.applyItemFields(item, m, fields, c)
+		if libraryID == 0 {
+			if projected := a.projectAnimeMovie(c, m.ID); projected != nil {
+				item = projected
+			}
+		}
 		out = append(out, item)
 	}
 	c.JSON(http.StatusOK, out)
@@ -922,6 +963,9 @@ func (a *App) suggestions(c *gin.Context) {
 // 依据 IncludeItemTypes 区分「影片列表」与「流派/标签/制片商/演员实体列表」，
 // 不支持的类型（如 Series/Episode）返回空结果而非错把影片当该类型返回。
 func (a *App) itemsQuery(c *gin.Context) {
+	if a.animeRequestedItems(c) || a.animeItems(c) || a.animeRootItems(c) {
+		return
+	}
 	parentRaw := c.Query("ParentId")
 	lib, collection := parseParentScope(parentRaw)
 	isBoxsetView := parentRaw == boxsetViewID
@@ -1288,6 +1332,14 @@ func (a *App) item(c *gin.Context) {
 		return
 	}
 	rawID := c.Param("id")
+	if strings.HasPrefix(rawID, "anime-") {
+		if item := a.animeDTO(rawID, c); item != nil {
+			c.JSON(200, item)
+		} else {
+			c.JSON(404, gin.H{"error": "not found"})
+		}
+		return
+	}
 	// 合集媒体库文件夹本身（Id="boxsets"）。
 	if rawID == boxsetViewID {
 		c.JSON(http.StatusOK, a.boxsetFolderDTO(a.cachedCollections()))

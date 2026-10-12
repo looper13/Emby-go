@@ -29,6 +29,15 @@ func (database *Store) SaveScannedMoviesWithStats(movies []ScannedMovie) (stats 
 	if len(movies) == 0 {
 		return stats, nil
 	}
+	checked := map[int64]bool{}
+	for _, entry := range movies {
+		if !checked[entry.Movie.LibraryID] {
+			if err := database.RequireDirectory(entry.Movie.LibraryID); err != nil {
+				return stats, err
+			}
+			checked[entry.Movie.LibraryID] = true
+		}
+	}
 	started := time.Now()
 	defer func() { stats.Total = time.Since(started) }()
 	stage := time.Now()

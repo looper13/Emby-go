@@ -1,4 +1,4 @@
-export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string }
+export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; resumeTicks?: number }
 export interface PlayerHandle { url: string; muted: boolean; video?: HTMLVideoElement; on: (name: string, callback: () => void) => void; play: () => Promise<unknown>; destroy: () => void }
 export type PlayerFactory = (stage: HTMLElement, options: PlayerOptions) => PlayerHandle;
 export function playbackErrorMessage(code: number | undefined, url: string, protocol = location.protocol) {

@@ -149,6 +149,9 @@ func refreshFiles(ctx context.Context, s *store.Store, lib store.Library, files 
 }
 
 func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive, full bool, files []string, onProgress func(Progress)) (result Result, scanErr error) {
+	if !lib.IsDirectory() {
+		return result, store.ErrLibraryCapability
+	}
 	perf := newScanPerformance(lib, directory, recursive, full)
 	defer func() { perf.finish(result, scanErr) }()
 	walkStarted := time.Now()
@@ -405,6 +408,9 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 //   - 只处理该文件所属的分组（CD1/CD2 同组一起重建 AdditionalParts），
 //     批量场景下逐条调用它是 O(n²)，所以批量路径仍走整库 Scan。
 func RescanOne(s *store.Store, lib store.Library, strmPath string) (Result, error) {
+	if !lib.IsDirectory() {
+		return Result{}, store.ErrLibraryCapability
+	}
 	var result Result
 	info, err := os.Stat(strmPath)
 	if err != nil {

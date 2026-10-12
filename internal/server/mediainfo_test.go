@@ -38,6 +38,9 @@ func countingMedia(t *testing.T) (*httptest.Server, *int64) {
 // newProbeTestApp 建一个已登录、已建库、已扫描的测试实例。
 func newProbeTestApp(t *testing.T, root string) (*App, *httptest.Server, string) {
 	t.Helper()
+	// Keep this legacy regression fixture as an upgrade of an existing directory
+	// library. Fresh-instance builtin identity is covered by TestAnime*.
+	seedDirectoryTestLibrary(t, filepath.Join(root, "t.db"), root, "L")
 	app, err := newApp(config.Config{DBPath: filepath.Join(root, "t.db")}, cache.NewMemory(256))
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +83,21 @@ func newProbeTestApp(t *testing.T, root string) (*App, *httptest.Server, string)
 		t.Fatalf("扫描: %d %s", resp.StatusCode, body)
 	}
 	return app, ts, token
+}
+
+func seedDirectoryTestLibrary(t *testing.T, path, root, name string) {
+	t.Helper()
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.AddLibrary(name, root); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestMediaInfoReuse 用「媒体源实际收到的请求数」证明复用生效：

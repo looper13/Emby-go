@@ -17,7 +17,7 @@ func TestIncrementalScanAPIAndScheduledModes(t *testing.T) {
 	writeFile(t, filepath.Join(root, "a.strm"), "http://media.test/a.mp4\n")
 	writeFile(t, filepath.Join(root, "a.nfo"), "<movie><title>A</title></movie>")
 	app, server, token := newProbeTestApp(t, root)
-	libraries, err := app.db.Libraries()
+	libraries, err := app.db.DirectoryLibraries()
 	if err != nil || len(libraries) != 1 {
 		t.Fatalf("libraries = %+v, %v", libraries, err)
 	}

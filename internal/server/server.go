@@ -26,6 +26,7 @@ import (
 )
 
 type App struct {
+	anime           animeRuntime
 	cfgMu           sync.RWMutex
 	configEditMu    sync.Mutex // serializes file updates and monitor reconfiguration
 	configWarnings  []string   // guarded by configEditMu; retained until monitor reconfiguration
@@ -160,6 +161,14 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := db.EnsureAnimeLibrary(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := db.RecoverAnimeSync(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	a := &App{
 		cfg: cfg, db: db, cache: cache.NewManaged(cacheStore),
 		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
@@ -246,6 +255,12 @@ func (a *App) checkScrapeBackend() {
 // 否则一次大库扫描会让停机一直卡到它自然结束。
 func (a *App) Close() {
 	a.rootCancel()
+	a.anime.mu.Lock()
+	if a.anime.job != nil && a.anime.job.cancel != nil {
+		a.anime.job.cancel()
+	}
+	a.anime.mu.Unlock()
+	a.anime.wg.Wait()
 	if a.sched != nil {
 		a.sched.Stop()
 	}
@@ -277,8 +292,10 @@ func (a *App) routes() {
 	// 上游 MetaTube 的图片端点本身也是公开的（Jellyfin 插件同样直接引用），
 	// 这里只做「限定 kind + 限定目标服务 + 限时限量」的转发，不放大暴露面。
 	r.GET("/api/admin/scrape/image", a.adminScrapeImage)
+	r.GET("/api/anime/images/:id", a.animeEntryImage)
 
 	admin := r.Group("/api/admin", a.requireAuth, noStore)
+	a.registerAnime(admin)
 	admin.GET("/libraries", a.adminLibraries)
 	admin.POST("/libraries", a.adminAddLibrary)
 	admin.DELETE("/libraries/:id", a.adminDeleteLibrary)
@@ -388,6 +405,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Library/VirtualFolders/Query", true, a.virtualFoldersQuery},
 		{"GET", "/Users/:uid/Items/Resume", true, a.resume},
 		{"GET", "/Shows/NextUp", true, a.nextUp},
+		{"GET", "/Shows/:id/Seasons", true, a.animeSeasons},
+		{"GET", "/Shows/:id/Episodes", true, a.animeEpisodes},
 		{"GET", "/Users/:uid/Views", true, a.views},
 		{"GET", "/Users/:uid/Items", true, a.items},
 		{"GET", "/Items", true, a.rootItems},

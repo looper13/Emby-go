@@ -83,7 +83,7 @@ func TestEmbyPersonsAndVirtualFoldersQuery(t *testing.T) {
 					t.Fatalf("invalid Person DTO: %+v", person)
 				}
 			}
-		} else if result.TotalRecordCount != 2 || len(result.Items) != 2 || result.Items[0].ID != externalLibraryID(1) || result.Items[0].ItemID != result.Items[0].ID || !reflect.DeepEqual(result.Items[0].Locations, []string{root}) {
+		} else if result.TotalRecordCount != 3 || len(result.Items) != 3 || result.Items[0].ID != externalLibraryID(1) || result.Items[0].ItemID != result.Items[0].ID || !reflect.DeepEqual(result.Items[0].Locations, []string{root}) || len(result.Items[1].Locations)!=0 {
 			t.Fatalf("folders: %+v", result)
 		}
 	}
@@ -126,7 +126,7 @@ func TestEmbyPersonsAndVirtualFoldersQuery(t *testing.T) {
 		{"?Limit=0", 0, 0},
 	} {
 		result := get("/Library/VirtualFolders/Query" + test.query)
-		if len(result.Items) != test.count || result.TotalRecordCount != 2 || result.StartIndex != test.start {
+		if len(result.Items) != test.count || result.TotalRecordCount != 3 || result.StartIndex != test.start {
 			t.Fatalf("folder pagination %s: %+v", test.query, result)
 		}
 	}
@@ -170,6 +170,13 @@ func TestEmbyPersonsAndVirtualFoldersQuery(t *testing.T) {
 
 func TestEmbyEmptyBrowseQueries(t *testing.T) {
 	app, ts, token := newProbeTestApp(t, t.TempDir())
+	builtin, err := app.db.AnimeLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.db.UpdateAnimeLibrary(builtin.Name, false, builtin.Revision); err != nil {
+		t.Fatal(err)
+	}
 	if err := app.db.DeleteLibrary(1); err != nil {
 		t.Fatal(err)
 	}

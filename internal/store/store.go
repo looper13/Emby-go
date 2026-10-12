@@ -39,9 +39,14 @@ type Store struct {
 }
 
 type Library struct {
-	ID   int64  `json:"Id"`
-	Name string `json:"Name"`
-	Path string `json:"Path"`
+	ID         int64  `json:"Id"`
+	Name       string `json:"Name"`
+	Path       string `json:"Path"`
+	Type       string `json:"Type"`
+	Enabled    bool   `json:"Enabled"`
+	SourceType string `json:"SourceType"`
+	SystemKey  string `json:"SystemKey,omitempty"`
+	Revision   int64  `json:"Revision"`
 }
 
 type Movie struct {
@@ -131,6 +136,10 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db, movieEpoch: hex.EncodeToString(cacheID[:]), libraryVersions: make(map[string]int64)}
 	if err := s.init(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateAnime(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -343,45 +352,21 @@ func (s *Store) HasAPIKey(key string) (bool, error) {
 }
 
 func (s *Store) AddLibrary(name, path string) (Library, error) {
-	res, err := s.db.Exec("INSERT INTO libraries(name,path) VALUES(?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name", name, path)
+	var id int64
+	err := s.db.QueryRow("INSERT INTO libraries(name,path) VALUES(?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,revision=libraries.revision+1 RETURNING id", name, path).Scan(&id)
 	if err != nil {
 		return Library{}, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return Library{}, err
-	}
-	if id == 0 {
-		err = s.db.QueryRow("SELECT id FROM libraries WHERE path=?", path).Scan(&id)
-		if err != nil {
-			return Library{}, err
-		}
-	}
-	return Library{ID: id, Name: name, Path: path}, nil
+	return s.Library(id)
 }
 
 // Library 按 id 返回单个启用的媒体库。
 func (s *Store) Library(id int64) (Library, error) {
-	var v Library
-	err := s.db.QueryRow("SELECT id,name,path FROM libraries WHERE id=? AND enabled=1", id).Scan(&v.ID, &v.Name, &v.Path)
-	return v, err
+	return readLibrary(s.db.QueryRow("SELECT "+libraryColumns+" FROM libraries WHERE id=? AND enabled=1", id))
 }
 
 func (s *Store) Libraries() ([]Library, error) {
-	rows, err := s.db.Query("SELECT id,name,path FROM libraries WHERE enabled=1 ORDER BY id")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Library
-	for rows.Next() {
-		var v Library
-		if err := rows.Scan(&v.ID, &v.Name, &v.Path); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return s.listLibraries("WHERE enabled=1")
 }
 
 func jsonText(v []string) string { b, _ := json.Marshal(v); return string(b) }
@@ -404,6 +389,9 @@ func movieValues(movie Movie, size int64, mtime time.Time, now string) []any {
 }
 
 func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error) {
+	if err := s.RequireDirectory(m.LibraryID); err != nil {
+		return 0, err
+	}
 	transaction, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -829,8 +817,21 @@ func (s *Store) DeleteMovie(id int64) error {
 // DeleteLibrary 删除媒体库及其影片索引（仅删库内记录，不触碰磁盘文件）。
 // userdata / movie_actors 通过外键 ON DELETE CASCADE 随影片一并清理。
 func (s *Store) DeleteLibrary(id int64) error {
+	var systemKey sql.NullString
+	if err := s.db.QueryRow(`SELECT system_key FROM libraries WHERE id=?`, id).Scan(&systemKey); err != nil {
+		return err
+	}
+	if systemKey.Valid {
+		return ErrSystemLibrary
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+	// Reserve the writer before collecting IDs; a concurrent watcher may update
+	// the WAL while a deferred read transaction is waiting to become a writer.
+	if _, err = tx.Exec(`UPDATE libraries SET revision=revision WHERE id=?`, id); err != nil {
+		tx.Rollback()
 		return err
 	}
 	ids := []int64{}
@@ -1016,8 +1017,16 @@ func (s *Store) MoviesForProbe(libraryID int64, status string, limit int) ([]Mov
 }
 
 func (s *Store) search(libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
+	return s.searchExcluding(nil, libraryID, term, status, years, genre, tags, studios, person, collection, protocol, scrape, unplayed, favorite, sortBy, desc, limit, offset, officialRatings...)
+}
+
+func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	where := []string{}
 	args := []any{}
+	if len(exclude) > 0 {
+		where = append(where, "id NOT IN (SELECT value FROM json_each(?))")
+		args = append(args, animeJSON(exclude))
+	}
 	switch status {
 	case "":
 		// 默认口径：只列「能看的」，pending/incompatible 需要显式筛选。
@@ -2005,7 +2014,12 @@ const ScrapeConfirmPrefix = "[待人工确认] "
 //
 // 顺带取出 additional_parts 与 nfo_path：刮削只写主 NFO，分段不单独处理。
 func (s *Store) MoviesForScrape(libraryID int64, onlyMissing bool, limit int) ([]Movie, error) {
-	query := "SELECT " + movieCols + " FROM movies WHERE status <> 'incompatible'"
+	if libraryID > 0 {
+		if err := s.RequireDirectory(libraryID); err != nil {
+			return nil, err
+		}
+	}
+	query := "SELECT " + movieCols + " FROM movies WHERE status <> 'incompatible' AND library_id IN (SELECT id FROM libraries WHERE source_type='nfo_directory')"
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -2037,7 +2051,12 @@ func (s *Store) MoviesForScrape(libraryID int64, onlyMissing bool, limit int) ([
 
 // CountMoviesForScrape 统计候选数量，供管理端展示「本次会处理多少条」。
 func (s *Store) CountMoviesForScrape(libraryID int64, onlyMissing bool) (int, error) {
-	query := "SELECT COUNT(*) FROM movies WHERE status <> 'incompatible'"
+	if libraryID > 0 {
+		if err := s.RequireDirectory(libraryID); err != nil {
+			return 0, err
+		}
+	}
+	query := "SELECT COUNT(*) FROM movies WHERE status <> 'incompatible' AND library_id IN (SELECT id FROM libraries WHERE source_type='nfo_directory')"
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"

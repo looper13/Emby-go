@@ -40,16 +40,12 @@ func (a *App) favoriteItem(c *gin.Context, favorite bool) {
 	if !a.validUser(c) {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	movie, err := a.resolveUserMedia(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	movie, err := a.db.Movie(id)
-	if err != nil || !movie.IsVisible() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
+	id := movie.ID
 	if err := a.db.SetFavorite(id, favorite); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -60,6 +56,7 @@ func (a *App) favoriteItem(c *gin.Context, favorite bool) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	resp["ItemId"] = c.Param("id")
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -70,16 +67,12 @@ func (a *App) rateItem(c *gin.Context, likes int) {
 	if !a.validUser(c) {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	movie, err := a.resolveUserMedia(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	movie, err := a.db.Movie(id)
-	if err != nil || !movie.IsVisible() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
+	id := movie.ID
 	if err := a.db.SetLikes(id, likes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -90,6 +83,7 @@ func (a *App) rateItem(c *gin.Context, likes int) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	resp["ItemId"] = c.Param("id")
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -111,16 +105,12 @@ func (a *App) hideFromResume(c *gin.Context) {
 	if !a.validUser(c) {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	movie, err := a.resolveUserMedia(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	movie, err := a.db.Movie(id)
-	if err != nil || !movie.IsVisible() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
+	id := movie.ID
 	hide := strings.EqualFold(c.Query("Hide"), "true")
 	if err := a.db.SetHideFromResume(id, hide); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -132,5 +122,6 @@ func (a *App) hideFromResume(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	resp["ItemId"] = c.Param("id")
 	c.JSON(http.StatusOK, resp)
 }

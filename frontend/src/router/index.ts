@@ -18,6 +18,9 @@ import ProbePage from '../pages/ProbePage.vue';
 import ScrapePage from '../pages/ScrapePage.vue';
 import ActorsPage from '../pages/ActorsPage.vue';
 import ScheduledPage from '../pages/ScheduledPage.vue';
+import AnimePage from '../pages/AnimePage.vue';
+import AnimeDetailPage from '../pages/AnimeDetailPage.vue';
+import AnimeSettingsPage from '../pages/AnimeSettingsPage.vue';
 
 export function createAppRouter(pinia: Pinia, history: RouterHistory = createWebHashHistory(window.location.pathname)) {
   const router = createRouter({
@@ -28,6 +31,9 @@ export function createAppRouter(pinia: Pinia, history: RouterHistory = createWeb
       {
         path: '/', component: ConsoleLayout, meta: { requiresAuth: true },
         children: [
+          { path: 'anime', name: 'anime', component: AnimePage, meta: { title: '动漫', crumb: 'Archive / Anime', navigation: 'anime' } },
+          { path: 'anime/settings', name: 'anime-settings', component: AnimeSettingsPage, meta: { title: '动漫设置', crumb: '动漫 / 设置', navigation: 'anime' } },
+          { path: 'anime/entries/:id', name: 'anime-detail', component: AnimeDetailPage, meta: { title: '番剧详情', crumb: '动漫 / 详情', navigation: 'anime' } },
           { path: 'actors', name: 'actors', component: ActorsPage, meta: { title: '演员', crumb: 'Archive / Actors', navigation: 'actors' } },
           { path: 'scrape', name: 'scrape', component: ScrapePage, meta: { title: '刮削', crumb: 'Archive / Scrape', navigation: 'scrape' } },
           { path: 'scheduled', name: 'scheduled', component: ScheduledPage, meta: { title: '计划任务', crumb: 'Archive / Scheduled', navigation: 'scheduled' } },

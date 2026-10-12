@@ -120,6 +120,11 @@ type probePlan struct {
 // prepareProbe 做探测前的全部校验与目标展开，不改变任何运行状态。
 // 校验（ffprobe 存在且可执行、并发占用）都在这里完成，保证真正开始跑时不会中途才发现环境不可用。
 func (a *App) prepareProbe(req probeRequest) (probePlan, error) {
+	if req.LibraryID > 0 {
+		if err := a.db.RequireDirectory(req.LibraryID); err != nil {
+			return probePlan{}, err
+		}
+	}
 	onlyMissing := true
 	if req.OnlyMissing != nil {
 		onlyMissing = *req.OnlyMissing
@@ -180,6 +185,9 @@ func (a *App) adminProbeMedia(c *gin.Context) {
 		status := http.StatusInternalServerError
 		if errors.Is(err, errProbeBusy) {
 			status = http.StatusConflict
+		}
+		if errors.Is(err, store.ErrLibraryCapability) {
+			status = http.StatusBadRequest
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
 		return

@@ -26,6 +26,7 @@ import (
 
 // scheduledTypes 已接入调度器的任务类型。
 var scheduledTypes = map[string]string{
+	"anime_sync":     "动漫资料同步",
 	"scan":           "增量扫描媒体库",
 	"reindex":        "全量重建索引",
 	"probe":          "媒体信息探测",
@@ -45,6 +46,8 @@ type scheduledView struct {
 // ctx 来自调度器（挂 rootCtx）：进程停机时取消，在跑的扫描据此提前收尾。
 func (a *App) runScheduledTask(ctx context.Context, task scheduler.Task) error {
 	switch task.Type {
+	case "anime_sync":
+		return a.runScheduledAnime(ctx)
 	case "scan", "reindex":
 		return a.runScheduledScan(ctx, task)
 	case "probe":
@@ -155,6 +158,8 @@ func paramBool(v any) bool {
 func normalizeParams(kind string, raw map[string]any) (string, error) {
 	out := map[string]any{}
 	switch kind {
+	case "anime_sync":
+		// Current season only; schedule/enabled remain owned by scheduled_tasks.
 	case "scan":
 		out["library_id"] = paramInt64(raw, "library_id")
 	case "reindex":
@@ -401,6 +406,11 @@ func (a *App) reloadScheduled() {
 // runScheduledScrape 定时批量刮削：同步执行，调度器据此判定重叠。
 // 与手动批量走同一条路径，因此同样「全部结束后整库扫一次」。
 func (a *App) runScheduledScrape(task scheduler.Task) error {
+	if id := paramInt64(task.Params, "library_id"); id > 0 {
+		if err := a.db.RequireDirectory(id); err != nil {
+			return err
+		}
+	}
 	cfg := a.scrapeConfig()
 	if !cfg.Configured() {
 		return errors.New("未配置 MetaTube 地址或 token")
@@ -444,6 +454,11 @@ func (a *App) runScheduledScrape(task scheduler.Task) error {
 
 // runScheduledScrapeAvatars 定时补演员头像。
 func (a *App) runScheduledScrapeAvatars(task scheduler.Task) error {
+	if id := paramInt64(task.Params, "library_id"); id > 0 {
+		if err := a.db.RequireDirectory(id); err != nil {
+			return err
+		}
+	}
 	cfg := a.scrapeConfig()
 	if !cfg.AvatarConfigured() {
 		return errors.New("头像来源未配置")

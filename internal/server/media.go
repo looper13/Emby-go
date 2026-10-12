@@ -44,6 +44,10 @@ func movieImagePath(m store.Movie, kind string) string {
 }
 
 func (a *App) image(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "anime-") {
+		a.animeImage(c)
+		return
+	}
 	rawID := c.Param("id")
 	kind := c.Param("kind")
 	index := 0
@@ -291,6 +295,21 @@ func (a *App) boxsetPoster(rawID string) string {
 }
 
 func (a *App) imageInfo(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "anime-") {
+		item := a.animeDTO(c.Param("id"), c)
+		if item == nil {
+			c.Status(404)
+			return
+		}
+		images := []gin.H{}
+		if tags, ok := item["ImageTags"].(gin.H); ok {
+			for kind, tag := range tags {
+				images = append(images, gin.H{"ImageType": kind, "ImageIndex": 0, "ImageTag": tag})
+			}
+		}
+		c.JSON(200, images)
+		return
+	}
 	rawID := c.Param("id")
 	if id, err := strconv.ParseInt(rawID, 10, 64); err == nil {
 		if libID, ok := parseLibraryExternal(id); ok {
@@ -379,6 +398,9 @@ func currentMovieSource(movie store.Movie, sourcePath string) (store.Movie, bool
 }
 
 func (a *App) playback(c *gin.Context) {
+	if !a.prepareAnimePlayback(c) {
+		return
+	}
 	movie, sourcePath, id, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -396,6 +418,10 @@ func (a *App) playback(c *gin.Context) {
 }
 
 func (a *App) resolvePlaybackTarget(rawID string) (store.Movie, string, string, bool) {
+	if strings.HasPrefix(rawID, "anime-") {
+		m, ok := a.animePlayable(rawID)
+		return m, m.SourcePath, rawID, ok
+	}
 	if movieID, part, ok := parseVirtualPartID(rawID); ok {
 		movie, err := a.db.Movie(movieID)
 		if err != nil || part-2 >= len(movie.AdditionalParts) {
@@ -967,6 +993,9 @@ func randomSessionID() string {
 }
 
 func (a *App) stream(c *gin.Context) {
+	if !a.prepareAnimePlayback(c) {
+		return
+	}
 	movie, sourcePath, _, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -996,6 +1025,9 @@ var streamClient = &http.Client{}
 // 解决 HTTPS 后台 + HTTP 源站的混合内容、跨域/防盗链导致的播放失败。
 // Emby 客户端仍走 /stream 的 302 直拉（服务端零带宽），此端点只服务网页播放器。
 func (a *App) proxyStream(c *gin.Context) {
+	if !a.prepareAnimePlayback(c) {
+		return
+	}
 	movie, sourcePath, _, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -1087,16 +1119,12 @@ func (a *App) playing(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid playback payload"})
 		return
 	}
-	id, err := strconv.ParseInt(req.ItemId, 10, 64)
+	movie, err := a.resolveUserMedia(req.ItemId)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	movie, err := a.db.Movie(id)
-	if err != nil || !movie.IsVisible() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
+	id := movie.ID
 	d, err := a.db.Data(id)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -1105,7 +1133,7 @@ func (a *App) playing(c *gin.Context) {
 	positionTicks := req.PositionTicks
 	stoppedTicks := int64(-1)
 	playCount := d.PlayCount
-	if strings.HasSuffix(c.Request.URL.Path, "Stopped") {
+	if strings.HasSuffix(strings.ToLower(c.Request.URL.Path), "stopped") {
 		stoppedTicks = req.PositionTicks
 		if d.StoppedTicks != req.PositionTicks {
 			playCount++
@@ -1120,7 +1148,7 @@ func (a *App) playing(c *gin.Context) {
 	// 落一个 TTL 无所谓（列表 15s），代价远小于全站 cache miss 风暴。
 	// Stopped 刷新该库列表及跨库结果；心跳只推进单部详情版本。
 	// 管理端列表进度最多延迟 5 秒，Emby 列表最多延迟 15 秒。
-	if strings.HasSuffix(c.Request.URL.Path, "Stopped") {
+	if strings.HasSuffix(strings.ToLower(c.Request.URL.Path), "stopped") {
 		if err := a.db.BumpVersion(movie.LibraryID); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -1133,16 +1161,12 @@ func (a *App) setPlayed(c *gin.Context, played bool) {
 	if !a.validUser(c) {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	movie, err := a.resolveUserMedia(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	movie, err := a.db.Movie(id)
-	if err != nil || !movie.IsVisible() {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
-	}
+	id := movie.ID
 	if err := a.db.SetPlayed(id, played); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -1159,6 +1183,14 @@ func (a *App) played(c *gin.Context) { a.setPlayed(c, true) }
 func (a *App) unplayed(c *gin.Context) { a.setPlayed(c, false) }
 
 func (a *App) additionalParts(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "anime-") {
+		if _, err := a.resolveUserMedia(c.Param("id")); err != nil {
+			c.Status(404)
+			return
+		}
+		a.emptyItems(c)
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

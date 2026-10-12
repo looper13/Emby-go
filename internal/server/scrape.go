@@ -213,6 +213,12 @@ func (a *App) adminScrapeRun(c *gin.Context) {
 	if value := c.Query("library_id"); value != "" && req.LibraryID == 0 {
 		req.LibraryID, _ = strconv.ParseInt(value, 10, 64)
 	}
+	if req.LibraryID > 0 {
+		if err := a.db.RequireDirectory(req.LibraryID); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	onlyMissing := true
 	if req.OnlyMissing != nil {
 		onlyMissing = *req.OnlyMissing
@@ -388,6 +394,12 @@ func (a *App) adminScrapeAvatars(c *gin.Context) {
 	}
 	if value := c.Query("library_id"); value != "" && req.LibraryID == 0 {
 		req.LibraryID, _ = strconv.ParseInt(value, 10, 64)
+	}
+	if req.LibraryID > 0 {
+		if err := a.db.RequireDirectory(req.LibraryID); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	cfg := a.scrapeConfig()
 	if !cfg.AvatarConfigured() {

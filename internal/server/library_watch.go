@@ -23,7 +23,7 @@ func (a *App) startLibraryMonitoring() []string {
 		a.monitors = make(map[int64]*librarywatch.Monitor)
 	}
 	a.watchMu.Unlock()
-	libraries, err := a.db.Libraries()
+	libraries, err := a.db.DirectoryLibraries()
 	if err != nil {
 		slog.Warn("装载媒体库监听失败", "error", err)
 		return []string{"装载媒体库监听失败：" + err.Error()}
@@ -38,6 +38,9 @@ func (a *App) startLibraryMonitoring() []string {
 }
 
 func (a *App) watchLibrary(library store.Library) error {
+	if !library.IsDirectory() {
+		return nil
+	}
 	a.watchMu.Lock()
 	defer a.watchMu.Unlock()
 	cfg := a.configSnapshot()

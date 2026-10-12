@@ -33,7 +33,7 @@ type task struct {
 }
 
 func (a *App) adminLibraries(c *gin.Context) {
-	v, e := a.db.Libraries()
+	v, e := a.db.AllLibraries()
 	if e != nil {
 		c.JSON(500, gin.H{"error": e.Error()})
 		return
@@ -52,6 +52,10 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 	}
 	wasMonitored := a.stopLibraryMonitor(id)
 	if err = a.db.DeleteLibrary(id); err != nil {
+		if errors.Is(err, store.ErrSystemLibrary) {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
 		if wasMonitored {
 			a.startLibraryMonitoring()
 		}
@@ -230,7 +234,12 @@ func (a *App) scanLibraries(ctx context.Context, libraryID int64) (scanner.Resul
 // scanLibrariesWithMode 扫描指定媒体库（0 表示全部）。ctx 贯通到遍历与处理循环：
 // 取消时已入库的分批保留、删除阶段不执行，返回 context.Canceled。
 func (a *App) scanLibrariesWithMode(ctx context.Context, libraryID int64, full bool) (scanner.Result, error) {
-	libraries, err := a.db.Libraries()
+	if libraryID != 0 {
+		if err := a.db.RequireDirectory(libraryID); err != nil {
+			return scanner.Result{}, err
+		}
+	}
+	libraries, err := a.db.DirectoryLibraries()
 	if err != nil {
 		return scanner.Result{}, err
 	}
@@ -486,12 +495,12 @@ func (a *App) adminManual(c *gin.Context) {
 		return
 	}
 	if req.LibraryID == 0 {
-		libs, _ := a.db.Libraries()
+		libs, _ := a.db.DirectoryLibraries()
 		if len(libs) > 0 {
 			req.LibraryID = libs[0].ID
 		}
 	}
-	if req.LibraryID == 0 {
+	if req.LibraryID == 0 || a.db.RequireDirectory(req.LibraryID) != nil {
 		c.JSON(400, gin.H{"error": "library required"})
 		return
 	}
@@ -619,7 +628,7 @@ func (a *App) adminReread(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
-	libraries, err := a.db.Libraries()
+	libraries, err := a.db.DirectoryLibraries()
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return

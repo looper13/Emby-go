@@ -163,7 +163,7 @@ func TestEmbyMissingUserLibraryAndThumbnailEndpoints(t *testing.T) {
 			Name, ItemID, ID, CollectionType string
 			Locations                        []string
 		}
-		if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &folders) != nil || len(folders) != 1 || folders[0].ID != externalLibraryID(1) || folders[0].ItemID != externalLibraryID(1) || folders[0].CollectionType != "movies" || !reflect.DeepEqual(folders[0].Locations, []string{root}) {
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &folders) != nil || len(folders) != 2 || folders[0].ID != externalLibraryID(1) || folders[0].ItemID != externalLibraryID(1) || folders[0].CollectionType != "movies" || !reflect.DeepEqual(folders[0].Locations, []string{root}) || len(folders[1].Locations) != 0 || folders[1].CollectionType != "" {
 			t.Fatalf("VirtualFolderInfo array: %d %s", resp.StatusCode, raw)
 		}
 		resp, raw = embyRaw(t, ts, "GET", prefix+"/Items/1/ThumbnailSet?Width=320", token, "")
