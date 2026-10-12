@@ -86,7 +86,7 @@ test('cancellation stops a real batch and avatars write only the owned media', a
   await page.locator('#scrape-start').click(); await expect(page.locator('#scrape-cancel')).toBeEnabled(); await page.locator('#scrape-cancel').click();
   await expect.poll(async () => (await live.request('/api/admin/scrape/progress')).cancelled).toBe(true);
   await expect(page.locator('#scrape-progress-title')).toHaveText('刮削已中止'); expect(await disk(p5.movies[0]!.directory)).toEqual(before);
-  p5.mode.delay = 0; await page.locator('#avatar-start').click();
+  p5.mode.delay = 0; await navigate(page, 'actors'); await page.locator('#actor-library').selectOption(String(p5.libraryId)); await page.locator('#avatar-start').click();
   await expect.poll(async () => (await live.request('/api/admin/scrape/progress')).kind).toBe('scrape_avatars');
   await expect.poll(async () => (await live.request('/api/admin/scrape/progress')).running).toBe(false);
   const result = await live.request('/api/admin/scrape/progress'); expect(result.failed).toBe(0); expect(result.success).toBe(1);

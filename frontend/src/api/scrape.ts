@@ -36,7 +36,7 @@ export function parseInspect(value: unknown): Inspect {
 const request = (path: string, method = 'GET', json?: unknown, signal?: AbortSignal) => apiClient.request(`/api/admin/${path}`, { auth: 'required', method, json, signal, readOnly: path.endsWith('/inspect') || path === 'scrape/test' || path === 'actors/import/preview' });
 export const scrapeApi = {
   settings: async (signal?: AbortSignal) => parseScrapeSettings(await request('scrape/settings', 'GET', undefined, signal)),
-  save: async (json: ScrapeSettings) => parseScrapeSettings(await request('scrape/settings', 'PUT', json)),
+  save: async (json: Partial<ScrapeSettings>) => parseScrapeSettings(await request('scrape/settings', 'PUT', json)),
   async test(target: SourceTest) { const v = record(await request('scrape/test', 'POST', { target })); return { ok: boolean(v.ok), detail: optionalString(v.detail), error: optionalString(v.error), elapsed_ms: v.elapsed_ms == null ? 0 : count(v.elapsed_ms), status: v.status == null ? undefined : parseGFriendsStatus(v.status) }; },
   async importPreview(signal?: AbortSignal): Promise<ActorImportPreview> { const v = record(await request('actors/import/preview','POST',{},signal)); return {total:count(v.total),ready:count(v.ready),existing:count(v.existing),conflicts:count(v.conflicts),damaged:count(v.damaged),missing:count(v.missing),samples:list(v.samples).map(string),source:string(v.source),destination:string(v.destination)}; },
   async candidates(library_id: number, only_missing: boolean, signal?: AbortSignal) { return count(record(await request(`scrape/candidates?${new URLSearchParams({ library_id: String(library_id), only_missing: String(only_missing) })}`, 'GET', undefined, signal)).total); },

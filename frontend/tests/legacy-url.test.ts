@@ -71,6 +71,7 @@ describe('authentication destinations', () => {
     expect(sanitizeReturnTo('/item/123?library_id=3')).toBe('/item/123?library_id=3');
     expect(sanitizeReturnTo('/items?search=中文 +&api_key=secret')).toBe('/items?search=%E4%B8%AD%E6%96%87++');
     expect(sanitizeReturnTo('/overview')).toBe('/overview');
+    expect(sanitizeReturnTo('/actors')).toBe('/actors');
     expect(sanitizeReturnTo('/items?search=https%3A%2F%2Fexample.com')).toBe('/items?search=https%3A%2F%2Fexample.com');
   });
 

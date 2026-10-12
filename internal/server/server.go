@@ -308,6 +308,7 @@ func (a *App) routes() {
 	admin.GET("/scrape/settings", a.adminScrapeSettings)
 	admin.PUT("/scrape/settings", a.adminSaveScrapeSettings)
 	admin.POST("/scrape/test", a.adminScrapeTest)
+	admin.GET("/actors", a.adminActors)
 	admin.POST("/actors/import/preview", a.adminActorImportPreview)
 	admin.POST("/actors/import", a.adminActorImport)
 	admin.GET("/scrape/candidates", a.adminScrapeCandidates)

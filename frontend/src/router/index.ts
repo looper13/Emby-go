@@ -16,6 +16,7 @@ import ApiKeysPage from '../pages/ApiKeysPage.vue';
 import TasksPage from '../pages/TasksPage.vue';
 import ProbePage from '../pages/ProbePage.vue';
 import ScrapePage from '../pages/ScrapePage.vue';
+import ActorsPage from '../pages/ActorsPage.vue';
 import ScheduledPage from '../pages/ScheduledPage.vue';
 
 export function createAppRouter(pinia: Pinia, history: RouterHistory = createWebHashHistory(window.location.pathname)) {
@@ -27,6 +28,7 @@ export function createAppRouter(pinia: Pinia, history: RouterHistory = createWeb
       {
         path: '/', component: ConsoleLayout, meta: { requiresAuth: true },
         children: [
+          { path: 'actors', name: 'actors', component: ActorsPage, meta: { title: '演员', crumb: 'Archive / Actors', navigation: 'actors' } },
           { path: 'scrape', name: 'scrape', component: ScrapePage, meta: { title: '刮削', crumb: 'Archive / Scrape', navigation: 'scrape' } },
           { path: 'scheduled', name: 'scheduled', component: ScheduledPage, meta: { title: '计划任务', crumb: 'Archive / Scheduled', navigation: 'scheduled' } },
           { path: 'libraries', name: 'libraries', component: LibrariesPage, meta: { title: '媒体库', crumb: 'Archive / Libraries', navigation: 'libraries' } },

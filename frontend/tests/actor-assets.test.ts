@@ -4,7 +4,7 @@ import { createPinia, disposePinia, setActivePinia, type Pinia } from 'pinia';
 import { parseScrapeSettings, scrapeApi } from '../src/api/scrape';
 import { backgroundApi, parseBackgroundProgress } from '../src/api/background';
 import { apiClient } from '../src/api/client';
-import ScrapeSettingsForm from '../src/components/scrape/ScrapeSettingsForm.vue';
+import ActorSettingsForm from '../src/components/scrape/ActorSettingsForm.vue';
 import ActorImportPanel from '../src/components/scrape/ActorImportPanel.vue';
 import fixture from '../../vue-migration/fixtures/json/scrape-settings.json';
 
@@ -15,7 +15,7 @@ const settings = () => parseScrapeSettings({...fixture,avatar_source:'gfriends',
 describe('actor assets', () => {
   it('keeps settings local until explicit save and restores nested source configuration', async () => {
     const save=vi.spyOn(scrapeApi,'save');
-    const w=mount(ScrapeSettingsForm,{props:{settings:settings(),saving:false,testing:new Set<string>()}});
+    const w=mount(ActorSettingsForm,{props:{settings:settings(),saving:false,testing:new Set<string>()}});
     await w.get('#gf-index').setValue('https://mirror.invalid/Filetree.json');
     expect(w.get('#scrape-dirty').text()).toContain('未保存');expect(w.get('#test-gfriends').attributes('disabled')).toBeDefined();expect(save).not.toHaveBeenCalled();
     await w.get('#scrape-restore').trigger('click');expect((w.get('#gf-index').element as HTMLInputElement).value).toContain('raw.githubusercontent.com');

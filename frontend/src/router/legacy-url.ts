@@ -1,6 +1,6 @@
 const pages = new Set([
   'overview', 'libraries', 'items', 'manual', 'settings', 'apikeys',
-  'scrape', 'scheduled', 'tasks', 'probe',
+  'actors', 'scrape', 'scheduled', 'tasks', 'probe',
 ]);
 const filterKeys = new Set([
   'library_id', 'status', 'search', 'sort', 'order', 'source_protocol',
