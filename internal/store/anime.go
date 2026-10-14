@@ -34,6 +34,10 @@ func (s *Store) beginAnimeWrite(ctx context.Context) (*sql.Tx, error) {
 // SaveAnimeSubject commits complete episode pages together. Refresh never
 // deletes bindings, rewrites existing display indices, or merges sequels.
 func (s *Store) SaveAnimeSubject(ctx context.Context, subject anime.Subject, episodes []anime.Episode) (int64, error) {
+	return s.saveAnimeSubject(ctx, subject, episodes, "", "")
+}
+
+func (s *Store) saveAnimeSubject(ctx context.Context, subject anime.Subject, episodes []anime.Episode, archiveDigest, publishedAt string) (int64, error) {
 	if subject.BangumiID <= 0 || strings.TrimSpace(subject.Name) == "" {
 		return 0, errors.New("invalid anime subject")
 	}
@@ -60,6 +64,17 @@ func (s *Store) SaveAnimeSubject(ctx context.Context, subject anime.Subject, epi
 		return 0, err
 	}
 	defer tx.Rollback()
+	if archiveDigest != "" {
+		var id int64
+		var previous, apiTime string
+		err = tx.QueryRowContext(ctx, `SELECT s.id,COALESCE(o.archive_digest,''),COALESCE(o.api_updated_at,'') FROM anime_subjects s LEFT JOIN anime_subject_sources o ON o.subject_id=s.id WHERE s.bangumi_id=?`, subject.BangumiID).Scan(&id, &previous, &apiTime)
+		if err != nil && err != sql.ErrNoRows {
+			return 0, err
+		}
+		if err == nil && (previous == archiveDigest || apiTime >= publishedAt) {
+			return id, nil
+		}
+	}
 	var oldRaw string
 	err = tx.QueryRowContext(ctx, `SELECT metadata FROM anime_subjects WHERE bangumi_id=?`, subject.BangumiID).Scan(&oldRaw)
 	if err != nil && err != sql.ErrNoRows {
@@ -112,6 +127,14 @@ func (s *Store) SaveAnimeSubject(ctx context.Context, subject anime.Subject, epi
 		if err != nil {
 			return 0, err
 		}
+	}
+	if archiveDigest == "" {
+		_, err = tx.ExecContext(ctx, `INSERT INTO anime_subject_sources(subject_id,api_updated_at) VALUES(?,?) ON CONFLICT(subject_id) DO UPDATE SET api_updated_at=excluded.api_updated_at`, id, animeNow())
+	} else {
+		_, err = tx.ExecContext(ctx, `INSERT INTO anime_subject_sources(subject_id,archive_digest) VALUES(?,?) ON CONFLICT(subject_id) DO UPDATE SET archive_digest=excluded.archive_digest`, id, archiveDigest)
+	}
+	if err != nil {
+		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, err

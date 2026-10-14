@@ -189,7 +189,7 @@ function releasePage(delta: number) {
   >
     <button
       class="btn"
-      @click="router.push({ path: '/anime', query: route.query })"
+      @click="router.push({ path: '/anime/mikan', query: route.query })"
     >
       ← 返回动漫库</button
     ><button

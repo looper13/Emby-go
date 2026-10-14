@@ -33,6 +33,7 @@ type animeRuntime struct {
 	mu           sync.Mutex
 	wg           sync.WaitGroup
 	client       *anime.Client
+	tmdb         *anime.TMDBClient
 	job          *animeJob
 }
 

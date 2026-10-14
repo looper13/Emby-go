@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"emby-go/internal/anime"
+	"emby-go/internal/anime/artwork"
 	"emby-go/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -63,7 +64,11 @@ func (a *App) animeDTO(raw string, c *gin.Context) gin.H {
 			item["ParentId"], item["ParentIndexNumber"], item["IndexNumber"] = anime.SeasonID(sub.ID, ep.Season), ep.Season, ep.Index
 			item["ProviderIds"] = gin.H{"Bangumi": strconv.FormatInt(ep.BangumiID, 10)}
 		}
-		if sub.Image != "" {
+		if kind == "episode" {
+			if mapping, e := a.db.AnimeTMDBEpisode(ep.ID); e == nil && mapping.SeriesID > 0 && len(mapping.Stills) > 0 {
+				item["ImageTags"] = gin.H{"Primary": fmt.Sprintf("tmdb-%d", mapping.Revision)}
+			}
+		} else if sub.Image != "" || a.archive.SubjectExists(c.Request.Context(), sub.BangumiID) {
 			item["ImageTags"] = gin.H{"Primary": anime.SourceVersion(sub.Image)}
 		}
 		return item
@@ -118,7 +123,7 @@ func (a *App) animeDTO(raw string, c *gin.Context) gin.H {
 	if cover.PosterPath != "" {
 		item["ImageTags"] = gin.H{"Primary": a.posterTag(cover.PosterPath)}
 	}
-	if sub.Image != "" {
+	if sub.Image != "" || a.archive.SubjectExists(c.Request.Context(), sub.BangumiID) {
 		item["ImageTags"] = gin.H{"Primary": anime.SourceVersion(sub.Image)}
 	}
 	return item
@@ -433,8 +438,28 @@ func (a *App) animeImage(c *gin.Context) {
 		}
 	}
 	if c.Param("kind") == "Primary" || c.Param("kind") == "primary" {
-		if sub, err := a.db.AnimeSubject(subjectID); err == nil && a.serveAnimeCover(c, anime.ID("cover", subjectID), sub.Image) {
-			return
+		if kind == "episode" {
+			if mapping, e := a.db.AnimeTMDBEpisode(id); e == nil && mapping.SeriesID > 0 && len(mapping.Stills) > 0 {
+				c.Params = append(c.Params, gin.Param{Key: "revision", Value: strconv.FormatInt(mapping.Revision, 10)}, gin.Param{Key: "index", Value: "0"})
+				// The still route uses the stable local episode ID, not the Emby prefix.
+				for i := range c.Params {
+					if c.Params[i].Key == "id" {
+						c.Params[i].Value = strconv.FormatInt(id, 10)
+					}
+				}
+				a.animeEpisodeStill(c)
+				return
+			}
+		} else if sub, err := a.db.AnimeSubject(subjectID); err == nil {
+			if a.archive.SubjectExists(c.Request.Context(), sub.BangumiID) {
+				if asset, e := a.bangumiArtwork(c.Request.Context(), artwork.Key{Kind: "subject", ID: sub.BangumiID, Variant: "common"}, false); e == nil && asset.Path != "" {
+					a.serveArtwork(c, asset)
+					return
+				}
+			}
+			if a.serveAnimeCover(c, anime.ID("cover", subjectID), sub.Image) {
+				return
+			}
 		}
 	}
 	media = a.movieArtwork(media)

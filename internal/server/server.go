@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"emby-go/internal/anime/artwork"
+	"emby-go/internal/anime/catalog"
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
 	"emby-go/internal/librarywatch"
@@ -26,6 +29,11 @@ import (
 )
 
 type App struct {
+	archive         *catalog.Catalog
+	archiveClient   *http.Client
+	archiveJob      *archiveJob
+	artwork         *artwork.Store
+	artworkJob      *artworkJob
 	anime           animeRuntime
 	cfgMu           sync.RWMutex
 	configEditMu    sync.Mutex // serializes file updates and monitor reconfiguration
@@ -169,6 +177,10 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := db.InitializeAnimeTMDB(cfg.TMDBAPIKey); err != nil {
+		db.Close()
+		return nil, err
+	}
 	a := &App{
 		cfg: cfg, db: db, cache: cache.NewManaged(cacheStore),
 		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
@@ -176,6 +188,27 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
 	}
 	a.rootCtx, a.rootCancel = context.WithCancel(context.Background())
+	ready := false
+	defer func() {
+		if !ready {
+			a.rootCancel()
+			if a.artwork != nil {
+				_ = a.artwork.Close()
+			}
+			if a.archive != nil {
+				_ = a.archive.Close()
+			}
+		}
+	}()
+	a.archiveClient = catalog.NewHTTPClient()
+	a.archive, err = catalog.Open(filepath.Join(filepath.Dir(cfg.DBPath), "anime-catalog"))
+	if err != nil {
+		slog.Warn("动漫目录快照不可用，可重新导入", "error", err)
+	}
+	a.artwork, err = artwork.Open(a.rootCtx, filepath.Join(filepath.Dir(cfg.DBPath), "anime-images"))
+	if err != nil {
+		slog.Warn("动漫图片归档不可用", "error", err)
+	}
 	a.serverID = cfg.ServerID
 	if a.serverID == "" {
 		// 未显式配置则在本库生成稳定 UUID，避免重启漂移（客户端以 ServerId 识别实例）。
@@ -230,6 +263,7 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	// 启动自检：MetaTube 不可达只告警不阻断启动（与 ffprobe 探测的做法一致）——
 	// 元数据服务是外部依赖，它挂了不该让整个媒体库服务起不来。
 	go a.checkScrapeBackend()
+	ready = true
 	return a, nil
 }
 
@@ -270,6 +304,12 @@ func (a *App) Close() {
 	}
 	a.probeTaskMu.Unlock()
 	a.closeLibraryMonitors()
+	if a.artwork != nil {
+		_ = a.artwork.Close()
+	}
+	if a.archive != nil {
+		_ = a.archive.Close()
+	}
 	a.db.Close()
 }
 func (a *App) Handler() http.Handler { return a.router }
@@ -293,6 +333,9 @@ func (a *App) routes() {
 	// 这里只做「限定 kind + 限定目标服务 + 限时限量」的转发，不放大暴露面。
 	r.GET("/api/admin/scrape/image", a.adminScrapeImage)
 	r.GET("/api/anime/images/:id", a.animeEntryImage)
+	r.GET("/api/anime/subjects/:id/image", a.animeSubjectImage)
+	r.GET("/api/anime/people/:kind/:id/image", a.animePersonImage)
+	r.GET("/api/anime/episodes/:id/stills/:revision/:index", a.animeEpisodeStill)
 
 	admin := r.Group("/api/admin", a.requireAuth, noStore)
 	a.registerAnime(admin)

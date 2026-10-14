@@ -143,6 +143,14 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.migrateAnimeSources(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateAnimeTMDB(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN last_stopped_ticks INTEGER DEFAULT -1")
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN likes INTEGER NOT NULL DEFAULT 0")

@@ -5,6 +5,8 @@ import { animeApi, type AnimeSettings } from '../api/anime';
 import { useAdminRead } from '../composables/useAdminRead';
 import { useToastStore } from '../stores/toasts';
 import ReadState from '../components/common/ReadState.vue';
+import TMDBSettings from '../components/anime/TMDBSettings.vue';
+import ArchiveSync from '../components/anime/ArchiveSync.vue';
 const { data, error, loading, load, active } = useAdminRead(animeApi.settings),
   draft = ref<AnimeSettings | null>(null),
   busy = ref(false),
@@ -113,13 +115,10 @@ async function test() {
       </p>
     </form>
   </section>
+  <TMDBSettings />
   <section class="panel">
     <h2>资料同步</h2>
-    <p>
-      首次成功加载季度目录后，创建每 6
-      小时运行一次的资料同步任务。时间与启用状态在计划任务页管理。
-    </p>
-    <RouterLink class="btn" to="/scheduled">管理计划任务</RouterLink
-    ><RouterLink class="btn" to="/tasks">查看执行任务</RouterLink>
+    <ArchiveSync />
+    <RouterLink class="btn" to="/tasks">查看执行任务</RouterLink>
   </section>
 </template>

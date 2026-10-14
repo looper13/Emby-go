@@ -21,6 +21,8 @@ import ScheduledPage from '../pages/ScheduledPage.vue';
 import AnimePage from '../pages/AnimePage.vue';
 import AnimeDetailPage from '../pages/AnimeDetailPage.vue';
 import AnimeSettingsPage from '../pages/AnimeSettingsPage.vue';
+import BangumiPage from '../pages/BangumiPage.vue';
+import BangumiDetailPage from '../pages/BangumiDetailPage.vue';
 
 export function createAppRouter(pinia: Pinia, history: RouterHistory = createWebHashHistory(window.location.pathname)) {
   const router = createRouter({
@@ -31,7 +33,9 @@ export function createAppRouter(pinia: Pinia, history: RouterHistory = createWeb
       {
         path: '/', component: ConsoleLayout, meta: { requiresAuth: true },
         children: [
-          { path: 'anime', name: 'anime', component: AnimePage, meta: { title: '动漫', crumb: 'Archive / Anime', navigation: 'anime' } },
+          { path: 'anime', name: 'anime', component: BangumiPage, meta: { title: '动漫', crumb: 'Archive / Anime', navigation: 'anime' } },
+          { path: 'anime/mikan', name: 'anime-mikan', component: AnimePage, meta: { title: '蜜柑发布', crumb: '动漫 / 蜜柑发布', navigation: 'anime' } },
+          { path: 'anime/subjects/:id', name: 'bangumi-detail', component: BangumiDetailPage, meta: { title: '番剧详情', crumb: '动漫 / 详情', navigation: 'anime' } },
           { path: 'anime/settings', name: 'anime-settings', component: AnimeSettingsPage, meta: { title: '动漫设置', crumb: '动漫 / 设置', navigation: 'anime' } },
           { path: 'anime/entries/:id', name: 'anime-detail', component: AnimeDetailPage, meta: { title: '番剧详情', crumb: '动漫 / 详情', navigation: 'anime' } },
           { path: 'actors', name: 'actors', component: ActorsPage, meta: { title: '演员', crumb: 'Archive / Actors', navigation: 'actors' } },

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { test, expect } from "./fixtures";
+import { seedBangumi } from './bangumi-fixture';
 
 // Only the fixture-owned temporary DB is seeded. Provider parsers and refreshes
 // use captured HTTP fixtures in Go tests; browser requests exercise the real API.
@@ -118,16 +119,39 @@ test("anime catalog, binding, shared progress and explicit settings save", async
   }
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  await seedBangumi(live.root,subject,episode);
+  await live.restart();
   await page.goto(`${live.baseURL}/admin#/anime?year=2026&season=4`);
   await page.locator("#auth-user").fill(live.credentials.username);
   await page.locator("#auth-pw").fill(live.credentials.password);
   await page.locator("#auth-form button[type=submit]").click();
   await expect(page.locator(".anime-card")).toHaveCount(1);
+  await expect(page.locator('.anime-cover img')).toBeVisible();
+  expect(await page.locator('.anime-grid').evaluate(el=>getComputedStyle(el).display)).toBe('grid');
   await page.screenshot({
     path: info.outputPath("anime-catalog.png"),
     animations: "disabled",
   });
   await page.locator(".anime-card").click();
+  await expect(page.locator(".anime-hero h2")).toHaveText(subject.name);
+  await page.getByRole('button',{name:'角色与制作人员',exact:true}).click();
+  await expect(page.locator('.bangumi-avatar img')).toHaveCount(2);
+  await expect.poll(()=>page.locator('.bangumi-avatar img').evaluateAll(nodes=>nodes.every(el=>(el as HTMLImageElement).naturalWidth>0))).toBe(true);
+  await page.locator('.bangumi-people').scrollIntoViewIfNeeded();
+  await page.screenshot({path:info.outputPath('bangumi-people.png'),animations:'disabled'});
+  await page.getByRole('button',{name:'每集剧照',exact:true}).click();
+  await expect(page.locator('.stills-grid img')).toBeVisible();
+  await page.locator('.episode-stills').scrollIntoViewIfNeeded();
+  await expect.poll(()=>page.locator('.episode-stills').evaluate(el=>getComputedStyle(el.parentElement!).opacity)).toBe('1');
+  expect(await page.locator('.stills-grid img').evaluate((el:HTMLImageElement)=>el.naturalWidth)).toBeGreaterThan(0);
+  await page.screenshot({path:info.outputPath('bangumi-stills.png'),animations:'disabled'});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.getByRole('button',{name:'更改或刷新剧照',exact:true}).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByText('TMDB 凭据未配置',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('button',{name:'发布资源',exact:true}).click();
+  await page.getByRole('link',{name:'查看蜜柑发布',exact:true}).click();
   await expect(page.locator(".anime-hero h2")).toHaveText(subject.name);
   await expect(page.getByText("未关联", { exact: false })).toBeVisible();
   await expect(
@@ -207,7 +231,7 @@ test("anime catalog, binding, shared progress and explicit settings save", async
   await page.getByRole("button", { name: "恢复已保存值" }).click();
   await expect(page.locator("#anime-name")).toHaveValue("动漫");
   await page.locator("#anime-name").fill("我的动漫");
-  await page.getByRole("button", { name: "保存设置" }).click();
+  await page.getByRole("button", { name: "保存设置", exact:true }).click();
   await expect
     .poll(
       async () =>
@@ -217,7 +241,11 @@ test("anime catalog, binding, shared progress and explicit settings save", async
   await page.reload();
   await expect(page.locator("#anime-name")).toHaveValue("我的动漫");
   await page.locator("#anime-enabled").uncheck();
-  await page.getByRole("button", { name: "保存设置" }).click();
+  await page.locator('#tmdb-api-key').fill('fixture-key');
+  await page.getByRole('button',{name:'保存 TMDB 设置',exact:true}).click();
+  await expect(page.locator('#tmdb-api-key')).toHaveValue('');
+  expect(await live.request('/api/admin/anime/tmdb/settings')).toEqual({configured:true,revision:2});
+  await page.getByRole("button", { name: "保存设置",exact:true }).click();
   await expect
     .poll(
       async () =>

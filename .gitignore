@@ -11,6 +11,8 @@
 /frontend/.ui-build.lock/
 /frontend/playwright-report/
 /frontend/test-results/
+/.playwright-cli/
+/output/playwright/
 /internal/server/web_dist/
 /internal/server/web_dist.next/
 /internal/server/web_dist.previous/
@@ -21,11 +23,27 @@
 /src/
 
 # 内部文档（含真实服务校准记录，不入库）
-/docs/
+/docs/**
+!/docs/analysis/
+!/docs/analysis/project-overview.md
+!/docs/analysis/module-inventory.md
+!/docs/analysis/risk-assessment.md
+!/docs/plan/
+!/docs/plan/task-breakdown.md
+!/docs/plan/dependency-graph.md
+!/docs/plan/milestones.md
+!/docs/progress/
+!/docs/progress/MASTER.md
+!/docs/progress/phase-1-catalog.md
+!/docs/progress/phase-2-images.md
+!/docs/progress/phase-3-tmdb.md
+!/docs/progress/phase-4-validation.md
 
 # Runtime data (SQLite WAL/shm 一并忽略)
 /actors/
 /avatars/
+/anime-catalog/
+/anime-images/
 /.work-cache/
 *.db
 *.db-shm
@@ -34,6 +52,7 @@
 # Local config（私人配置不入库，示例见 config.example.yaml）
 /config.yaml
 /config.local.yaml
+/anime-tmdb.local.yaml
 
 # 运行日志（log/ 下按天切分的 app-*.log / request-*.log）
 *.log

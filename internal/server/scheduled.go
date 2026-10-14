@@ -26,6 +26,7 @@ import (
 
 // scheduledTypes 已接入调度器的任务类型。
 var scheduledTypes = map[string]string{
+	"anime_archive":  "Bangumi 目录更新",
 	"anime_sync":     "动漫资料同步",
 	"scan":           "增量扫描媒体库",
 	"reindex":        "全量重建索引",
@@ -46,6 +47,18 @@ type scheduledView struct {
 // ctx 来自调度器（挂 rootCtx）：进程停机时取消，在跑的扫描据此提前收尾。
 func (a *App) runScheduledTask(ctx context.Context, task scheduler.Task) error {
 	switch task.Type {
+	case "anime_archive":
+		job, err := a.startArchive()
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			job.cancel()
+			return ctx.Err()
+		case <-job.done:
+			return job.err
+		}
 	case "anime_sync":
 		return a.runScheduledAnime(ctx)
 	case "scan", "reindex":
@@ -158,7 +171,7 @@ func paramBool(v any) bool {
 func normalizeParams(kind string, raw map[string]any) (string, error) {
 	out := map[string]any{}
 	switch kind {
-	case "anime_sync":
+	case "anime_sync", "anime_archive":
 		// Current season only; schedule/enabled remain owned by scheduled_tasks.
 	case "scan":
 		out["library_id"] = paramInt64(raw, "library_id")

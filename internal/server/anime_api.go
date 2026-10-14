@@ -18,6 +18,24 @@ import (
 )
 
 func (a *App) registerAnime(g *gin.RouterGroup) {
+	g.GET("/anime/bangumi", a.bangumiCatalog)
+	g.GET("/anime/subjects/:id", a.bangumiSubject)
+	g.POST("/anime/subjects/:id/refresh", a.refreshBangumiSubject)
+	g.GET("/anime/archive", a.archiveProgress)
+	g.POST("/anime/archive", a.archiveStart)
+	g.POST("/anime/archive/cancel", a.archiveCancel)
+	g.GET("/anime/artwork", a.artworkProgress)
+	g.POST("/anime/artwork", a.artworkStart)
+	g.POST("/anime/artwork/cancel", a.artworkCancel)
+	g.GET("/anime/tmdb/settings", a.animeTMDBSettings)
+	g.PUT("/anime/tmdb/settings", a.animeTMDBSaveSettings)
+	g.POST("/anime/tmdb/test", a.animeTMDBTest)
+	g.GET("/anime/tmdb/search", a.animeTMDBSearch)
+	g.GET("/anime/tmdb/series/:id", a.animeTMDBSeriesDetail)
+	g.GET("/anime/tmdb/series/:id/seasons/:season", a.animeTMDBSeason)
+	g.PUT("/anime/subjects/:id/tmdb", a.animeTMDBMapSeries)
+	g.PUT("/anime/episodes/:id/tmdb", a.animeTMDBMapEpisode)
+	g.DELETE("/anime/episodes/:id/tmdb", a.animeTMDBMapEpisode)
 	g.GET("/anime/catalog", a.animeCatalog)
 	g.GET("/anime/entries/:id", a.animeEntry)
 	g.GET("/anime/entries/:id/episodes", a.animeEntryEpisodes)
@@ -357,6 +375,12 @@ func (a *App) animeSaveSettings(c *gin.Context) {
 	_, err := a.db.SaveAnimeSettings(req.Source, req.Library.Name, req.Library.Enabled, req.Library.Revision)
 	if err == nil && a.anime.job != nil && a.anime.job.Running {
 		a.anime.job.cancel()
+	}
+	if err == nil && a.archiveJob != nil && a.archiveJob.Running {
+		a.archiveJob.cancel()
+	}
+	if err == nil && a.artworkJob != nil && a.artworkJob.Running {
+		a.artworkJob.cancel()
 	}
 	a.anime.mu.Unlock()
 	if err != nil {

@@ -2,6 +2,7 @@ import { apiClient } from './client';
 import { boolean, count, record, string } from './admin';
 import { parseLibraries, type LibraryDto } from './contracts';
 import { list } from './scrape';
+import { tmdbMapping, tmdbSeriesMapping } from './anime-artwork';
 
 export interface AnimeEntry {
   id: number;
@@ -174,6 +175,31 @@ function page<T>(v: unknown, parse: (x: unknown) => T) {
   return { items: list(r.items).map(parse), total: count(r.total) };
 }
 export const animeApi = {
+	async bangumi(query: URLSearchParams, signal: AbortSignal) {
+		const r = record(await req(`/bangumi?${query}`, 'GET', undefined, signal));
+		return { ...page(r, subject), snapshot: archiveSnapshot(r.snapshot) };
+	},
+	async archive(signal?: AbortSignal) {
+		const r = record(await req('/archive', 'GET', undefined, signal));
+		const j = r.job == null ? null : record(r.job);
+		return { snapshot: archiveSnapshot(r.snapshot), state: state(r.state), job: j == null ? null : {
+			running: boolean(j.running), status: string(j.status), error: string(j.error), phase: string(j.phase), upToDate: boolean(j.up_to_date),
+			bytes: count(j.bytes), totalBytes: count(j.total_bytes), rows: count(j.rows),
+		} };
+	},
+	importArchive: () => req('/archive', 'POST'),
+	cancelArchive: () => req('/archive/cancel', 'POST'),
+	async bangumiSubject(id: string, signal: AbortSignal) {
+		const r = record(await req(`/subjects/${encodeURIComponent(id)}`, 'GET', undefined, signal));
+		return { subject: subject(r.subject), binding: r.binding == null ? null : binding(r.binding), entries: list(r.entries).map(entry), tmdb: tmdbSeriesMapping(r.tmdb),
+			episodes: list(r.episodes).map(v => { const row = record(v), e = record(row.episode); return {
+				episode: { id: count(e.id), name: string(e.name), original_name: string(e.original_name), sort: number(e.sort), season: count(e.season), index: count(e.index), summary: string(e.summary), air_date: string(e.air_date), active: boolean(e.active) } as AnimeEpisode,
+				binding: binding(row.binding), item_id: string(row.item_id), tmdb: tmdbMapping(row.tmdb),
+			}; }),
+			people: list(r.people).map(v => { const p = record(v); return { id: count(p.id), kind: string(p.kind), name: string(p.name), summary: string(p.summary), role: count(p.role) }; }),
+		};
+	},
+	refreshSubject: (id: string) => req(`/subjects/${encodeURIComponent(id)}/refresh`, 'POST'),
   async catalog(query: URLSearchParams, signal: AbortSignal) {
     const r = record(await req(`/catalog?${query}`, 'GET', undefined, signal));
     return {
@@ -328,6 +354,12 @@ export const animeApi = {
     return record(sources[0]);
   },
 };
+
+function archiveSnapshot(v: unknown) {
+	const r = record(v), m = record(r.manifest);
+	return { name: string(m.name), digest: string(m.digest), publishedAt: string(m.created_at), importedAt: string(r.imported_at),
+		subjects: count(r.subjects), episodes: count(r.episodes), characters: count(r.characters), persons: count(r.persons) };
+}
 export const animeStatus = (status: string) =>
   ({
     unbound: '未关联',
