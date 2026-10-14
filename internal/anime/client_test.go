@@ -1,7 +1,11 @@
 package anime
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +82,59 @@ func TestBangumiFixtures(t *testing.T) {
 	}
 	if _, _, _, err = ParseEpisodes(fixture(t, "bangumi/episodes-sp-899.json"), 1); err == nil {
 		t.Fatal("cross-subject episodes accepted")
+	}
+}
+
+// The proxy branch is driven through the transport's own proxy function, since
+// http.ProxyFromEnvironment caches the environment for the whole process.
+func TestPublicClientRoutesThroughProxy(t *testing.T) {
+	var seen []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.String())
+		_, _ = w.Write([]byte("via-proxy"))
+	}))
+	defer proxy.Close()
+	target, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := PublicClient()
+	transport := client.Transport.(publicTransport)
+	transport.proxy = func(*http.Request) (*url.URL, error) { return target, nil }
+	// Production leaves this as http.ProxyFromEnvironment; both consult the same
+	// cached environment, so they always agree. They are stubbed together here.
+	transport.via.Proxy = func(*http.Request) (*url.URL, error) { return target, nil }
+	client.Transport = transport
+	resp, err := client.Get("http://1.1.1.1/cover.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body := make([]byte, 16)
+	n, _ := resp.Body.Read(body)
+	if string(body[:n]) != "via-proxy" || len(seen) != 1 || seen[0] != "http://1.1.1.1/cover.jpg" {
+		t.Fatal(string(body[:n]), seen)
+	}
+	if _, err = client.Get("http://10.0.0.5/cover.jpg"); err == nil || !strings.Contains(err.Error(), "source_private_address") {
+		t.Fatal("proxied request to a private address was not refused", err)
+	}
+	if len(seen) != 1 {
+		t.Fatal("private address reached the proxy", seen)
+	}
+}
+
+func TestPublicClientRefusesPrivateAddressWithoutProxy(t *testing.T) {
+	reached := false
+	origin := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	defer origin.Close()
+	client := PublicClient()
+	transport := client.Transport.(publicTransport)
+	transport.proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
+	client.Transport = transport
+	if _, err := client.Get(origin.URL + "/cover.jpg"); err == nil || !strings.Contains(err.Error(), "source_private_address") {
+		t.Fatal("direct request to a loopback address was not refused", err)
+	}
+	if reached {
+		t.Fatal("loopback origin was reached")
 	}
 }

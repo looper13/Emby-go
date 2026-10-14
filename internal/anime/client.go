@@ -43,40 +43,22 @@ func publicIP(ip net.IP) bool {
 	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified()
 }
 
-// PublicClient validates resolved IPs in DialContext, so DNS rebinding cannot
-// turn a saved metadata/image hostname into an internal network proxy.
+// PublicClient fetches source metadata and images. Outbound traffic honours
+// HTTP_PROXY/HTTPS_PROXY/NO_PROXY through http.ProxyFromEnvironment, the same
+// way the MetaTube and translate clients do.
+//
+// A direct connection still validates every resolved IP in DialContext, so DNS
+// rebinding cannot turn a saved metadata/image hostname into an internal
+// network proxy. A proxied connection is dialled to the proxy instead, so the
+// same guarantee moves one step earlier: the target hostname is resolved and
+// checked before the request is handed over. The rebinding window widens from
+// one connection to one request, since the proxy resolves the name again.
 func PublicClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, errors.New("source_dns_failed")
-		}
-		if len(ips) == 0 {
-			return nil, errors.New("source_dns_empty")
-		}
-		for _, ip := range ips {
-			if !publicIP(ip.IP) {
-				return nil, errors.New("source_private_address")
-			}
-		}
-		var last error
-		dialer := net.Dialer{Timeout: 8 * time.Second}
-		for _, ip := range ips {
-			conn, e := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
-			if e == nil {
-				return conn, nil
-			}
-			last = e
-		}
-		return nil, last
-	}
-	return &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	direct := http.DefaultTransport.(*http.Transport).Clone()
+	direct.Proxy = nil
+	direct.DialContext = dialPublicIP
+	via := http.DefaultTransport.(*http.Transport).Clone()
+	return &http.Client{Transport: publicTransport{direct: direct, via: via, proxy: http.ProxyFromEnvironment}, Timeout: 15 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) > 3 {
 			return errors.New("source_redirect_limit")
 		}
@@ -88,6 +70,74 @@ func PublicClient() *http.Client {
 		}
 		return nil
 	}}
+}
+
+type publicTransport struct {
+	direct *http.Transport
+	via    *http.Transport
+	proxy  func(*http.Request) (*url.URL, error)
+}
+
+func (t publicTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	proxyURL, err := t.proxy(req)
+	if err != nil {
+		return nil, err
+	}
+	if proxyURL == nil {
+		return t.direct.RoundTrip(req)
+	}
+	if _, err = resolvePublic(req.Context(), req.URL.Hostname()); err != nil {
+		return nil, err
+	}
+	return t.via.RoundTrip(req)
+}
+
+// resolvePublic returns a host's addresses only when every one of them is
+// public, so a proxied request cannot be pointed at the internal network
+// either. IP literals are decided without a lookup.
+func resolvePublic(ctx context.Context, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if !publicIP(ip) {
+			return nil, errors.New("source_private_address")
+		}
+		return []net.IP{ip}, nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, errors.New("source_dns_failed")
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("source_dns_empty")
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		if !publicIP(addr.IP) {
+			return nil, errors.New("source_private_address")
+		}
+		ips = append(ips, addr.IP)
+	}
+	return ips, nil
+}
+
+func dialPublicIP(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := resolvePublic(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var last error
+	dialer := net.Dialer{Timeout: 8 * time.Second}
+	for _, ip := range ips {
+		conn, e := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if e == nil {
+			return conn, nil
+		}
+		last = e
+	}
+	return nil, last
 }
 
 type Client struct {

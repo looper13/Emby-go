@@ -48,10 +48,25 @@ describe('media controls', () => {
     await w.find('[data-scrape=failed]').trigger('click'); expect(w.emitted('filter')).toEqual([['scrape', 'failed', true]]);
     await w.find('#entity-clear').trigger('click'); expect(w.emitted('clearEntity')).toHaveLength(1); await w.find('input').setValue('new'); expect(w.emitted('search')).toEqual([['new']]);
   });
-  it('keeps trailer and stills separate with versioned nonzero indices and original links', () => {
+  it('keeps trailer and stills separate with versioned nonzero indices and opens stills in a lightbox', async () => {
     const gallery = mount(ArtworkGallery, { props: { id: 5, images: [{ ImageType: 'Backdrop', ImageIndex: 7, ImageTag: 'new' }] } }); cleanups.push(() => gallery.unmount());
-    expect(gallery.find('a').attributes('href')).toBe('/Items/5/Images/Backdrop/7?tag=new'); expect(gallery.find('img').attributes('src')).toBe('/Items/5/Images/Backdrop/7?tag=new&maxWidth=480');
+    expect(gallery.find('.detail-artwork-grid a').exists()).toBe(false); expect(gallery.find('img').attributes('src')).toBe('/Items/5/Images/Backdrop/7?tag=new&maxWidth=480');
+    await gallery.find('.detail-artwork-grid button').trigger('click');
+    expect(gallery.find('.artwork-image').attributes('src')).toBe('/Items/5/Images/Backdrop/7?tag=new');
+    expect(gallery.find('#artwork-title').text()).toBe('剧照 1 / 1'); expect(gallery.find('.artwork-nav').exists()).toBe(false);
     const trailer = mount(TrailerSection, { props: { url: '', thumb: '', fallback: '' } }); cleanups.push(() => trailer.unmount()); expect(trailer.find('section').exists()).toBe(false);
+  });
+  it('wraps stills with the arrows and Escape, locks page scroll and returns focus to the opened thumbnail', async () => {
+    const gallery = mount(ArtworkGallery, { props: { id: 5, images: [0, 1, 2].map(index => ({ ImageType: 'Backdrop', ImageIndex: index, ImageTag: `t${index}` })) }, attachTo: document.body }); cleanups.push(() => gallery.unmount());
+    const thumbs = gallery.findAll('.detail-artwork-grid button'); expect(thumbs).toHaveLength(3);
+    await thumbs[2]!.trigger('click');
+    expect(gallery.find('.artwork-image').attributes('src')).toBe('/Items/5/Images/Backdrop/2?tag=t2'); expect(document.body.style.overflow).toBe('hidden');
+    await gallery.find('#artwork-next').trigger('click'); expect(gallery.find('.artwork-image').attributes('src')).toBe('/Items/5/Images/Backdrop/0?tag=t0');
+    await gallery.find('#artwork-prev').trigger('click'); expect(gallery.find('.artwork-image').attributes('src')).toBe('/Items/5/Images/Backdrop/2?tag=t2');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' })); await flushPromises();
+    expect(gallery.find('.artwork-image').attributes('src')).toBe('/Items/5/Images/Backdrop/1?tag=t1'); expect(gallery.find('#artwork-title').text()).toBe('剧照 2 / 3');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await flushPromises();
+    expect(gallery.find('#artwork-overlay').exists()).toBe(false); expect(document.body.style.overflow).toBe(''); expect(document.activeElement).toBe(thumbs[1]!.element);
   });
 });
 describe('player lifetime', () => {
