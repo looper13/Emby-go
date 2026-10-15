@@ -405,6 +405,13 @@ func (a *App) adminItems(c *gin.Context) {
 		Limit:      limit,
 		Offset:     offset,
 	}
+	if strings.EqualFold(query.SortBy, "random") {
+		seed, err := strconv.ParseUint(c.Query("seed"), 10, 31)
+		if err != nil || seed == 0 {
+			seed = 1
+		}
+		query.RandomSeed = uint32(seed)
+	}
 	key := responseKey("adminitems", a.cacheScope(libraryID), a.db.ScrapeVersion(libraryID), query)
 	a.cachedResponse(c, key, 5*time.Second, func() ([]byte, error) {
 		ms, total, err := a.db.SearchAdmin(query)

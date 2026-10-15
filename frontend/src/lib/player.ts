@@ -1,6 +1,12 @@
 export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; resumeTicks?: number }
 export interface PlayerHandle { url: string; muted: boolean; video?: HTMLVideoElement; on: (name: string, callback: () => void) => void; play: () => Promise<unknown>; destroy: () => void }
 export type PlayerFactory = (stage: HTMLElement, options: PlayerOptions) => PlayerHandle;
+export function playbackType(containerOrURL: unknown = '') {
+  const name = typeof containerOrURL === 'string' ? containerOrURL.trim().toLowerCase().split(/[?#]/u)[0]?.split('/').pop() : '';
+  const extension = name?.split('.').pop();
+  if (extension === 'm3u8' || extension === 'm3u') return 'm3u8';
+  return extension === 'webm' ? 'webm' : 'mp4';
+}
 export function playbackErrorMessage(code: number | undefined, url: string, protocol = location.protocol) {
   if (protocol === 'https:' && /^http:/i.test(url)) return '播放失败：HTTPS 页面无法加载此 HTTP 视频地址，请使用 HTTPS 源';
   if (code === 2) return '视频加载失败，请检查网络或源地址是否失效';
@@ -21,10 +27,12 @@ export function managePlayer(stage: HTMLElement, options: PlayerOptions, factory
   });
   return { player, destroy() { if (!active) return; active = false; try { player.destroy(); } catch { /* Dispose the lifetime even if vendor cleanup fails. */ } } };
 }
-export async function loadPlayerFactory(): Promise<PlayerFactory> {
+export async function loadPlayerFactory(type = 'mp4'): Promise<PlayerFactory> {
   const module = await import('../vendor/artplayer.min.js');
+  const hls = playbackType(type) === 'm3u8' ? await import('./player-hls') : undefined;
   const Constructor = (module.default ?? (window as unknown as { Artplayer: unknown }).Artplayer) as new (options: Record<string, unknown>) => PlayerHandle;
   return (stage, options) => new Constructor({ container: stage, url: options.url, type: options.type, title: options.title,
+    customType: hls ? { m3u8: hls.createHlsPlayback() } : {},
     autoplay: true, volume: 1, playbackRate: true, aspectRatio: true, fullscreen: true, fullscreenWeb: true,
     setting: true, hotkey: true, pip: true, theme: '#e0a44b', lang: 'zh-cn' });
 }

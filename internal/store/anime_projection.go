@@ -8,7 +8,7 @@ import (
 // Filter and count original media in SQL before merging the online projection.
 // A JSON parameter keeps this bounded by one parameter even for large libraries.
 func (s *Store) SearchWithoutAnime(exclude []int64, term, years, genre, tags, studios, person string, unplayed, favorite bool, sortBy string, desc bool, limit int, rating string) ([]Movie, int, error) {
-	return s.searchExcluding(exclude, 0, term, "", years, genre, tags, studios, person, "", "", "", unplayed, favorite, sortBy, desc, limit, 0, rating)
+	return s.searchExcluding(exclude, 0, term, "", years, genre, tags, studios, person, "", "", "", unplayed, favorite, movieOrder{by: sortBy, desc: desc}, limit, 0, rating)
 }
 
 // ResolveAnimeDisplay is an indexed lookup by the original media identity.

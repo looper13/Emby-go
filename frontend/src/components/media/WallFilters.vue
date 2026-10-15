@@ -3,11 +3,11 @@ import { computed } from 'vue';
 import type { LibraryDto } from '../../api/contracts';
 import { entityParams } from '../../lib/media';
 const props = defineProps<{ query: Record<string, unknown>; libraries: LibraryDto[]; search: string }>();
-const emit = defineEmits<{ filter: [key: string, value: string, toggle?: boolean]; search: [value: string]; clearEntity: [] }>();
+const emit = defineEmits<{ filter: [key: string, value: string, toggle?: boolean]; search: [value: string]; clearEntity: []; shuffle: [] }>();
 const value = (key: string) => typeof props.query[key] === 'string' ? props.query[key] : '';
 const entity = computed(() => entityParams.map(([key, label]) => [key, label, value(key)]).find(row => row[2]));
 const pills = [['', '全部'], ['success', '已入库'], ['manual', '手动'], ['pending', '待补录'], ['incompatible', '不兼容']];
-const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '年份'], ['communityrating', '评分']];
+const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '年份'], ['communityrating', '评分'], ['date', '首映日期'], ['random', '随机']];
 </script>
 <template>
   <div v-if="libraries.length" class="filters">
@@ -21,5 +21,6 @@ const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '�
     <button v-for="[v, label] in [['failed', '刮削失败'], ['confirm', '待人工确认']]" :key="v" class="pill" :class="{ 'is-active': value('scrape') === v }" :data-scrape="v" @click="emit('filter', 'scrape', v!, true)">{{ label }}</button>
     <input id="item-search" :value="search" placeholder="搜索标题 / 番号 / 原名" aria-label="搜索标题 / 番号 / 原名" style="min-width:200px" @input="emit('search', ($event.target as HTMLInputElement).value)">
     <select id="item-sort" aria-label="排序" :value="value('sort') || 'datecreated'" @change="emit('filter', 'sort', ($event.target as HTMLSelectElement).value)"><option v-for="[v, label] in sorts" :key="v" :value="v">{{ label }}</option></select>
+    <button v-if="value('sort') === 'random'" id="wall-shuffle" class="btn" @click="emit('shuffle')">换一批</button>
   </div>
 </template>

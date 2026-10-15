@@ -77,7 +77,7 @@ onMounted(async () => {
   closeButton.value?.focus();
   window.addEventListener('keydown', keyboard, true);
   try {
-    const factory = await loadPlayerFactory();
+    const factory = await loadPlayerFactory(props.options.type);
     if (active && stage.value) {
       session = managePlayer(stage.value, props.options, factory, (message) =>
         toasts.show(message, 'error'),

@@ -18,6 +18,7 @@ export const useMediaWallStore = defineStore('media-wall', () => {
   const queryKey = ref('');
   onScopeDispose(apiClient.onWriteSuccess(() => { dirty.value = true; }));
   let generation = 0;
+  let randomSeed = 0;
   let controller: AbortController | undefined;
 
   function cancel() {
@@ -30,14 +31,17 @@ export const useMediaWallStore = defineStore('media-wall', () => {
     cancel();
     items.value = []; imageTags.value = {}; userdata.value = {}; total.value = 0;
     done.value = false; error.value = ''; loadedAt.value = 0; dirty.value = false; queryKey.value = '';
+    randomSeed = 0;
   }
   function prepare(query: URLSearchParams, restore: boolean): boolean {
     cancel();
     const key = query.toString();
     if (restore && !dirty.value && !error.value && key === queryKey.value
       && loadedAt.value > 0 && Date.now() - loadedAt.value < 60_000) return true;
+    const previousSeed = restore && key === queryKey.value ? randomSeed : 0;
     clear();
     queryKey.value = key;
+    if (query.get('sort') === 'random') randomSeed = previousSeed || (crypto.getRandomValues(new Uint32Array(1))[0]! & 0x7fffffff) || 1;
     return false;
   }
   async function loadMore(signal: AbortSignal, retry = false): Promise<boolean> {
@@ -54,6 +58,8 @@ export const useMediaWallStore = defineStore('media-wall', () => {
       const query = new URLSearchParams(queryKey.value);
       const sort = query.get('sort') || 'datecreated';
       query.set('sort', sort);
+      if (sort === 'random') query.set('seed', String(randomSeed));
+      else query.delete('seed');
       if (!query.has('order')) query.set('order', sort === 'title' ? 'asc' : 'desc');
       query.set('limit', String(WALL_PAGE_SIZE)); query.set('offset', String(items.value.length));
       const data = await catalogApi.items(query, current.signal);

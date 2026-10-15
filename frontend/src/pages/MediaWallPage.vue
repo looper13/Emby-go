@@ -55,6 +55,10 @@ function refresh() {
   const card = document.activeElement?.closest<HTMLElement>('.wall-card');
   return enter({ scrollY: window.scrollY, wallCount: wall.items.length, focusID: card?.dataset.play ?? '' });
 }
+function reshuffle() {
+  wall.clear();
+  void enter({ scrollY: 0, wallCount: WALL_PAGE_SIZE, focusID: '' });
+}
 function quickplay(id: number) { const movie = wall.items.find(m => m.id === id); if (movie) player.media(movie); }
 async function load(retry = false) {
   if (!request?.isCurrent()) return false;
@@ -114,7 +118,7 @@ watch(() => tasks.revision, () => {
     <div class="panel-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
     <p v-if="pageError" role="alert">{{ pageError }} <button class="btn" @click="enter()">重试</button></p>
     <BackgroundTaskProgress kind="probe" :progress="tasks.probe.progress" :visible="tasks.probe.visible" :busy="tasks.probe.busy" :unavailable="tasks.probe.unavailable" :cancelling="tasks.probe.cancelling" @cancel="tasks.probe.cancel()" />
-    <WallFilters :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" />
+    <WallFilters :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle" />
     <MediaGrid :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
     <div id="wall-empty"><EmptyState v-if="ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : '开始扫描或手动补录后再来看看。'" /></div>
     <div id="wall-more" ref="more" class="wall-more">

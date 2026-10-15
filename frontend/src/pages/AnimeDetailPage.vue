@@ -10,6 +10,7 @@ import {
 import { useAdminRead } from "../composables/useAdminRead";
 import { useToastStore } from "../stores/toasts";
 import { usePlayerStore } from "../stores/player";
+import { playbackType } from "../lib/player";
 import { apiClient } from "../api/client";
 import ReadState from "../components/common/ReadState.vue";
 import AnimeReleases from "../components/anime/AnimeReleases.vue";
@@ -131,7 +132,7 @@ async function play(target: string, name: string) {
       title: name,
       url: `/Videos/${encodeURIComponent(target)}/stream`,
       proxyURL: `/Videos/${encodeURIComponent(target)}/proxy`,
-      type: source.Container === "m3u8" ? "m3u8" : "mp4",
+      type: playbackType(source.Container),
       itemId: target,
       resumeTicks: ticks,
     });

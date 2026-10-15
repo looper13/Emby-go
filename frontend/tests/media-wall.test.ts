@@ -81,4 +81,30 @@ describe('media wall state and request ownership', () => {
     const q = api.mock.calls[0]![0]; expect(q.get('limit')).toBe('100'); expect(q.get('offset')).toBe('0'); expect(q.get('order')).toBe('asc');
     expect(wall.done).toBe(true);
   });
+  it('keeps random pagination and restored snapshots on the same seed, and reshuffles on a fresh browse', async () => {
+    vi.spyOn(crypto, 'getRandomValues').mockReturnValueOnce(new Uint32Array([12345])).mockReturnValueOnce(new Uint32Array([98765]));
+    const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
+    const wall = useMediaWallStore(); const query = new URLSearchParams('sort=random&tag=keep');
+    const signal = new AbortController().signal;
+    wall.prepare(query, false);
+    await wall.loadMore(signal); await wall.loadMore(signal);
+    expect(api.mock.calls.slice(0, 2).map(([q]) => q.get('seed'))).toEqual(['12345', '12345']);
+    expect(api.mock.calls.slice(0, 2).map(([q]) => q.get('offset'))).toEqual(['0', '100']);
+    expect(wall.prepare(query, true)).toBe(true);
+    wall.loadedAt = Date.now() - 60_000;
+    expect(wall.prepare(query, true)).toBe(false);
+    await wall.loadMore(signal);
+    expect(api.mock.lastCall![0].get('seed')).toBe('12345');
+    wall.clear(); wall.prepare(query, true); await wall.loadMore(signal);
+    expect(api.mock.lastCall![0].get('seed')).toBe('98765');
+    expect(api.mock.lastCall![0].get('tag')).toBe('keep');
+  });
+  it('uses newest premiere dates first and removes random seeds from nonrandom requests', async () => {
+    const api = vi.spyOn(catalogApi, 'items').mockResolvedValue(batch(0));
+    const wall = useMediaWallStore(); wall.prepare(new URLSearchParams('sort=date&seed=12'), false);
+    await wall.loadMore(new AbortController().signal);
+    expect(api.mock.lastCall![0].get('sort')).toBe('date');
+    expect(api.mock.lastCall![0].get('order')).toBe('desc');
+    expect(api.mock.lastCall![0].has('seed')).toBe(false);
+  });
 });

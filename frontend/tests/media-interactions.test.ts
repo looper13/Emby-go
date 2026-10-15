@@ -32,6 +32,17 @@ describe('shared contracts CT-01/02', () => {
   });
 });
 describe('media controls', () => {
+  it('offers premiere date and random sorting, with reshuffle only in random mode', async () => {
+    const w = mount(WallFilters, { props: { query: {}, libraries: [], search: '' } }); cleanups.push(() => w.unmount());
+    const select = w.find('#item-sort');
+    expect(select.find('option[value=date]').text()).toBe('首映日期');
+    expect(select.find('option[value=random]').text()).toBe('随机');
+    expect(w.find('#wall-shuffle').exists()).toBe(false);
+    await select.setValue('random'); expect(w.emitted('filter')).toEqual([['sort', 'random']]);
+    await w.setProps({ query: { sort: 'random' } });
+    await w.find('#wall-shuffle').trigger('click'); expect(w.emitted('shuffle')).toHaveLength(1);
+    await w.setProps({ query: { sort: 'date' } }); expect(w.find('#wall-shuffle').exists()).toBe(false);
+  });
   it('separates metadata values and emits each entity without merging their labels', async () => {
     const w = mount(MetadataRow, { props: { label: '标签', value: ['Tag-A', 'Rare series'], entityKey: 'tag' } }); cleanups.push(() => w.unmount());
     expect(w.find('dd').text()).toBe('Tag-A Rare series'); await w.findAll('button')[1]!.trigger('click'); expect(w.emitted('entity')).toEqual([['tag', 'Rare series']]);

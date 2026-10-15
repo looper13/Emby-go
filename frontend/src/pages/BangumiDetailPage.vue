@@ -6,6 +6,7 @@ import { animeApi, animeStatus, type AnimeBinding } from '../api/anime';
 import { apiClient } from '../api/client';
 import { useAdminRead } from '../composables/useAdminRead';
 import { usePlayerStore } from '../stores/player';
+import { playbackType } from '../lib/player';
 import { useToastStore } from '../stores/toasts';
 import ReadState from '../components/common/ReadState.vue';
 import MediaImage from '../components/media/MediaImage.vue';
@@ -30,7 +31,7 @@ async function play(target:string,title:string) { await action(async()=>{
   const requested=id.value;const source=await animeApi.playback(target);const detail=await apiClient.request(`/Items/${encodeURIComponent(target)}`,{auth:'required'});
   const ud=typeof detail==='object'&&detail!==null&&'UserData' in detail?detail.UserData:null;
   const ticks=typeof ud==='object'&&ud!==null&&'PlaybackPositionTicks' in ud?Number(ud.PlaybackPositionTicks):0;
-  if(active()&&requested===id.value)player.open({title,url:`/Videos/${encodeURIComponent(target)}/stream`,proxyURL:`/Videos/${encodeURIComponent(target)}/proxy`,type:source.Container==='m3u8'?'m3u8':'mp4',itemId:target,resumeTicks:ticks});
+  if(active()&&requested===id.value)player.open({title,url:`/Videos/${encodeURIComponent(target)}/stream`,proxyURL:`/Videos/${encodeURIComponent(target)}/proxy`,type:playbackType(source.Container),itemId:target,resumeTicks:ticks});
 }); }
 function bind(target:string,title:string,binding:AnimeBinding){dialog.value={target,title,binding};}
 function check(target:string){void action(()=>animeApi.check(target));}

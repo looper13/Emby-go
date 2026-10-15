@@ -970,17 +970,22 @@ type AdminQuery struct {
 	Person     string
 	Collection string // ""=不限；"*"=任一合集成员；其它=具体合集名
 	// Scrape 按刮削结果筛选：""=不限；"failed"=刮削失败；"confirm"=待人工确认。
-	Scrape string
-	SortBy string
-	Desc   bool
-	Limit  int
-	Offset int
+	Scrape     string
+	SortBy     string
+	RandomSeed uint32 // 非零时按固定种子打乱，供媒体墙跨页复用。
+	Desc       bool
+	Limit      int
+	Offset     int
 }
 
 // SearchAdmin 供管理端列表使用。
 func (s *Store) SearchAdmin(q AdminQuery) ([]Movie, int, error) {
-	return s.search(q.LibraryID, q.Term, q.Status, "", q.Genre, q.Tag, q.Studio, q.Person, q.Collection, q.Protocol, q.Scrape,
-		false, false, q.SortBy, q.Desc, q.Limit, q.Offset)
+	seed := q.RandomSeed
+	if strings.EqualFold(q.SortBy, "random") && seed == 0 {
+		seed = 1
+	}
+	return s.searchExcluding(nil, q.LibraryID, q.Term, q.Status, "", q.Genre, q.Tag, q.Studio, q.Person, q.Collection, q.Protocol, q.Scrape,
+		false, false, movieOrder{by: q.SortBy, desc: q.Desc, randomSeed: seed}, q.Limit, q.Offset)
 }
 
 // MoviesForProbe 返回媒体信息探测的候选影片，只挑有 NFO 的条目：
@@ -1025,10 +1030,16 @@ func (s *Store) MoviesForProbe(libraryID int64, status string, limit int) ([]Mov
 }
 
 func (s *Store) search(libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
-	return s.searchExcluding(nil, libraryID, term, status, years, genre, tags, studios, person, collection, protocol, scrape, unplayed, favorite, sortBy, desc, limit, offset, officialRatings...)
+	return s.searchExcluding(nil, libraryID, term, status, years, genre, tags, studios, person, collection, protocol, scrape, unplayed, favorite, movieOrder{by: sortBy, desc: desc}, limit, offset, officialRatings...)
 }
 
-func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
+type movieOrder struct {
+	by         string
+	desc       bool
+	randomSeed uint32
+}
+
+func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, order movieOrder, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	where := []string{}
 	args := []any{}
 	if len(exclude) > 0 {
@@ -1142,16 +1153,29 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		"title": "title", "year": "year", "date": "premiered", "sortname": "title",
 		"datecreated": "id", "random": "title", "communityrating": "rating",
 	}
-	column := allowed[strings.ToLower(sortBy)]
+	sortBy := strings.ToLower(order.by)
+	column := allowed[sortBy]
 	if column == "" {
 		column = "title"
 	}
 	direction := "ASC"
-	if desc {
+	if order.desc {
 		direction = "DESC"
 	}
+	orderBy := column + " " + direction + ",id"
+	if sortBy == "date" {
+		orderBy = "CASE WHEN COALESCE(premiered,'')='' THEN 1 ELSE 0 END," + orderBy
+	}
+	if sortBy == "random" && order.randomSeed != 0 {
+		// A seeded odd multiplier permutes 31-bit IDs. Unlike SQLite random(),
+		// the rank is stable across LIMIT/OFFSET requests and response-cache hits.
+		// Mask before multiplying to stay within SQLite's signed integer range.
+		multiplier := ((uint64(order.randomSeed)*2654435761 + 1013904223) & 0x7fffffff) | 1
+		orderBy = "(((movies.id & 2147483647) * ?) & 2147483647),id"
+		args = append(args, int64(multiplier))
+	}
 	args = append(args, limit, offset)
-	rows, err := s.db.Query("SELECT "+movieCols+" FROM movies"+clause+" ORDER BY "+column+" "+direction+",id LIMIT ? OFFSET ?", args...)
+	rows, err := s.db.Query("SELECT "+movieCols+" FROM movies"+clause+" ORDER BY "+orderBy+" LIMIT ? OFFSET ?", args...)
 	if err != nil {
 		return nil, 0, err
 	}
