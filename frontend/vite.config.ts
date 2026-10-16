@@ -16,7 +16,7 @@ export default defineConfig({
   },
   server: {
     proxy: Object.fromEntries(
-      ['/api', '/Users', '/Items', '/Videos', '/System', '/emby', '^/admin(?:$|[?#])', '^/web/(?!ui/)'].map(prefix => [prefix, {
+      ['/api', '/Users', '/Items', '/Shows', '/Videos', '/System', '/emby', '^/admin(?:$|[?#])', '^/web/(?!ui/)'].map(prefix => [prefix, {
         target: backend,
         changeOrigin: false,
         followRedirects: false,

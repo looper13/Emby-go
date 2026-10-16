@@ -4,6 +4,7 @@
 
 - 目录库影片元数据真源 = **NFO**（`<title>/<genre>/<studio>/<actor>/<set>` 等），可通过管理端配置 MetaTube 补全元数据
 - 默认“动漫”在线资料库：Bangumi Archive 主目录、蜜柑发布资源，封面／头像／TMDB 剧照分类本地归档；手动关联已有 STRM 后播放，详见 [动漫库使用说明](ANIME-LIBRARY.md)
+- 本地目录库可选择“影片”“电视节目”“混合内容”；剧集按剧集 → 季 → 单集浏览，混合库同时展示剧集与影片
 - 媒体只支持 `http(s)://` 的 `.strm`；播放走 **302 直拉**（服务端零带宽，不转码）
 - 单二进制、单端口，Redis 为必选缓存后端；内置深色 Web 管理后台
 - 兼容端点覆盖：认证、媒体库/影片墙、详情、图片、合集(BoxSet)、进度/续播、搜索/过滤等 Emby 客户端浏览主链路
@@ -33,6 +34,8 @@ Linux amd64 部署可直接执行 `bash build.sh`，产物为 `dist/emby-go-linu
 本地热更新：`npm --prefix frontend run dev`，访问命令显示地址的 `/web/ui/` 路径。Go 默认代理目标为 `http://127.0.0.1:18080`，可通过 `EMBY_DEV_PROXY` 指向隔离测试服务。浏览器同源不同端口的登录状态不共享。`build.sh`、`build.bat` 和 release workflow 会先构建一次 Vue 再嵌入二进制；Vite 只清理 `frontend/dist`，不会清理旧 `web/`。
 
 不连接现有库的预览：`npm --prefix frontend run dev:isolated`，自动建立临时 Go/Redis/媒体目录并打印一次性账号，Ctrl+C 后清理。浏览器集成：设置 `PW_CHANNEL=msedge`（本机 Edge）后执行 `npm --prefix frontend run test:e2e`；默认使用已安装的 Playwright Chromium。测试只访问临时实例。
+
+剧集与混合库预览：`npm --prefix frontend run dev:isolated -- --television`。输出中的 `television.tv`、`television.mixed`、`television.empty` 是本次临时目录；在“媒体库”中按相应类型新增后扫描。夹具包含特别篇、第 1 / 2 / 10 季及混合库影片，播放源也是本机临时服务，不访问现有库。
 
 注意现有 `TestRedisBehavior` 硬编码使用本机 6379 的 DB 15 并清理缓存键。在带真实 Redis 数据的开发机器上使用 `npm --prefix frontend run test:go-regression`，该命令显式排除此项并记录未运行原因，不把它记为通过；完整测试只应在专用环境中运行。
 
@@ -71,6 +74,27 @@ ABF-018/
 ```
 
 扫描只按 NFO 判定元数据状态：有合法 NFO → 已入库并可见于 Emby；无 NFO → 待补录；NFO 损坏 → 保留旧索引并重试。STRM 地址与协议在播放时检查，仅支持有效 HTTP/HTTPS 地址。
+
+#### 本地电视节目与混合内容
+
+新增媒体库时选择“电视节目”或“混合内容”。电视节目库只接受单集 NFO，混合内容库同时接受 `<movie>` 与 `<episodedetails>`；影片库不接收单集。已有影片库不会自动改成混合内容。
+
+```text
+Show/
+├── tvshow.nfo                 # 可选：<tvshow>，剧名、简介、年份等
+├── poster.jpg                 # 可选：剧集海报
+├── Specials/
+│   ├── Show.S00E01.strm
+│   └── Show.S00E01.nfo
+└── Season 2/
+    ├── poster.jpg             # 可选：季海报
+    ├── Show.S02E01.strm
+    └── Show.S02E01.nfo         # <episodedetails>，season=2、episode=1
+```
+
+单集的 `<season>` / `<episode>` 优先于文件名；缺少时可从 `S02E01` 形式推断。季号允许 0（特别篇），集号从 1 开始。存在 `tvshow.nfo` 时据其目录归属剧集；否则识别 `Season N` / `SNN` / `Specials` 目录，并回退到 `<showtitle>` 或目录名。剧集资料 NFO 损坏时保留原索引并重试，不把损坏当作删除。
+
+媒体墙默认分层浏览；混合库的影片区不重复展示单集。“全部媒体索引”可平铺检查影片与单集。所选剧集和季写入 URL，详情返回与刷新可恢复；首次进入优先选择正片季，特别篇仍可手动选择。播放及进度复用已有接口，STRM 失效不删除元数据，修复有效 HTTP/HTTPS 地址后无需重扫即可恢复播放。客户端兼容范围与本地验证结果见 [剧集与混合库验证记录](codestable/issues/024-o-ff-television-mixed-validation.md)；真实 Emby 客户端及网络挂载尚未验收。
 
 NFO 的 `<runtime>` 与视频 `<duration>` 按分钟读取，兼容纯整数及 `94分`、`94分钟`、`94分鐘`、`94 min` / `mins` / `minute` / `minutes`（英文大小写不敏感，允许前后空白）。读取不改写源 NFO；本服务生成的 NFO 仍写纯整数。无法识别的时长或损坏 XML 仍会报错，扫描保留旧索引并在后续扫描重试。
 
@@ -112,7 +136,7 @@ library_monitor_mode: polling
 ### 增量扫描与全量重建
 
 - **普通扫描默认增量**：顶部「开始扫描」、媒体库「增量扫描」、`POST /api/admin/scan` 及计划任务 `scan` 都只重新处理新增或变化的影片；`library_id` 可限定媒体库，不传则检查全部媒体库。
-- **变化范围**：指纹只包含同名 NFO 与 CD 分组的回退 NFO（路径、存在状态、大小、纳秒修改时间、文件模式），持久化在 SQLite。遍历 `.strm` 名称仍识别影片/分段新增、删除、移动；分段列表单独比较，STRM 内容和图片不参与指纹。
+- **变化范围**：指纹包含同名 NFO 与 CD 分组的回退 NFO（路径、存在状态、大小、纳秒修改时间、文件模式）；电视节目与混合库另包含所属 `tvshow.nfo`，持久化在 SQLite。遍历 `.strm` 名称仍识别影片/分段新增、删除、移动；分段列表单独比较，STRM 内容和图片不参与指纹。
 - **首次建立基线**：指纹格式升级为 `nfo-v3`，升级后的第一次扫描会处理现有条目以建立新指纹，以后未变化项不重读 NFO、不重写影片/演员索引，也不改变影片更新时间；完全无变化时不刷新列表缓存版本。
 - **删除与故障**：成功扫描后同步清理磁盘上已删除/移动的源文件索引。媒体库根目录不可用或目录遍历失败时停止扫描、不清理；NFO 无法解析或 NFO 不可读时保留旧索引、不写入本轮指纹并跳过本轮删除清理，后续扫描继续重试。NFO 文件不存在仍按「待补录」处理，与解析失败区分开。
 - **取消与阶段进度**：扫描进度带 `phase` 字段——`walk` 表示正在遍历目录（`total` 为已发现的候选数），`process` 表示已在处理（`total`/`done` 为本轮候选总数与已完成数）。手动扫描跟随请求 context：客户端断开（关闭或刷新页面）即中止遍历；计划任务、监听刷新随服务停机或监听关闭中止。取消时已提交的批次保留、按磁盘现状的删除阶段不执行，任务记录与计划任务上次结果使用 `cancelled`，管理端显示「已取消」，日志按取消记录而不是失败。

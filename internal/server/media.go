@@ -44,6 +44,10 @@ func movieImagePath(m store.Movie, kind string) string {
 }
 
 func (a *App) image(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "tv-") {
+		a.televisionImage(c)
+		return
+	}
 	if strings.HasPrefix(c.Param("id"), "anime-") {
 		a.animeImage(c)
 		return
@@ -295,6 +299,20 @@ func (a *App) boxsetPoster(rawID string) string {
 }
 
 func (a *App) imageInfo(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "tv-") {
+		eps, err := a.db.TVFolderEpisodes(c.Param("id"))
+		if err != nil {
+			c.Status(404)
+			return
+		}
+		m, count, _ := televisionFolderMovie(c.Param("id"), eps)
+		if count == 0 {
+			c.Status(404)
+			return
+		}
+		c.JSON(200, a.movieImageInfo(m))
+		return
+	}
 	if strings.HasPrefix(c.Param("id"), "anime-") {
 		item := a.animeDTO(c.Param("id"), c)
 		if item == nil {

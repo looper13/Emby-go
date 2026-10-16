@@ -20,8 +20,10 @@ try {
     server: { host: '127.0.0.1', port: 5173, strictPort: false },
   });
   await vite.listen();
+  const television = process.argv.includes('--television')
+    ? await (await import('../../vue-migration/tools/live-env/seed-television.mjs')).seedTelevision(live) : undefined;
   const url = vite.resolvedUrls.local[0];
-  console.log(JSON.stringify({ url, backend: `${live.baseURL}/admin-vue`, username: live.credentials.username, password: live.credentials.password, pid: process.pid, temporaryData: live.root }));
+  console.log(JSON.stringify({ url, backend: `${live.baseURL}/admin-vue`, username: live.credentials.username, password: live.credentials.password, pid: process.pid, temporaryData: live.root, television }));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void stop().finally(() => process.exit()); });
 } catch (error) {
   await stop();

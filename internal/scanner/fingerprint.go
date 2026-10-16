@@ -24,12 +24,13 @@ type metadataState struct{ Fingerprint string }
 // depends exclusively on the primary and CD fallback NFO, including absence.
 var metadataStat = os.Stat
 
-func readMetadataState(source, fallbackNFO string) (metadataState, error) {
+func readMetadataState(source, fallbackNFO string, dependencies ...string) (metadataState, error) {
 	primary := strings.TrimSuffix(source, filepath.Ext(source)) + ".nfo"
 	paths := []string{primary}
 	if fallbackNFO != "" && fallbackNFO != primary {
 		paths = append(paths, fallbackNFO)
 	}
+	paths = append(paths, dependencies...)
 	sort.Strings(paths)
 	stamps := make([]fileStamp, 0, len(paths))
 	for _, path := range paths {

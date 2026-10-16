@@ -93,7 +93,7 @@ func scanWithProgress(ctx context.Context, s *store.Store, lib store.Library, fu
 	return scanDirectory(ctx, s, lib, lib.Path, true, full, nil, onProgress)
 }
 
-func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive bool, onProgress func(Progress)) (Result, error) {
+func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive bool, onProgress func(Progress), forceMetadata ...bool) (Result, error) {
 	root, err := filepath.Abs(lib.Path)
 	if err != nil {
 		return Result{}, err
@@ -106,7 +106,7 @@ func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, di
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return Result{}, fmt.Errorf("刷新目录不在媒体库内: %s", directory)
 	}
-	return scanDirectory(ctx, s, lib, filepath.Join(lib.Path, relative), recursive, false, nil, onProgress)
+	return scanDirectory(ctx, s, lib, filepath.Join(lib.Path, relative), recursive, len(forceMetadata) > 0 && forceMetadata[0], nil, onProgress)
 }
 
 // RefreshFiles explicitly rereads metadata, including NFO events preserving mtime.
@@ -298,7 +298,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		}()
 		paths[item.path] = struct{}{}
 		started := time.Now()
-		before, err := readMetadataState(item.path, fallbackNFO)
+		before, err := readLibraryMetadataState(lib, item.path, fallbackNFO)
 		perf.source += time.Since(started)
 		if err != nil {
 			result.Failed++
@@ -322,7 +322,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			outcome.Added++
 		}
 		started = time.Now()
-		if after, err := readMetadataState(item.path, fallbackNFO); err == nil && after.Fingerprint == before.Fingerprint {
+		if after, err := readLibraryMetadataState(lib, item.path, fallbackNFO); err == nil && after.Fingerprint == before.Fingerprint {
 			entry.Fingerprint = before.Fingerprint
 		}
 		perf.verify += time.Since(started)
@@ -536,6 +536,10 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 	case nfoErr == nil:
 		metadataStarted := time.Now()
 		applyMeta(&movie, meta, nfoPath)
+		if err := applyTelevision(&movie, meta, lib, readNFO); err != nil {
+			slog.Warn("媒体类型与 NFO 不匹配", "path", item.path, "error", err)
+			return store.ScannedMovie{}, Result{Failed: 1}
+		}
 		// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
 		for _, actor := range meta.Actors {
 			actors = append(actors, store.ActorRef{Name: actor.Name, AvatarURL: strings.TrimSpace(actor.Thumb)})

@@ -71,6 +71,9 @@ func (s *Scraper) MovieInfo(ctx context.Context, provider, id string) (metatube.
 // 元数据成功即算成功；若先写 NFO 再下图，中途失败会留下「元数据已更新但图没换」的
 // 半成品且无法从 NFO 判断，反过来则最多是图旧了一点。
 func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.MovieInfo, opts ApplyOptions) (ApplyResult, error) {
+	if movie.Television != nil {
+		return ApplyResult{}, errors.New("MetaTube 影片刮削不适用于电视节目")
+	}
 	result := ApplyResult{MovieID: movie.ID, Provider: info.Provider, ProviderID: providerID(info.Provider, info.ID)}
 	result.Number = info.Number
 

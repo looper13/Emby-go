@@ -75,12 +75,15 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 func (a *App) adminAddLibrary(c *gin.Context) {
 	a.configEditMu.Lock()
 	defer a.configEditMu.Unlock()
-	var req struct{ Name, Path string }
+	var req struct{ Name, Path, Type string }
 	if c.ShouldBindJSON(&req) != nil || req.Name == "" || req.Path == "" {
 		c.JSON(400, gin.H{"error": "name and path required"})
 		return
 	}
-	v, e := a.db.AddLibrary(req.Name, req.Path)
+	if req.Type == "" {
+		req.Type = store.LibraryMovies
+	}
+	v, e := a.db.AddLibrary(req.Name, req.Path, req.Type)
 	if e != nil {
 		c.JSON(400, gin.H{"error": e.Error()})
 		return
@@ -391,6 +394,7 @@ func (a *App) adminItems(c *gin.Context) {
 	}
 	query := store.AdminQuery{
 		LibraryID:  libraryID,
+		MediaType:  c.Query("media_type"),
 		Term:       c.Query("search"),
 		Status:     status,
 		Protocol:   strings.ToLower(c.Query("source_protocol")),

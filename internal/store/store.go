@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -91,8 +92,9 @@ type Movie struct {
 	UpdatedAt string `json:"updated_at"`
 	// 刮削结果（需求 5f）：LastScrapeError 非空表示上次刮削失败或待人工确认
 	//（待确认带 store.ScrapeConfirmPrefix 前缀）。不新增 status 枚举值。
-	LastScrapeAt    string `json:"last_scrape_at,omitempty"`
-	LastScrapeError string `json:"last_scrape_error,omitempty"`
+	LastScrapeAt    string      `json:"last_scrape_at,omitempty"`
+	LastScrapeError string      `json:"last_scrape_error,omitempty"`
+	Television      *Television `json:"television,omitempty"`
 }
 
 type UserData struct {
@@ -148,6 +150,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateAnimeTMDB(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateTelevision(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -359,10 +365,32 @@ func (s *Store) HasAPIKey(key string) (bool, error) {
 	return count == 1, nil
 }
 
-func (s *Store) AddLibrary(name, path string) (Library, error) {
+func (s *Store) AddLibrary(name, path string, contentType ...string) (Library, error) {
+	name, path = strings.TrimSpace(name), strings.TrimSpace(path)
+	if name == "" || path == "" {
+		return Library{}, errors.New("媒体库名称和路径不能为空")
+	}
+	typ := LibraryMovies
+	if len(contentType) > 0 {
+		typ = contentType[0]
+		if typ != LibraryMovies && typ != LibraryTVShows && typ != LibraryMixed {
+			return Library{}, errors.New("媒体库类型必须是影片、电视节目或混合内容")
+		}
+		var existingType string
+		err := s.db.QueryRow("SELECT type FROM libraries WHERE path=?", path).Scan(&existingType)
+		if err != nil && err != sql.ErrNoRows {
+			return Library{}, err
+		}
+		if err == nil && typ != existingType {
+			return Library{}, errors.New("该路径已属于其他类型的媒体库，请使用独立目录")
+		}
+	}
 	var id int64
-	err := s.db.QueryRow("INSERT INTO libraries(name,path) VALUES(?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,revision=libraries.revision+1 RETURNING id", name, path).Scan(&id)
+	err := s.db.QueryRow("INSERT INTO libraries(name,path,type) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,revision=libraries.revision+1 RETURNING id", name, path, typ).Scan(&id)
 	if err != nil {
+		return Library{}, err
+	}
+	if err := s.BumpVersion(id); err != nil {
 		return Library{}, err
 	}
 	return s.Library(id)
@@ -389,11 +417,11 @@ func (s *Store) SetKV(key, value string) error {
 	return err
 }
 
-const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at,backdrop_paths,trailer_url,cover_url)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at,backdrop_paths=excluded.backdrop_paths,trailer_url=excluded.trailer_url,cover_url=excluded.cover_url RETURNING id`
+const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,collection,official_rating,sortname,taglines,provider_id,genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,additional_parts,created_at,updated_at,backdrop_paths,trailer_url,cover_url,television)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at,backdrop_paths=excluded.backdrop_paths,trailer_url=excluded.trailer_url,cover_url=excluded.cover_url,television=excluded.television RETURNING id`
 
 func movieValues(movie Movie, size int64, mtime time.Time, now string) []any {
-	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops()), movie.TrailerURL, movie.CoverURL}
+	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops()), movie.TrailerURL, movie.CoverURL, animeJSON(movie.Television)}
 }
 
 func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error) {
@@ -915,8 +943,11 @@ func (s *Store) DeleteMissingSources(libraryID int64, paths map[string]struct{})
 
 func movieScan(row *sql.Rows) (Movie, error) {
 	var m Movie
-	var genres, tags, studios, taglines, parts, mt, backdrops string
-	err := row.Scan(&m.ID, &m.LibraryID, &m.SourcePath, &mt, &m.SourceProtocol, &m.SourceContainer, &m.Number, &m.Status, &m.NFOPath, &m.OutputDir, &m.Title, &m.OriginalTitle, &m.Plot, &m.Year, &m.Premiere, &m.Rating, &m.Director, &m.Series, &m.Maker, &m.Label, &m.Collection, &m.OfficialRating, &m.SortName, &taglines, &m.ProviderID, &genres, &tags, &studios, &m.PosterPath, &m.BackdropPath, &m.LandscapePath, &m.RuntimeSeconds, &parts, &m.CreatedAt, &m.UpdatedAt, &m.LastScrapeAt, &m.LastScrapeError, &backdrops, &m.TrailerURL, &m.CoverURL)
+	var genres, tags, studios, taglines, parts, mt, backdrops, television string
+	err := row.Scan(&m.ID, &m.LibraryID, &m.SourcePath, &mt, &m.SourceProtocol, &m.SourceContainer, &m.Number, &m.Status, &m.NFOPath, &m.OutputDir, &m.Title, &m.OriginalTitle, &m.Plot, &m.Year, &m.Premiere, &m.Rating, &m.Director, &m.Series, &m.Maker, &m.Label, &m.Collection, &m.OfficialRating, &m.SortName, &taglines, &m.ProviderID, &genres, &tags, &studios, &m.PosterPath, &m.BackdropPath, &m.LandscapePath, &m.RuntimeSeconds, &parts, &m.CreatedAt, &m.UpdatedAt, &m.LastScrapeAt, &m.LastScrapeError, &backdrops, &m.TrailerURL, &m.CoverURL, &television)
+	if err == nil {
+		err = json.Unmarshal([]byte(television), &m.Television)
+	}
 	m.BackdropPaths = parseStrings(backdrops)
 	m.Genres = parseStrings(genres)
 	m.Tags = parseStrings(tags)
@@ -926,7 +957,7 @@ func movieScan(row *sql.Rows) (Movie, error) {
 	return m, err
 }
 
-const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]'),COALESCE(trailer_url,''),COALESCE(cover_url,'')"
+const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]'),COALESCE(trailer_url,''),COALESCE(cover_url,''),television"
 
 func (s *Store) Movie(id int64) (Movie, error) {
 	row, err := s.db.Query("SELECT "+movieCols+" FROM movies WHERE id=?", id)
@@ -960,7 +991,8 @@ func (s *Store) SearchAll(libraryID int64, term, status, sortBy string, desc boo
 // 位置参数在调用点极易错位。全部过滤与分页都在 SQL 层完成，
 // 避免先分页再过滤导致每页条数与总数失真。
 type AdminQuery struct {
-	LibraryID  int64  // 0 = 全部媒体库
+	LibraryID  int64 // 0 = 全部媒体库
+	MediaType  string
 	Term       string // 标题/番号/原名模糊匹配
 	Status     string // "" = 可播放+手动录入
 	Protocol   string // source_protocol
@@ -985,7 +1017,7 @@ func (s *Store) SearchAdmin(q AdminQuery) ([]Movie, int, error) {
 		seed = 1
 	}
 	return s.searchExcluding(nil, q.LibraryID, q.Term, q.Status, "", q.Genre, q.Tag, q.Studio, q.Person, q.Collection, q.Protocol, q.Scrape,
-		false, false, movieOrder{by: q.SortBy, desc: q.Desc, randomSeed: seed}, q.Limit, q.Offset)
+		false, false, movieOrder{by: q.SortBy, desc: q.Desc, randomSeed: seed, itemTypes: strings.Fields(q.MediaType)}, q.Limit, q.Offset)
 }
 
 // MoviesForProbe 返回媒体信息探测的候选影片，只挑有 NFO 的条目：
@@ -1037,11 +1069,28 @@ type movieOrder struct {
 	by         string
 	desc       bool
 	randomSeed uint32
+	itemTypes  []string
 }
 
 func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, order movieOrder, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	where := []string{}
 	args := []any{}
+	if len(order.itemTypes) > 0 {
+		movie, episode := false, false
+		for _, typ := range order.itemTypes {
+			movie = movie || typ == "Movie" || typ == "Video"
+			episode = episode || typ == "Episode" || typ == "Video"
+		}
+		switch {
+		case movie && episode:
+		case movie:
+			where = append(where, "television='null'")
+		case episode:
+			where = append(where, "television<>'null'")
+		default:
+			where = append(where, "0=1")
+		}
+	}
 	if len(exclude) > 0 {
 		where = append(where, "id NOT IN (SELECT value FROM json_each(?))")
 		args = append(args, animeJSON(exclude))
@@ -1080,9 +1129,9 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		args = append(args, ScrapeConfirmPrefix+"%")
 	}
 	if term != "" {
-		where = append(where, "(title LIKE ? OR original_title LIKE ? OR number LIKE ?)")
+		where = append(where, "(title LIKE ? OR original_title LIKE ? OR number LIKE ? OR json_extract(television,'$.title') LIKE ?)")
 		q := "%" + term + "%"
-		args = append(args, q, q, q)
+		args = append(args, q, q, q, q)
 	}
 	if years != "" {
 		parts := strings.Split(years, ",")
@@ -1456,8 +1505,9 @@ func (s *Store) Actors(movieID int64) ([]ActorRef, error) {
 }
 
 // Latest 返回库内最近入库的可见影片（按入库倒序）。
-func (s *Store) Latest(libraryID int64, limit, offset int) ([]Movie, error) {
+func (s *Store) Latest(libraryID int64, limit, offset int, itemTypes ...string) ([]Movie, error) {
 	query := "SELECT " + movieCols + " FROM movies WHERE status IN ('success','manual')"
+	query += mediaTypeClause(itemTypes)
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -1481,16 +1531,26 @@ func (s *Store) Latest(libraryID int64, limit, offset int) ([]Movie, error) {
 	return out, rows.Err()
 }
 
-// Resumed 返回有播放进度且未隐藏续播的可见影片（按标题排序，与列表口径一致），
+// Resumed 返回有播放进度、未看完且未隐藏续播的可见媒体（按标题排序，与列表口径一致），
 // 供「继续观看」直接分页，避免全量载入后在内存里过滤。
 func (s *Store) Resumed(limit, offset int) ([]Movie, int, error) {
-	const cond = ` FROM movies JOIN userdata u ON u.movie_id=movies.id
-		WHERE movies.status IN ('success','manual') AND u.position_ticks>0 AND COALESCE(u.hide_from_resume,0)=0`
+	return s.ResumedScoped(0, nil, limit, offset)
+}
+func (s *Store) ResumedScoped(libraryID int64, itemTypes []string, limit, offset int) ([]Movie, int, error) {
+	cond := ` FROM movies JOIN userdata u ON u.movie_id=movies.id
+		WHERE movies.status IN ('success','manual') AND u.position_ticks>0 AND COALESCE(u.played,0)=0 AND COALESCE(u.hide_from_resume,0)=0`
+	cond += mediaTypeClause(itemTypes)
+	args := []any{}
+	if libraryID > 0 {
+		cond += " AND movies.library_id=?"
+		args = append(args, libraryID)
+	}
 	var total int
-	if err := s.db.QueryRow("SELECT COUNT(*)" + cond).Scan(&total); err != nil {
+	if err := s.db.QueryRow("SELECT COUNT(*)"+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.Query("SELECT "+movieCols+cond+" ORDER BY movies.title, movies.id LIMIT ? OFFSET ?", limit, offset)
+	args = append(args, limit, offset)
+	rows, err := s.db.Query("SELECT "+movieCols+cond+" ORDER BY movies.title, movies.id LIMIT ? OFFSET ?", args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -2051,7 +2111,7 @@ func (s *Store) MoviesForScrape(libraryID int64, onlyMissing bool, limit int) ([
 			return nil, err
 		}
 	}
-	query := "SELECT " + movieCols + " FROM movies WHERE status <> 'incompatible' AND library_id IN (SELECT id FROM libraries WHERE source_type='nfo_directory')"
+	query := "SELECT " + movieCols + " FROM movies WHERE status <> 'incompatible' AND television='null' AND library_id IN (SELECT id FROM libraries WHERE source_type='nfo_directory' AND type<>'tvshows')"
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -2088,7 +2148,7 @@ func (s *Store) CountMoviesForScrape(libraryID int64, onlyMissing bool) (int, er
 			return 0, err
 		}
 	}
-	query := "SELECT COUNT(*) FROM movies WHERE status <> 'incompatible' AND library_id IN (SELECT id FROM libraries WHERE source_type='nfo_directory')"
+	query := "SELECT COUNT(*) FROM movies WHERE status <> 'incompatible' AND television='null' AND library_id IN (SELECT id FROM libraries WHERE source_type='nfo_directory' AND type<>'tvshows')"
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"

@@ -15,6 +15,7 @@ import EmptyState from '../components/common/EmptyState.vue';
 import { entityParams, statusText } from '../lib/media';
 import { useMediaActions } from '../composables/useMediaActions';
 import { usePlayerStore } from '../stores/player';
+import TelevisionBrowser from '../components/media/TelevisionBrowser.vue';
 
 const route = useRoute(); const router = useRouter();
 const history = inject(viewHistoryKey)!;
@@ -26,6 +27,9 @@ const search = ref(''); const ready = ref(false); const more = ref<HTMLElement |
 const actions = useMediaActions(refresh, () => route.fullPath);
 const entity = computed(() => entityParams.map(([key, label]) => [key, label, value(key)]).find(row => row[2]));
 const library = computed(() => libraries.value.find(lib => String(lib.Id) === value('library_id')));
+const televisionLibrary = computed(() => library.value?.Type === 'tvshows' || library.value?.Type === 'mixed');
+const browseTelevision = computed(() => televisionLibrary.value && value('view') !== 'index' && !value('status') && !entity.value && !value('scrape'));
+const showWall = computed(() => !browseTelevision.value || library.value?.Type !== 'tvshows');
 const scopeLabel = computed(() => [library.value?.Name, entity.value ? `${entity.value[1]}：${entity.value[2]}` : '', statusText[value('status')] || value('status')].filter(Boolean).join(' · '));
 const emptyTitle = computed(() => { const what = entity.value ? `「${entity.value[2]}」的影片` : library.value ? `「${library.value.Name}」的影片` : '影片'; return value('status') ? `没有 ${statusText[value('status')] || value('status')} 的${what}` : `没有符合条件的${what}`; });
 let request: ReturnType<typeof scope.begin> | undefined;
@@ -34,11 +38,13 @@ function value(key: string) { const v = route.query[key]; return typeof v === 's
 function query() {
   const output = new URLSearchParams();
   for (const [key, v] of Object.entries(route.query)) if (typeof v === 'string' && key !== 'offset' && key !== 'limit') output.set(key, v);
+  if (browseTelevision.value && library.value?.Type === 'mixed') output.set('media_type', 'Movie');
   return output;
 }
 function filter(key: string, v: string, toggle = false) {
   clearTimeout(timer);
   const q = { ...route.query }; if (v && !(toggle && value(key) === v)) q[key] = v; else delete q[key];
+  if (key === 'library_id' || key === 'view') { delete q.tv_series; delete q.tv_season; }
   if (key === 'status') delete q.search;
   if (key === 'sort') delete q.order;
   void router.push({ path: '/items', query: q });
@@ -46,9 +52,16 @@ function filter(key: string, v: string, toggle = false) {
 function searchChanged() {
   clearTimeout(timer);
   timer = setTimeout(() => {
-    const q = { ...route.query }; if (search.value.trim()) q.search = search.value.trim(); else delete q.search;
+    const q = { ...route.query }; delete q.tv_series; delete q.tv_season;
+    if (search.value.trim()) q.search = search.value.trim(); else delete q.search;
     void router.replace({ path: '/items', query: q });
   }, 400);
+}
+function browseSeries(series: string, season: string) {
+  const q = { ...route.query };
+  if (series) q.tv_series = series; else delete q.tv_series;
+  if (season) q.tv_season = season; else delete q.tv_season;
+  void router.replace({ path: '/items', query: q });
 }
 function clearEntity() { clearTimeout(timer); const q = { ...route.query }; for (const [key] of entityParams) delete q[key]; void router.push({ path: '/items', query: q }); }
 function refresh() {
@@ -67,7 +80,7 @@ async function load(retry = false) {
   return loaded;
 }
 function maybeLoad() {
-  if (ready.value && !wall.error && !wall.loading && !wall.done
+  if (showWall.value && ready.value && !wall.error && !wall.loading && !wall.done
     && more.value && more.value.getBoundingClientRect().top <= innerHeight + 600) void load().then(maybeLoad);
 }
 async function enter(position?: ViewPosition) {
@@ -115,15 +128,26 @@ watch(() => tasks.revision, () => {
 </script>
 <template>
   <section class="panel">
-    <div class="panel-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
+    <div class="panel-head wall-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
     <p v-if="pageError" role="alert">{{ pageError }} <button class="btn" @click="enter()">重试</button></p>
     <BackgroundTaskProgress kind="probe" :progress="tasks.probe.progress" :visible="tasks.probe.visible" :busy="tasks.probe.busy" :unavailable="tasks.probe.unavailable" :cancelling="tasks.probe.cancelling" @cancel="tasks.probe.cancel()" />
     <WallFilters :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle" />
-    <MediaGrid :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
-    <div id="wall-empty"><EmptyState v-if="ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : '开始扫描或手动补录后再来看看。'" /></div>
-    <div id="wall-more" ref="more" class="wall-more">
+    <div v-if="televisionLibrary && !value('status') && !entity" class="television-views" role="tablist" aria-label="媒体视图"><button class="btn btn-sm" role="tab" :aria-selected="browseTelevision" @click="filter('view','')">{{ library?.Type === 'mixed' ? '影片与电视节目' : '电视节目' }}</button><button class="btn btn-sm" role="tab" :aria-selected="!browseTelevision" @click="filter('view','index')">全部媒体索引</button></div>
+    <TelevisionBrowser v-if="browseTelevision && library" :key="library.Id" :library="library.Id" :search="value('search')" :revision="tasks.revision" :series="value('tv_series')" :season="value('tv_season')" @browse="browseSeries" @open="open" />
+    <h3 v-if="browseTelevision && library?.Type === 'mixed'">影片</h3>
+    <MediaGrid v-if="showWall" :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
+    <div id="wall-empty"><EmptyState v-if="showWall && ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : '开始扫描或手动补录后再来看看。'" /></div>
+    <div v-show="showWall" id="wall-more" ref="more" class="wall-more">
       <WallLoadState :error="wall.error" :loading="wall.loading" :ready="ready" :done="wall.done" :total="wall.total" @retry="load(true).then(maybeLoad)" />
     </div>
     <p class="hint">点击卡片进入详情页（可播放、刮削、探测媒体信息、重读源）；海报中央的播放按钮为快捷播放。播放时检查当前 .strm 地址；替换为 http(s) 后即可重试。</p>
   </section>
 </template>
+<style scoped>
+.television-views { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.television-views [aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+.wall-head { flex-wrap: wrap; }
+.wall-head h2 { flex-shrink: 0; white-space: nowrap; }
+.wall-head .panel-actions { flex-wrap: wrap; min-width: 0; }
+.wall-head #wall-count { overflow-wrap: anywhere; }
+</style>

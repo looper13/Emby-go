@@ -12,6 +12,7 @@
 /frontend/playwright-report/
 /frontend/test-results/
 /.playwright-cli/
+/frontend/.playwright-cli/
 /output/playwright/
 /internal/server/web_dist/
 /internal/server/web_dist.next/

@@ -126,6 +126,10 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 			}
 			if ext == ".nfo" {
 				forceMetadata[filepath.Dir(change.Path)] = true
+				if strings.EqualFold(filepath.Base(change.Path), "tvshow.nfo") && (library.Type == store.LibraryTVShows || library.Type == store.LibraryMixed) {
+					directories[filepath.Dir(change.Path)] = true
+					continue
+				}
 			}
 		}
 		if change.Directory {
@@ -160,7 +164,7 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		var result scanner.Result
 		var err error
 		if directories[directory] {
-			result, err = scanner.RefreshDirectory(ctx, a.db, library, directory, true, a.updateScanProgress)
+			result, err = scanner.RefreshDirectory(ctx, a.db, library, directory, true, a.updateScanProgress, forceMetadata[directory])
 		} else if forceMetadata[directory] {
 			result, err = scanner.RefreshFiles(ctx, a.db, library, files[directory], a.updateScanProgress)
 		} else {

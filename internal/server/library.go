@@ -394,7 +394,7 @@ func (a *App) collectionFolderDTO(l store.Library) gin.H {
 		"Id":                   externalLibraryID(l.ID),
 		"Name":                 l.Name,
 		"Type":                 "CollectionFolder",
-		"CollectionType":       "movies",
+		"CollectionType":       l.CollectionType(),
 		"ServerId":             a.serverID,
 		"DisplayPreferencesId": strconv.FormatInt(l.ID, 10),
 		"IsFolder":             true,
@@ -403,6 +403,9 @@ func (a *App) collectionFolderDTO(l store.Library) gin.H {
 			"UnplayedItemCount": unplayed, "PlaybackPositionTicks": 0,
 			"IsFavorite": false, "Played": false,
 		},
+	}
+	if l.CollectionType() == "" {
+		delete(item, "CollectionType")
 	}
 	if l.SourceType == store.SourceAnime {
 		delete(item, "CollectionType")
@@ -489,14 +492,26 @@ func (a *App) counts(c *gin.Context) {
 	}
 	collections := a.cachedCollections()
 	projection := a.animeProjection()
-	series := map[int64]bool{}
-	episodeCount := 0
+	series := map[string]bool{}
+	episodeIDs := map[int64]bool{}
 	for _, p := range projection {
 		if p.EpisodeID > 0 {
-			episodeCount++
-			series[p.SubjectID] = true
+			episodeIDs[p.MovieID] = true
+			series["anime:"+strconv.FormatInt(p.SubjectID, 10)] = true
 		}
 	}
+	localEpisodes, err := a.db.TVEpisodes(0, "")
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	for _, m := range localEpisodes {
+		if !episodeIDs[m.ID] {
+			series[store.TVSeriesID(m.LibraryID, m.Television.SeriesPath)] = true
+		}
+		episodeIDs[m.ID] = true
+	}
+	episodeCount := len(episodeIDs)
 	c.JSON(http.StatusOK, gin.H{
 		"MovieCount": total - episodeCount, "SeriesCount": len(series), "EpisodeCount": episodeCount, "GameCount": 0,
 		"ArtistCount": 0, "ProgramCount": 0, "GameSystemCount": 0, "TrailerCount": 0,
@@ -530,7 +545,8 @@ func (a *App) resume(c *gin.Context) {
 	if limit < 1 || limit > 1000 {
 		limit = 30
 	}
-	movies, total, err := a.db.Resumed(limit, start)
+	libraryID, _ := parseParentScope(c.Query("ParentId"))
+	movies, total, err := a.db.ResumedScoped(libraryID, splitQueryTypes(c.Query("IncludeItemTypes")), limit, start)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -554,6 +570,9 @@ func (a *App) resume(c *gin.Context) {
 func (a *App) nextUp(c *gin.Context) {
 	if userID := c.Query("UserId"); userID != "" && userID != "1" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	if a.televisionNextUp(c) {
 		return
 	}
 	a.animeNextUp(c)
@@ -777,12 +796,17 @@ func (a *App) embyItemWithArtwork(m store.Movie, d store.UserData, actors []stor
 	}
 	v := gin.H{
 		"Id": id, "Name": m.Title, "SortName": sortName,
-		"Type": "Movie", "MediaType": "Video", "IsFolder": false,
+		"Type": m.ItemType(), "MediaType": "Video", "IsFolder": false,
 		"ParentId":  strconv.FormatInt(m.LibraryID, 10),
 		"ServerId":  a.serverID,
 		"Container": m.SourceContainer,
 		"CanDelete": false, "CanDownload": false, "SupportsSync": false,
 		"UserData": d,
+	}
+	if tv := m.Television; tv != nil {
+		v["SeriesId"], v["SeriesName"] = store.TVSeriesID(m.LibraryID, tv.SeriesPath), tv.Title
+		v["SeasonId"], v["SeasonName"] = store.TVSeasonID(m.LibraryID, tv.SeriesPath, tv.Season), televisionSeasonName(tv.Season)
+		v["ParentId"], v["ParentIndexNumber"], v["IndexNumber"] = v["SeasonId"], tv.Season, tv.Episode
 	}
 	if m.RuntimeSeconds > 0 {
 		v["RunTimeTicks"] = m.RuntimeSeconds * 10000000
@@ -913,7 +937,7 @@ func (a *App) latest(c *gin.Context) {
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
-	movies, err := a.db.Latest(libraryID, limit, 0)
+	movies, err := a.db.Latest(libraryID, limit, 0, splitQueryTypes(c.Query("IncludeItemTypes"))...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -963,7 +987,7 @@ func (a *App) suggestions(c *gin.Context) {
 // 依据 IncludeItemTypes 区分「影片列表」与「流派/标签/制片商/演员实体列表」，
 // 不支持的类型（如 Series/Episode）返回空结果而非错把影片当该类型返回。
 func (a *App) itemsQuery(c *gin.Context) {
-	if a.animeRequestedItems(c) || a.animeItems(c) || a.animeRootItems(c) {
+	if a.animeRequestedItems(c) || a.animeItems(c) || a.televisionItems(c) || a.animeRootItems(c) {
 		return
 	}
 	parentRaw := c.Query("ParentId")
@@ -1332,6 +1356,14 @@ func (a *App) item(c *gin.Context) {
 		return
 	}
 	rawID := c.Param("id")
+	if strings.HasPrefix(rawID, "tv-") {
+		if item := a.televisionFolder(rawID, c); item != nil {
+			c.JSON(200, item)
+		} else {
+			c.JSON(404, gin.H{"error": "not found"})
+		}
+		return
+	}
 	if strings.HasPrefix(rawID, "anime-") {
 		if item := a.animeDTO(rawID, c); item != nil {
 			c.JSON(200, item)

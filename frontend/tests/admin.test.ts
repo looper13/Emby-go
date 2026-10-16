@@ -48,9 +48,12 @@ describe('management interaction ownership', () => {
     vi.spyOn(adminApi, 'libraries').mockResolvedValue(libraries); const pending = deferred<(typeof libraries.items)[number]>();
     const create = vi.spyOn(adminApi, 'createLibrary').mockRejectedValueOnce(new Error('bad path')).mockReturnValueOnce(pending.promise);
     const w = page(LibrariesPage); await flushPromises(); await w.get('#lib-name').setValue('new'); await w.get('#lib-path').setValue('/media');
+    await w.get('#lib-type').setValue('tvshows');
     await w.get('#library-form').trigger('submit'); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('new');
+    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Path:'/media',Type:'tvshows'});
     await w.get('#library-form').trigger('submit'); await w.get('#library-form').trigger('submit'); expect(create).toHaveBeenCalledTimes(2);
     pending.resolve(libraries.items[0]!); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('');
+    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('movies');
   });
   it('respects library deletion cancellation and exact index/userdata warning', async () => {
     vi.spyOn(adminApi, 'libraries').mockResolvedValue(libraries); const remove = vi.spyOn(adminApi, 'deleteLibrary').mockResolvedValue(null);

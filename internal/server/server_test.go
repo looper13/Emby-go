@@ -594,6 +594,15 @@ func TestCoreAPI(t *testing.T) {
 	if resp, _ := doUser("DELETE", "/Users/1/Items/1/Rating", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("rating clear: %d", resp.StatusCode)
 	}
+	// 上文已标记 item 1 看完；续播须排除它，取消已看后再验证隐藏/恢复。
+	for _, it := range get("/Users/1/Items/Resume")["Items"].([]any) {
+		if it.(map[string]any)["Id"] == "1" {
+			t.Fatalf("played item still in resume: %v", it)
+		}
+	}
+	if resp, _ := doUser("DELETE", "/Users/1/PlayedItems/1", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("mark unplayed before resume: %d", resp.StatusCode)
+	}
 	resumeBefore := get("/Users/1/Items/Resume")
 	found := false
 	for _, it := range resumeBefore["Items"].([]any) {

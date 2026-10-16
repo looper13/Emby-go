@@ -324,6 +324,10 @@ func (a *App) animeRootItems(c *gin.Context) bool {
 }
 
 func (a *App) animeSeasons(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "tv-") {
+		a.televisionSeasons(c)
+		return
+	}
 	q := c.Request.URL.Query()
 	if q.Get("UserId") != "" && q.Get("UserId") != "1" {
 		c.JSON(404, gin.H{"error": "user not found"})
@@ -337,6 +341,10 @@ func (a *App) animeSeasons(c *gin.Context) {
 	}
 }
 func (a *App) animeEpisodes(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "tv-") {
+		a.televisionEpisodes(c)
+		return
+	}
 	q := c.Request.URL.Query()
 	if q.Get("UserId") != "" && q.Get("UserId") != "1" {
 		c.JSON(404, gin.H{"error": "user not found"})

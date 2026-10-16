@@ -31,6 +31,6 @@ function key(event: KeyboardEvent, id: number) {
       <button v-if="['success', 'manual'].includes(movie.Status)" class="wall-play" :data-quickplay="movie.id" title="直接播放" @click.stop="emit('quickplay', movie.id)"><Play :size="24" aria-hidden="true" /></button>
     </div>
     <div class="wall-meta"><strong :title="movie.Title || movie.source_path">{{ movie.Title || movie.source_path }}</strong>
-      <small>{{ [numberUnlessInTitle(movie.Title, movie.Number), movie.Year, movie.OriginalTitle].filter(Boolean).join(' · ') || movie.source_protocol }}</small></div>
+      <small>{{ [movie.television ? `${movie.television.title} · S${movie.television.season}E${movie.television.episode}` : numberUnlessInTitle(movie.Title, movie.Number), movie.Year, movie.OriginalTitle].filter(Boolean).join(' · ') || movie.source_protocol }}</small></div>
   </article>
 </template>

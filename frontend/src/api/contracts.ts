@@ -20,7 +20,8 @@ export interface LoginDto {
   User: UserDto;
 }
 
-export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory' | 'anime_catalog'; Enabled?: boolean; Revision?: number; Type?: string; SystemKey?: string }
+export type LibraryContentType = 'movies' | 'tvshows' | 'mixed';
+export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory' | 'anime_catalog'; Enabled?: boolean; Revision?: number; Type?: LibraryContentType | ''; SystemKey?: string }
 export interface LibrariesDto { items: LibraryDto[] | null; total: number }
 export interface StatusDto { success: number; manual: number; pending: number; incompatible: number }
 
@@ -33,6 +34,7 @@ export interface MovieDto {
   Genres?: string[] | null; Tags?: string[] | null; Studios?: string[] | null; AdditionalParts?: string[] | null;
   Maker?: string; Label?: string; Director?: string; official_rating?: string; NFOPath?: string;
   created_at?: string; last_scrape_at?: string; last_scrape_error?: string;
+  television?: { series_path: string; title: string; original_title: string; plot: string; year: number; season: number; episode: number };
 }
 export interface WallUserData { position_ticks: number; played: boolean; favorite: boolean }
 export interface WallDto {
@@ -62,6 +64,11 @@ export function parseMovie(value: unknown): MovieDto {
   }
   for (const key of ['Genres', 'Tags', 'Studios', 'AdditionalParts'] as const) {
     const values = array(value[key]); if (values.some(v => typeof v !== 'string')) return invalidDto(); movie[key] = values as string[];
+  }
+  if (value.television != null) {
+    const tv = obj(value.television);
+    if (!isCount(tv.season) || !isCount(tv.episode) || tv.episode < 1 || !isCount(tv.year)) return invalidDto();
+    movie.television = { series_path: str(tv.series_path), title: str(tv.title), original_title: str(tv.original_title), plot: str(tv.plot), year: tv.year, season: tv.season, episode: tv.episode };
   }
   return movie;
 }
@@ -160,6 +167,7 @@ export function parseLibraries(value: unknown): LibrariesDto {
     if (item.SourceType !== undefined) { if (item.SourceType !== 'nfo_directory' && item.SourceType !== 'anime_catalog') return invalidDto(); library.SourceType = item.SourceType; }
     if (item.Enabled !== undefined) { if (typeof item.Enabled !== 'boolean') return invalidDto(); library.Enabled = item.Enabled; }
     if (item.Revision !== undefined) { if (!isCount(item.Revision)) return invalidDto(); library.Revision = item.Revision; }
+    if (item.Type !== undefined) { if (!['movies', 'tvshows', 'mixed', ''].includes(String(item.Type))) return invalidDto(); library.Type = item.Type as LibraryDto['Type']; }
     return library;
   });
   return { items, total: value.total };

@@ -6,6 +6,7 @@ const filterKeys = new Set([
   'library_id', 'status', 'search', 'sort', 'order', 'source_protocol',
   'genre', 'tag', 'studio', 'person', 'collection', 'scrape', 'limit', 'offset',
   'year', 'season', 'weekday', 'source', 'playable',
+  'view', 'tv_series', 'tv_season',
 ]);
 
 export function isValidItemId(value: string): boolean {

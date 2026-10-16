@@ -23,6 +23,7 @@ func (m *MovieMeta) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) e
 		return fmt.Errorf("nfo: runtime=%q: %w", value.Runtime, err)
 	}
 	m.Runtime = minutes
+	m.Root = start.Name.Local
 	return nil
 }
 

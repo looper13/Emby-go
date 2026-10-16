@@ -341,6 +341,7 @@ func (a *App) routes() {
 	a.registerAnime(admin)
 	admin.GET("/libraries", a.adminLibraries)
 	admin.POST("/libraries", a.adminAddLibrary)
+	admin.GET("/shows", a.adminTelevision)
 	admin.DELETE("/libraries/:id", a.adminDeleteLibrary)
 	admin.POST("/scan", a.adminScan)
 	admin.POST("/tasks/scan", a.adminScan)

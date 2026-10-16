@@ -76,7 +76,8 @@ INSERT INTO libraries(id,name,path) VALUES(17,'legacy','/media'),(50,'deleted','
 		t.Fatal(err)
 	}
 	var mid int64
-	if err = db.QueryRow(upsertMovieSQL, movieValues(Movie{LibraryID: 17, SourcePath: "/media/a.strm", Title: "old", Status: "success"}, 0, time.Now(), animeNow())...).Scan(&mid); err != nil {
+	if err = db.QueryRow(`INSERT INTO movies(library_id,source_path,title,status,created_at,updated_at,file_mtime,source_protocol,source_container,number,nfo_path,output_dir,original_title,plot,year,premiered,rating,director,series,maker,label,genres,tags,studios,poster_path,backdrop_path,landscape_path)
+VALUES(17,'/media/a.strm','old','success',?,?,'','','','','','','','',0,'',0,'','','','','[]','[]','[]','','','') RETURNING id`, animeNow(), animeNow()).Scan(&mid); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`INSERT INTO userdata(movie_id,position_ticks,play_count) VALUES(?,123,2)`, mid); err != nil {

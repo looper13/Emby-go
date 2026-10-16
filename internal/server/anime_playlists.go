@@ -121,6 +121,9 @@ func (a *App) animeNextUp(c *gin.Context) {
 	}
 	start, _ := strconv.Atoi(c.Query("StartIndex"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "100"))
+	if c.Query("ParentId") == "" && c.Query("SeriesId") == "" {
+		out = append(out, a.televisionNextUpCandidates(c, 0, "")...)
+	}
 	if start < 0 {
 		start = 0
 	}

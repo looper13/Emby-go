@@ -122,6 +122,11 @@ type FileInfoMeta struct {
 // 空 <lockdata>、空 <outline> 会被其它工具当成「显式写了空值」，也让文件难以人工核对。
 // 刮削存量文件走的是 internal/nfo/update.go 的标签级更新器，不受这里影响。
 type MovieMeta struct {
+	Root          string     `xml:"-"`
+	ShowTitle     string     `xml:"showtitle,omitempty"`
+	Season        *int       `xml:"season,omitempty"`
+	Episode       *int       `xml:"episode,omitempty"`
+	Aired         string     `xml:"aired,omitempty"`
 	Number        string     `xml:"num,omitempty"`
 	Title         string     `xml:"title,omitempty"`
 	OriginalTitle string     `xml:"originaltitle,omitempty"`
@@ -273,10 +278,14 @@ func read(path string, stats *ReadStats) (MovieMeta, error) {
 	return m, nil
 }
 func Save(path string, m MovieMeta) error {
+	root := m.Root
+	if root == "" {
+		root = "movie"
+	}
 	b, err := xml.MarshalIndent(struct {
-		XMLName xml.Name `xml:"movie"`
+		XMLName xml.Name
 		MovieMeta
-	}{MovieMeta: m}, "", "  ")
+	}{XMLName: xml.Name{Local: root}, MovieMeta: m}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -320,6 +329,9 @@ func SaveFileInfo(path string, meta FileInfoMeta, details *StreamDetails) error 
 		}
 	}
 	index := strings.LastIndex(text, "</movie>")
+	if index < 0 {
+		index = strings.LastIndex(text, "</episodedetails>")
+	}
 	if index < 0 {
 		return errors.New("nfo: 未找到 </movie>，无法写入流信息")
 	}

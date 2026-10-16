@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { isRecord, parseLibraries, type LibraryDto } from './contracts';
+import { isRecord, parseLibraries, type LibraryDto, type LibraryContentType } from './contracts';
 
 export interface ApiKeyDto { key: string; name: string; created_at: string }
 export interface TaskDto { id: number; type: string; status: string; started_at: string; ended_at?: string; error?: string }
@@ -53,7 +53,7 @@ const read = (path: string, signal?: AbortSignal) => apiClient.request(`/api/adm
 const write = (path: string, method: string, json?: unknown) => apiClient.request(`/api/admin/${path}`, { auth: 'required', method, json });
 export const adminApi = {
   libraries: async (signal?: AbortSignal) => parseLibraries(await read('libraries', signal)),
-  async createLibrary(payload: { Name: string; Path: string }): Promise<LibraryDto> {
+  async createLibrary(payload: { Name: string; Path: string; Type?: LibraryContentType }): Promise<LibraryDto> {
     const result = await write('libraries', 'POST', payload);
     return parseLibraries({ items: [result], total: 1 }).items![0]!;
   },

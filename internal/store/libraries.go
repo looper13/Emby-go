@@ -10,6 +10,22 @@ const SourceDirectory = "nfo_directory"
 const SourceAnime = "anime_catalog"
 const AnimeSystemKey = "builtin:anime"
 
+const (
+	LibraryMovies  = "movies"
+	LibraryTVShows = "tvshows"
+	LibraryMixed   = "mixed"
+)
+
+func (l Library) CollectionType() string {
+	if l.SourceType == SourceAnime || l.Type == LibraryMixed {
+		return ""
+	}
+	if l.Type == "" {
+		return LibraryMovies
+	}
+	return l.Type
+}
+
 var ErrConflict = errors.New("数据已被修改，请刷新后重试")
 var ErrLibraryCapability = errors.New("该媒体库不支持目录操作")
 var ErrSystemLibrary = errors.New("系统动漫库不能删除，请在设置中关闭")
