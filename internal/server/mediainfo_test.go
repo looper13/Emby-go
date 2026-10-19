@@ -188,7 +188,7 @@ func TestMediaInfoReuse(t *testing.T) {
 		t.Errorf("回填访问了媒体源 %d 次（应为 0：本地原始数据足够）", got-afterFirst)
 	}
 	backfilled, _ := os.ReadFile(nfoPath)
-	for _, want := range []string{"<width>320</width>", "<size>9260</size>", "<probeversion>1</probeversion>", "<customtag>keep</customtag>"} {
+	for _, want := range []string{"<width>320</width>", "<size>9260</size>", "<probeversion>" + strconv.Itoa(probeVersion) + "</probeversion>", "<customtag>keep</customtag>"} {
 		if !strings.Contains(string(backfilled), want) {
 			t.Errorf("回填后的 NFO 缺少 %q:\n%s", want, backfilled)
 		}

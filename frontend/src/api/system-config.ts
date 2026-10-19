@@ -7,6 +7,7 @@ export interface InstanceConfig {
   db_path: string; actors_dir: string;
   redis_addr: string; redis_db: number; redis_password_configured: boolean;
   ffprobe_path: string; probe_timeout_seconds: number; probe_concurrency: number;
+  ffmpeg_enabled: boolean; ffmpeg_path: string; playback_concurrency: number; playback_cache_mb: number;
   server_domains: { name: string; url: string }[];
 }
 export type ConfigPatch = Partial<Omit<InstanceConfig, 'redis_password_configured'>> & {
@@ -21,6 +22,8 @@ export const configLabels: Record<string, string> = {
   redis_addr: 'Redis 地址', redis_db: 'Redis 数据库', redis_password: 'Redis 密码',
   disable_library_monitor: '媒体库监控开关', library_monitor_mode: '监控模式', ffprobe_path: 'ffprobe 路径',
   probe_timeout_seconds: '探测超时', probe_concurrency: '探测并发', server_domains: '备用域名',
+  ffmpeg_enabled: 'FFmpeg 播放处理', ffmpeg_path: 'FFmpeg 路径', playback_concurrency: '播放处理并发',
+  playback_cache_mb: '播放缓存上限',
 };
 export const restartKeys = ['port', 'debug', 'db_path', 'actors_dir', 'redis_addr', 'redis_db', 'redis_password'];
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.map(string) : invalid();
@@ -34,6 +37,9 @@ function parseConfig(value: unknown): InstanceConfig {
     db_path: string(v.db_path), actors_dir: string(v.actors_dir), redis_addr: string(v.redis_addr), redis_db: count(v.redis_db),
     redis_password_configured: boolean(v.redis_password_configured), ffprobe_path: string(v.ffprobe_path),
     probe_timeout_seconds: count(v.probe_timeout_seconds), probe_concurrency: count(v.probe_concurrency),
+    ffmpeg_enabled: v.ffmpeg_enabled == null ? false : boolean(v.ffmpeg_enabled), ffmpeg_path: v.ffmpeg_path == null ? '' : string(v.ffmpeg_path),
+    playback_concurrency: v.playback_concurrency == null ? 2 : count(v.playback_concurrency),
+    playback_cache_mb: v.playback_cache_mb == null ? 2048 : count(v.playback_cache_mb),
     server_domains: Array.isArray(v.server_domains) ? v.server_domains.map(item => {
       const d = record(item); return { name: string(d.name), url: string(d.url) };
     }) : invalid(),

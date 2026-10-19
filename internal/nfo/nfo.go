@@ -36,6 +36,7 @@ type UniqueID struct {
 // Profile/Level/PixelFormat/BitDepth/RefFrames 等在 Kodi 之外的实现里用于还原
 // Emby MediaStream 的技术参数，缺失时留空/为零即可。
 type VideoStream struct {
+	Index           *int    `xml:"streamindex,omitempty"`
 	Codec           string  `xml:"codec"`
 	CodecTag        string  `xml:"micodec"`
 	Profile         string  `xml:"profile"`
@@ -62,6 +63,8 @@ type VideoStream struct {
 
 // AudioStream 对应 <audio> 音轨信息。
 type AudioStream struct {
+	Index         *int   `xml:"streamindex,omitempty"`
+	Title         string `xml:"title"`
 	Codec         string `xml:"codec"`
 	CodecTag      string `xml:"micodec"`
 	Profile       string `xml:"profile"`
@@ -76,6 +79,7 @@ type AudioStream struct {
 
 // SubtitleStream 对应 <subtitle> 字幕轨。
 type SubtitleStream struct {
+	Index           *int   `xml:"streamindex,omitempty"`
 	Codec           string `xml:"codec"`
 	CodecTag        string `xml:"micodec"`
 	Language        string `xml:"language"`
@@ -89,7 +93,43 @@ type SubtitleStream struct {
 type StreamDetails struct {
 	Video     *VideoStream     `xml:"video,omitempty"`
 	Audio     *AudioStream     `xml:"audio,omitempty"`
+	Audios    []AudioStream    `xml:"-"`
 	Subtitles []SubtitleStream `xml:"subtitle,omitempty"`
+}
+
+// AllAudio also accepts older callers that construct just Audio.
+func (s StreamDetails) AllAudio() []AudioStream {
+	if len(s.Audios) > 0 {
+		return s.Audios
+	}
+	if s.Audio != nil {
+		return []AudioStream{*s.Audio}
+	}
+	return nil
+}
+
+func (s *StreamDetails) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var wire struct {
+		Video     *VideoStream     `xml:"video"`
+		Audios    []AudioStream    `xml:"audio"`
+		Subtitles []SubtitleStream `xml:"subtitle"`
+	}
+	if err := d.DecodeElement(&wire, &start); err != nil {
+		return err
+	}
+	s.Video, s.Audios, s.Subtitles, s.Audio = wire.Video, wire.Audios, wire.Subtitles, nil
+	if len(s.Audios) > 0 {
+		s.Audio = &s.Audios[0]
+	}
+	return nil
+}
+
+func (s StreamDetails) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	return e.EncodeElement(struct {
+		Video     *VideoStream     `xml:"video,omitempty"`
+		Audios    []AudioStream    `xml:"audio,omitempty"`
+		Subtitles []SubtitleStream `xml:"subtitle,omitempty"`
+	}{s.Video, s.AllAudio(), s.Subtitles}, start)
 }
 
 type FileInfo struct {
@@ -349,6 +389,9 @@ func renderFileInfo(meta FileInfoMeta, details *StreamDetails) string {
 	if video := details.Video; video != nil {
 		builder.WriteString("      <video>\n")
 		writeValue(&builder, 8, "codec", video.Codec)
+		if video.Index != nil {
+			writeValue(&builder, 8, "streamindex", strconv.Itoa(*video.Index))
+		}
 		writeValue(&builder, 8, "micodec", video.CodecTag)
 		writeValue(&builder, 8, "profile", video.Profile)
 		writeNumber(&builder, 8, "level", int64(video.Level))
@@ -373,8 +416,12 @@ func renderFileInfo(meta FileInfoMeta, details *StreamDetails) string {
 		writeNumber(&builder, 8, "durationinseconds", video.DurationSeconds)
 		builder.WriteString("      </video>\n")
 	}
-	if audio := details.Audio; audio != nil {
+	for _, audio := range details.AllAudio() {
 		builder.WriteString("      <audio>\n")
+		if audio.Index != nil {
+			writeValue(&builder, 8, "streamindex", strconv.Itoa(*audio.Index))
+		}
+		writeValue(&builder, 8, "title", audio.Title)
 		writeValue(&builder, 8, "codec", audio.Codec)
 		writeValue(&builder, 8, "micodec", audio.CodecTag)
 		writeValue(&builder, 8, "profile", audio.Profile)
@@ -389,6 +436,9 @@ func renderFileInfo(meta FileInfoMeta, details *StreamDetails) string {
 	}
 	for _, subtitle := range details.Subtitles {
 		builder.WriteString("      <subtitle>\n")
+		if subtitle.Index != nil {
+			writeValue(&builder, 8, "streamindex", strconv.Itoa(*subtitle.Index))
+		}
 		writeValue(&builder, 8, "codec", subtitle.Codec)
 		writeValue(&builder, 8, "micodec", subtitle.CodecTag)
 		writeValue(&builder, 8, "language", subtitle.Language)

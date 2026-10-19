@@ -26,6 +26,7 @@ import (
 	"emby-go/internal/metatube"
 	"emby-go/internal/scheduler"
 	"emby-go/internal/store"
+	"emby-go/internal/subtitle"
 )
 
 type App struct {
@@ -108,10 +109,18 @@ type App struct {
 
 	// 刮削任务状态。scratchCtx 挂在 rootCtx 之下，与探测任务同样的理由：
 	// 任务在 goroutine 里跑，不能用请求 context（handler 返回即取消）。
-	scrapeTaskMu sync.RWMutex
-	scrapeStatus scrapeStatus
-	scrapeCtx    context.Context
-	scrapeCancel context.CancelFunc
+	scrapeTaskMu       sync.RWMutex
+	scrapeStatus       scrapeStatus
+	scrapeCtx          context.Context
+	scrapeCancel       context.CancelFunc
+	mediaMu            sync.Mutex
+	mediaProcesses     int
+	mediaSessions      map[string]*audioSession
+	mediaWG            sync.WaitGroup
+	mediaSessionsWG    sync.WaitGroup
+	subtitleSigningKey [32]byte
+	subtitleBytes      *cache.Memory
+	discoverSubtitles  func(string) []subtitle.File
 }
 
 // scanStatus 管理端可轮询的扫描进度快照。
@@ -186,6 +195,10 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
 		imgMeta: cache.NewMemory(imageMetaCacheSize), imgThumb: cache.NewMemory(imageThumbCacheSize),
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
+	}
+	if _, err := rand.Read(a.subtitleSigningKey[:]); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("生成字幕签名密钥失败: %w", err)
 	}
 	a.rootCtx, a.rootCancel = context.WithCancel(context.Background())
 	ready := false
@@ -289,6 +302,10 @@ func (a *App) checkScrapeBackend() {
 // 否则一次大库扫描会让停机一直卡到它自然结束。
 func (a *App) Close() {
 	a.rootCancel()
+	a.mediaMu.Lock()
+	a.mediaMu.Unlock()
+	a.mediaWG.Wait()
+	a.mediaSessionsWG.Wait()
 	a.anime.mu.Lock()
 	if a.anime.job != nil && a.anime.job.cancel != nil {
 		a.anime.job.cancel()
@@ -468,6 +485,15 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Users/:uid/Items/:id/PlaybackInfo", true, a.playback},
 		{"POST", "/Users/:uid/Items/:id/PlaybackInfo", true, a.playback},
 		{"GET", "/Videos/:id/AdditionalParts", true, a.additionalParts},
+		// The handler accepts account authentication or a scoped delivery signature.
+		{"GET", "/Videos/:id/:source/Subtitles/:index/Stream.:format", false, a.subtitleStream},
+		{"HEAD", "/Videos/:id/:source/Subtitles/:index/Stream.:format", false, a.subtitleStream},
+		{"GET", "/Videos/:id/:source/Subtitles/:index/:ticks/Stream.:format", false, a.subtitleStream},
+		{"HEAD", "/Videos/:id/:source/Subtitles/:index/:ticks/Stream.:format", false, a.subtitleStream},
+		{"POST", "/Videos/:id/Playback", true, a.startAudioPlayback},
+		{"GET", "/Videos/:id/master.m3u8", true, a.audioMaster},
+		{"DELETE", "/Videos/:id/Playback/:session", true, a.stopAudioPlayback},
+		{"PATCH", "/Videos/:id/Playback/:session", true, a.touchAudioPlayback},
 		{"GET", "/Episode/:id/IntroSkipperSegments", true, a.emptyList},
 		{"GET", "/MediaSegments/:id", true, a.emptyList},
 		{"POST", "/Sessions/Playing", true, a.playing},
@@ -513,6 +539,9 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 	}
 	registerStreamRoutes(g, a.stream)
 	registerProxyRoutes(g, a.proxyStream)
+	for _, base := range []string{"/Videos/:id/hls/:session/:file", "/videos/:id/hls/:session/:file"} {
+		g.GET(base, noStore, a.hlsResource)
+	}
 }
 
 // registerProxyRoutes 网页播放器代理端点（透传 Range），同样注册大小写与可选扩展名。

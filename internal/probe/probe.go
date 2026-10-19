@@ -25,13 +25,13 @@ type Info struct {
 	FormatName      string
 	Video           *VideoInfo
 	Audio           *AudioInfo
-	// Subtitles 全部字幕轨（可多条：不同语言/内封外挂），不像音视频轨那样只取首条——
-	// 字幕轨的多寡直接决定客户端能否选到想要的语言。
+	Audios          []AudioInfo
+	// Subtitles 保留全部容器字幕轨；Audios 同样保留全部音轨。
 	Subtitles []SubtitleInfo
 }
 
-// SubtitleInfo 一条字幕轨。Embedded 区分内封与外挂：
-// 外挂字幕的文件不由本服务转发，客户端只能看到「有这条轨」而取不到内容。
+// SubtitleInfo 一条容器字幕轨。ffprobe 不发现同目录外挂文件；
+// 本地外挂由详情/播放链路独立发现并交付。
 type SubtitleInfo struct {
 	Index           int
 	Codec           string
@@ -45,6 +45,7 @@ type SubtitleInfo struct {
 }
 
 type VideoInfo struct {
+	Index           int
 	Codec           string
 	CodecTag        string
 	Profile         string
@@ -70,6 +71,8 @@ type VideoInfo struct {
 }
 
 type AudioInfo struct {
+	Index         int
+	Title         string
 	Codec         string
 	CodecTag      string
 	Profile       string
@@ -264,10 +267,11 @@ func Parse(raw []byte) (Info, error) {
 			}
 			info.Video = videoInfo(stream)
 		case "audio":
-			if info.Audio != nil {
-				continue
+			audio := audioInfo(stream)
+			info.Audios = append(info.Audios, *audio)
+			if info.Audio == nil {
+				info.Audio = audio
 			}
-			info.Audio = audioInfo(stream)
 		case "subtitle":
 			info.Subtitles = append(info.Subtitles, subtitleInfo(stream))
 		}
@@ -279,7 +283,7 @@ func Parse(raw []byte) (Info, error) {
 }
 
 // subtitleInfo 归整一条字幕轨。探测目标是单个文件，ffprobe 只会报出容器内的字幕轨，
-// 故 Embedded 恒为 true（外挂字幕不在本服务的转发范围内）。
+// 故 Embedded 恒为 true；同目录外挂文件不属于此探测结果。
 func subtitleInfo(stream ffprobeStream) SubtitleInfo {
 	return SubtitleInfo{
 		Index:           stream.Index,
@@ -296,6 +300,7 @@ func subtitleInfo(stream ffprobeStream) SubtitleInfo {
 
 func videoInfo(stream ffprobeStream) *VideoInfo {
 	video := &VideoInfo{
+		Index:          stream.Index,
 		Codec:          stream.CodecName,
 		CodecTag:       stream.CodecTagStr,
 		Profile:        stream.Profile,
@@ -326,6 +331,8 @@ func videoInfo(stream ffprobeStream) *VideoInfo {
 
 func audioInfo(stream ffprobeStream) *AudioInfo {
 	return &AudioInfo{
+		Index:         stream.Index,
+		Title:         stream.Tags["title"],
 		Codec:         stream.CodecName,
 		CodecTag:      stream.CodecTagStr,
 		Profile:       stream.Profile,

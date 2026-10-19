@@ -36,7 +36,7 @@ const maxProbeFailures = 20
 //
 // 提升此版本的时机：探测新增了会改变 NFO 内容的字段时——
 // 旧条目会在下一次全库探测中自动被重探，无需手工清理。
-const probeVersion = 1
+const probeVersion = 2
 
 const (
 	// maxProbeFailureLogs 完整打印失败详情的条数上限——失败可能多达数千条，
@@ -665,6 +665,7 @@ func streamDetailsFromProbe(info probe.Info) *nfo.StreamDetails {
 			minutes = int((info.DurationSeconds + 30) / 60) // 四舍五入到分钟
 		}
 		details.Video = &nfo.VideoStream{
+			Index: &video.Index,
 			Codec: video.Codec, CodecTag: video.CodecTag,
 			Profile: video.Profile, Level: video.Level,
 			PixelFormat: video.PixelFormat, BitDepth: video.BitDepth, RefFrames: video.RefFrames,
@@ -677,16 +678,25 @@ func streamDetailsFromProbe(info probe.Info) *nfo.StreamDetails {
 			Default: boolText(video.Default), Forced: boolText(video.Forced),
 		}
 	}
-	if audio := info.Audio; audio != nil {
-		details.Audio = &nfo.AudioStream{
+	audios := info.Audios
+	if len(audios) == 0 && info.Audio != nil {
+		audios = []probe.AudioInfo{*info.Audio}
+	}
+	for _, audio := range audios {
+		details.Audios = append(details.Audios, nfo.AudioStream{
+			Index: &audio.Index, Title: audio.Title,
 			Codec: audio.Codec, CodecTag: audio.CodecTag, Profile: audio.Profile,
 			ChannelLayout: audio.ChannelLayout, Bitrate: audio.Bitrate,
 			Language: audio.Language, Channels: audio.Channels, SamplingRate: audio.SamplingRate,
 			Default: boolText(audio.Default), Forced: boolText(audio.Forced),
-		}
+		})
+	}
+	if len(details.Audios) > 0 {
+		details.Audio = &details.Audios[0]
 	}
 	for _, subtitle := range info.Subtitles {
 		details.Subtitles = append(details.Subtitles, nfo.SubtitleStream{
+			Index: &subtitle.Index,
 			Codec: subtitle.Codec, CodecTag: subtitle.CodecTag,
 			Language: subtitle.Language, Title: subtitle.Title,
 			Default: boolText(subtitle.Default), Forced: boolText(subtitle.Forced),

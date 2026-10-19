@@ -55,6 +55,13 @@ func (a *App) adminItemDetail(c *gin.Context) {
 	files := make([]detailFile, 0, len(paths))
 	for i, path := range paths {
 		streams, probed := a.detailStreams(movie, path, i == 0)
+		a.enableDetailTracks(c, movie, path)
+		id := strconv.FormatInt(movie.ID, 10)
+		if i > 0 {
+			id = "part-" + id + "-" + strconv.Itoa(i+1)
+		}
+		source := a.detailSource(gin.H{"Id": "mediasource_" + id, "MediaStreams": streams}, movie, id, path, c)
+		streams, _ = source["MediaStreams"].([]gin.H)
 		file := detailFile{
 			Index: i + 1, Path: path, Name: filepath.Base(path),
 			Role: "part", Streams: streams, Probed: probed,
@@ -78,6 +85,15 @@ func (a *App) adminItemDetail(c *gin.Context) {
 			}
 		}
 		files = append(files, file)
+		if value, exists := c.Get("detailTracks:" + path); exists {
+			snapshot := value.(trackSnapshot)
+			if snapshot.probed {
+				files[len(files)-1].Probed = true
+			}
+			if snapshot.size > 0 {
+				files[len(files)-1].Size = snapshot.size
+			}
+		}
 	}
 
 	actors := make([]detailActor, 0, 8)

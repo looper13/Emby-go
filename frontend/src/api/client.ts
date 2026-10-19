@@ -15,6 +15,7 @@ export interface AuthHandlers {
 }
 
 export interface RequestOptions extends Omit<RequestInit, 'headers'> {
+	responseType?: 'json' | 'text';
   auth: 'required' | 'none';
   headers?: HeadersInit;
   json?: unknown;
@@ -62,7 +63,7 @@ export function createApiClient(fetcher: typeof fetch = (...args) => globalThis.
     if (!path.startsWith('/') || path.startsWith('//') || /[\\\u0000-\u0020]/u.test(path)) {
       throw new TypeError('API requests require a same-origin absolute path');
     }
-    const { auth, json, timeoutMs, readOnly, headers: inputHeaders, ...init } = options;
+    const { auth, json, timeoutMs, readOnly, responseType, headers: inputHeaders, ...init } = options;
     if (json !== undefined && init.body != null) {
       throw new TypeError('Use either json or body, not both');
     }
@@ -109,6 +110,7 @@ export function createApiClient(fetcher: typeof fetch = (...args) => globalThis.
 
       const text = await response.text();
       signal?.throwIfAborted();
+	  if (response.ok && responseType === 'text') return text;
       let payload: unknown = null;
       if (text) {
         try { payload = JSON.parse(text); }

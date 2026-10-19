@@ -34,9 +34,13 @@ type Config struct {
 	ServerDomains []ServerDomain `yaml:"server_domains"`
 
 	// 媒体信息探测（独立于扫库）：调用系统 ffprobe 读取真实技术参数并写回 NFO。
-	FFProbePath      string `yaml:"ffprobe_path"`          // ffprobe 可执行文件路径；留空则从 PATH 查找
-	ProbeTimeoutSec  int    `yaml:"probe_timeout_seconds"` // 单条探测超时（秒），默认 90
-	ProbeConcurrency int    `yaml:"probe_concurrency"`     // 并发探测数，默认 2
+	FFProbePath         string `yaml:"ffprobe_path"`          // ffprobe 可执行文件路径；留空则从 PATH 查找
+	ProbeTimeoutSec     int    `yaml:"probe_timeout_seconds"` // 单条探测超时（秒），默认 90
+	ProbeConcurrency    int    `yaml:"probe_concurrency"`     // 并发探测数，默认 2
+	FFmpegEnabled       bool   `yaml:"ffmpeg_enabled"`
+	FFmpegPath          string `yaml:"ffmpeg_path"`
+	PlaybackConcurrency int    `yaml:"playback_concurrency"` // 默认 2，上限 4
+	PlaybackCacheMB     int    `yaml:"playback_cache_mb"`    // 每个播放会话的临时磁盘上限，默认 2048 MiB
 
 	path string // 配置文件来源路径（非 yaml 字段），供写回使用
 }

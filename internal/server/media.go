@@ -429,9 +429,70 @@ func (a *App) playback(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "invalid or unavailable media source"})
 		return
 	}
+	a.enableDetailTracks(c, movie, sourcePath)
+	source := a.mediaSourceWithURL(movie, id, sourcePath, raw, c)
+	defaultAudio := source["DefaultAudioStreamIndex"]
+	explicitAudio := false
+	var selection struct {
+		AudioStreamIndex    *int
+		SubtitleStreamIndex *int
+	}
+	if c.Request.Method == http.MethodPost && c.Request.ContentLength != 0 && c.Request.Body != nil {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		if err := json.NewDecoder(c.Request.Body).Decode(&selection); err != nil && err != io.EOF {
+			c.JSON(400, gin.H{"error": "无效的播放请求"})
+			return
+		}
+	}
+	for key, selected := range map[string]*int{"AudioStreamIndex": selection.AudioStreamIndex, "SubtitleStreamIndex": selection.SubtitleStreamIndex} {
+		if value, exists, err := streamSelection(c, key); exists {
+			if err != nil {
+				c.Status(400)
+				return
+			}
+			selected = &value
+		}
+		if selected == nil {
+			continue
+		}
+		if key == "AudioStreamIndex" {
+			explicitAudio = true
+		}
+		kind := "Audio"
+		if key == "SubtitleStreamIndex" {
+			kind = "Subtitle"
+		}
+		valid := kind == "Subtitle" && *selected == -1
+		for _, stream := range source["MediaStreams"].([]gin.H) {
+			if stream["Type"] == kind && stream["Index"] == *selected {
+				valid = true
+			}
+		}
+		if !valid {
+			c.JSON(400, gin.H{"error": "所选轨道不存在，请刷新播放信息"})
+			return
+		}
+		source["Default"+key] = *selected
+	}
+	playSessionID := randomSessionID()
+	if data, err := a.db.Data(movie.ID); err == nil && !data.Played {
+		source["ResumePositionTicks"] = data.PositionTicks
+	}
+	if a.configSnapshot().FFmpegEnabled && explicitAudio && source["DefaultAudioStreamIndex"] != defaultAudio {
+		for _, stream := range source["MediaStreams"].([]gin.H) {
+			if stream["Type"] == "Audio" && stream["Index"] == source["DefaultAudioStreamIndex"] && stream["ContainerIndexKnown"] == true {
+				source["SupportsTranscoding"] = true
+				source["TranscodingUrl"] = "/Videos/" + id + "/master.m3u8?AudioStreamIndex=" + strconv.Itoa(stream["Index"].(int)) + "&PlaySessionId=" + playSessionID
+				source["TranscodingContainer"], source["TranscodingSubProtocol"] = "mp4", "hls"
+				if stream["IsExternal"] == true {
+					source["SupportsDirectPlay"], source["SupportsDirectStream"] = false, false
+				}
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"MediaSources":  []gin.H{a.mediaSourceWithURL(movie, id, sourcePath, raw, c)},
-		"PlaySessionId": randomSessionID(),
+		"MediaSources":  []gin.H{source},
+		"PlaySessionId": playSessionID,
 	})
 }
 
@@ -537,12 +598,16 @@ func (a *App) mediaSourceWithURL(m store.Movie, id, sourcePath, raw string, c *g
 	for _, item := range streams {
 		if item["Type"] == "Audio" {
 			if index, ok := item["Index"].(int); ok {
-				source["DefaultAudioStreamIndex"] = index
-				break
+				if source["DefaultAudioStreamIndex"] == -1 || item["IsDefault"] == true {
+					source["DefaultAudioStreamIndex"] = index
+				}
+				if item["IsDefault"] == true {
+					break
+				}
 			}
 		}
 	}
-	return source
+	return a.detailSource(source, m, id, sourcePath, c)
 }
 
 // itemFileName 返回条目对应的文件名（含扩展名），即 .strm 文件名。
@@ -646,9 +711,16 @@ func (a *App) nfoEntry(m store.Movie) nfoCacheEntry {
 // 独立成函数：主文件走 NFO、分段走各自的 mediainfo.json，两条来源共用同一套映射规则。
 func buildStreams(details *nfo.StreamDetails) []gin.H {
 	out := make([]gin.H, 0, 2)
-	index := 0
+	// Public indexes are array offsets. FFmpeg uses the separate container index.
+	containerIndex := func(stream gin.H, value *int) {
+		stream["ContainerIndexKnown"] = value != nil && *value >= 0
+		if value != nil && *value >= 0 {
+			stream["ContainerIndex"] = *value
+		}
+	}
 	if video := details.Video; video != nil {
-		stream := gin.H{"Type": "Video", "Index": index, "IsDefault": isDefaultTrue(video.Default), "IsForced": isExplicitTrue(video.Forced)}
+		stream := gin.H{"Type": "Video", "Index": len(out), "IsDefault": isDefaultTrue(video.Default), "IsForced": isExplicitTrue(video.Forced)}
+		containerIndex(stream, video.Index)
 		setIfNonEmpty(stream, "Codec", video.Codec)
 		setIfNonEmpty(stream, "CodecTag", video.CodecTag)
 		setIfNonEmpty(stream, "Profile", video.Profile)
@@ -708,16 +780,16 @@ func buildStreams(details *nfo.StreamDetails) []gin.H {
 			stream["IsInterlaced"] = strings.EqualFold(video.ScanType, "interlaced")
 		}
 		out = append(out, stream)
-		index++
 	}
-	if audio := details.Audio; audio != nil {
-		stream := gin.H{"Type": "Audio", "Index": index, "IsDefault": isDefaultTrue(audio.Default), "IsForced": isExplicitTrue(audio.Forced)}
+	for _, audio := range details.AllAudio() {
+		stream := gin.H{"Type": "Audio", "Index": len(out), "IsDefault": isExplicitTrue(audio.Default), "IsForced": isExplicitTrue(audio.Forced)}
+		containerIndex(stream, audio.Index)
 		setIfNonEmpty(stream, "Codec", audio.Codec)
 		setIfNonEmpty(stream, "CodecTag", audio.CodecTag)
 		setIfNonEmpty(stream, "Profile", audio.Profile)
 		setIfNonEmpty(stream, "Language", audio.Language)
 		setIfNonEmpty(stream, "ChannelLayout", audio.ChannelLayout)
-		setIfNonEmpty(stream, "DisplayTitle", audioDisplayTitle(audio))
+		setIfNonEmpty(stream, "DisplayTitle", firstNonEmpty(audio.Title, audioDisplayTitle(&audio)))
 		setIfNonEmpty(stream, "DisplayLanguage", displayLanguage(audio.Language))
 		// 真实 Emby 对音轨同样返回这些字段（非仅视频轨），客户端会统一读取。
 		stream["IsExternal"] = false
@@ -740,15 +812,14 @@ func buildStreams(details *nfo.StreamDetails) []gin.H {
 			stream["SampleRate"] = audio.SamplingRate
 		}
 		out = append(out, stream)
-		index++
 	}
 	for _, subtitle := range details.Subtitles {
 		stream := gin.H{
-			"Type": "Subtitle", "Index": index,
+			"Type": "Subtitle", "Index": len(out),
 			"IsDefault": isExplicitTrue(subtitle.Default),
 			// 强迫字幕必须显式标注：缺省当「非强迫」，否则客户端会把普通字幕当强迫字幕自动烧进画面。
 			"IsForced": isExplicitTrue(subtitle.Forced),
-			// 外挂字幕的文件不由本服务转发，如实标记，避免客户端去取不存在的地址。
+			// NFO 只描述轨道；可用外挂文件及交付地址由详情按需发现后补齐。
 			"IsExternal":             isExplicitTrue(subtitle.External),
 			"IsHearingImpaired":      isExplicitTrue(subtitle.HearingImpaired),
 			"IsTextSubtitleStream":   isTextSubtitleCodec(subtitle.Codec),
@@ -756,13 +827,13 @@ func buildStreams(details *nfo.StreamDetails) []gin.H {
 			"Protocol":               "Http",
 			"AttachmentSize":         0,
 		}
+		containerIndex(stream, subtitle.Index)
 		setIfNonEmpty(stream, "Codec", subtitle.Codec)
 		setIfNonEmpty(stream, "CodecTag", subtitle.CodecTag)
 		setIfNonEmpty(stream, "Language", subtitle.Language)
 		setIfNonEmpty(stream, "DisplayTitle", firstNonEmpty(subtitle.Title, subtitle.Language))
 		setIfNonEmpty(stream, "DisplayLanguage", displayLanguage(subtitle.Language))
 		out = append(out, stream)
-		index++
 	}
 	return out
 }
@@ -834,7 +905,7 @@ func audioDisplayTitle(audio *nfo.AudioStream) string {
 		return ""
 	}
 	title := strings.Join(parts, " ")
-	if isDefaultTrue(audio.Default) {
+	if isExplicitTrue(audio.Default) {
 		title += " (默认)"
 	}
 	return title
@@ -954,6 +1025,10 @@ func displayLanguage(code string) string {
 		return "English"
 	case "chi", "zho":
 		return "Chinese"
+	case "zh-cn", "zh-sg", "zh-hans", "chs":
+		return "简体中文"
+	case "zh-tw", "zh-hk", "zh-hant", "cht":
+		return "繁體中文"
 	case "kor":
 		return "Korean"
 	}

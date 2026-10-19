@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
 	"emby-go/internal/store"
+	"emby-go/internal/subtitle"
 )
 
 func TestAnimeMixedLibraryPlaybackContract(t *testing.T) {
@@ -27,6 +29,8 @@ func TestAnimeMixedLibraryPlaybackContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
+	var discoveries atomic.Int32
+	a.discoverSubtitles = func(path string) []subtitle.File { discoveries.Add(1); return subtitle.Discover(path) }
 	if err = a.db.SaveAccessToken("anime-test"); err != nil {
 		t.Fatal(err)
 	}
@@ -87,11 +91,15 @@ func TestAnimeMixedLibraryPlaybackContract(t *testing.T) {
 	}
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
+		before := discoveries.Load()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("X-Emby-Token", "anime-test")
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		a.Handler().ServeHTTP(w, req)
+		if (strings.HasSuffix(strings.ToLower(req.URL.Path), "/items") || strings.Contains(strings.ToLower(req.URL.Path), "/shows/")) && discoveries.Load() != before {
+			t.Fatalf("anime list discovered subtitles: %s", path)
+		}
 		if w.Code != status {
 			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
 		}

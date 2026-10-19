@@ -89,12 +89,16 @@ describe('player lifetime', () => {
     const pinia = createPinia(); const wrapper = mount(PlayerDialog, { props: { options: { title: 'late', url: '/late', type: 'mp4' } }, global: { plugins: [pinia] } });
     const factory = vi.fn(); expect(document.body.classList.contains('player-open')).toBe(true); wrapper.unmount(); disposePinia(pinia); incoming.resolve(factory); await flushPromises(); expect(factory).not.toHaveBeenCalled(); expect(document.body.classList.contains('player-open')).toBe(false);
   });
-  it('falls back once, mutes asynchronous playback and ignores callbacks after destroy', async () => {
+  it('falls back once, preserves playback state and ignores callbacks after destroy', async () => {
     let callback!: () => void; const report = vi.fn(); const play = vi.fn().mockRejectedValue(new Error('gesture'));
-    const player: PlayerHandle = { url: '/direct', muted: false, on: (_, fn) => { callback = fn; }, play, destroy: vi.fn(), video: { error: { code: 2 } } as HTMLVideoElement };
+    const video = document.createElement('video'); video.currentTime = 42; video.volume = 0.4; video.playbackRate = 1.5;
+    Object.defineProperty(video, 'paused', { value: false }); Object.defineProperty(video, 'error', { value: { code: 2 } });
+    const player: PlayerHandle = { url: '/direct', muted: false, on: (_, fn) => { callback = fn; }, play, destroy: vi.fn(), video };
     const session = managePlayer(document.createElement('div'), { title: 'x', url: '/direct', type: 'mp4', proxyURL: '/proxy' }, () => player, report);
-    callback(); await flushPromises(); expect(player.url).toBe('/proxy'); expect(player.muted).toBe(true); expect(play).toHaveBeenCalledTimes(1);
-    callback(); callback(); expect(report).toHaveBeenCalledTimes(1); session.destroy(); callback(); expect(report).toHaveBeenCalledTimes(1); expect(play).toHaveBeenCalledTimes(1); expect(player.destroy).toHaveBeenCalledTimes(1);
+    callback(); await flushPromises(); expect(player.url).toBe('/proxy'); expect(player.muted).toBe(false); expect(play).toHaveBeenCalledTimes(1);
+    video.currentTime = 0; video.dispatchEvent(new Event('loadedmetadata')); await flushPromises();
+    expect(video.currentTime).toBe(42); expect(video.volume).toBe(0.4); expect(video.playbackRate).toBe(1.5);
+    callback(); callback(); expect(report).toHaveBeenCalledTimes(1); session.destroy(); callback(); expect(report).toHaveBeenCalledTimes(1); expect(play).toHaveBeenCalledTimes(2); expect(player.destroy).toHaveBeenCalledTimes(1);
   });
   it('reports trailer errors directly and classifies network/decode/format/mixed content', () => {
     for (const [code, word] of [[2, '网络'], [3, '解码'], [4, '格式']] as const) expect(playbackErrorMessage(code, '/x', 'http:')).toContain(word);

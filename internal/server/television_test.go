@@ -11,18 +11,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"emby-go/internal/librarywatch"
 	"emby-go/internal/scanner"
 	"emby-go/internal/store"
+	"emby-go/internal/subtitle"
 	"github.com/gin-gonic/gin"
 )
 
 func TestTelevisionLibraryAPIHierarchyMixedTypesAndPlayback(t *testing.T) {
 	a, server, token := newProbeTestApp(t, t.TempDir())
+	var discoveries atomic.Int32
+	a.discoverSubtitles = func(path string) []subtitle.File { discoveries.Add(1); return subtitle.Discover(path) }
 	call := func(method, path string, body any, want int) any {
 		t.Helper()
+		before := discoveries.Load()
 		data, _ := json.Marshal(body)
 		req, _ := http.NewRequest(method, server.URL+path, strings.NewReader(string(data)))
 		req.Header.Set("X-Emby-Token", token)
@@ -40,6 +45,9 @@ func TestTelevisionLibraryAPIHierarchyMixedTypesAndPlayback(t *testing.T) {
 		}
 		if resp.StatusCode != want {
 			t.Fatalf("%s: %d %v", path, resp.StatusCode, value)
+		}
+		if (strings.HasSuffix(strings.ToLower(req.URL.Path), "/items") || strings.Contains(strings.ToLower(req.URL.Path), "/shows/")) && discoveries.Load() != before {
+			t.Fatalf("television list discovered subtitles: %s", path)
 		}
 		return value
 	}

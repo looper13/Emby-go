@@ -1356,6 +1356,11 @@ func (a *App) item(c *gin.Context) {
 		return
 	}
 	rawID := c.Param("id")
+	// Only a single playable detail enables local track discovery. Folder/list
+	// DTO builders also call embyItemDetail, so they must never enable it.
+	if movie, path, _, ok := a.resolvePlaybackTarget(rawID); ok && movie.IsVisible() {
+		a.enableDetailTracks(c, movie, path)
+	}
 	if strings.HasPrefix(rawID, "tv-") {
 		if item := a.televisionFolder(rawID, c); item != nil {
 			c.JSON(200, item)
@@ -1382,7 +1387,10 @@ func (a *App) item(c *gin.Context) {
 		// 多分段影片的 AdditionalPart（part-<movieID>-<part>）。
 		if movieID, part, ok := parseVirtualPartID(rawID); ok {
 			if m, e := a.db.Movie(movieID); e == nil && m.IsVisible() && part-2 < len(m.AdditionalParts) {
-				c.JSON(http.StatusOK, a.partItem(m, part-2))
+				item := a.partItem(m, part-2)
+				source := a.mediaSourceFor(m, rawID, m.AdditionalParts[part-2], c)
+				item["MediaSources"], item["MediaStreams"] = []gin.H{source}, source["MediaStreams"]
+				c.JSON(http.StatusOK, item)
 				return
 			}
 			c.JSON(404, gin.H{"error": "not found"})
@@ -1430,6 +1438,11 @@ func (a *App) item(c *gin.Context) {
 		}
 	}
 	key := "item:" + a.db.MovieVersion(id) + ":" + strconv.FormatInt(id, 10) + ":" + strconv.FormatUint(epoch, 10)
+	if movie, _, _, ok := a.resolvePlaybackTarget(rawID); ok {
+		if snapshot, exists := c.Get("detailTracks:" + movie.SourcePath); exists {
+			key += ":tracks:" + snapshot.(trackSnapshot).tag
+		}
+	}
 	a.cachedResponse(c, key, time.Minute, func() ([]byte, error) {
 		m, err := a.db.Movie(id)
 		if err != nil {

@@ -200,15 +200,7 @@ func TestContractPlaybackInfo(t *testing.T) {
 	if len(source.MediaStreams) == 0 {
 		t.Fatal("MediaStreams 不能为空（iPlay 需要非空且可播）")
 	}
-	for i, stream := range source.MediaStreams {
-		if stream.StreamType == "" {
-			t.Errorf("第 %d 条流缺 Type（tsukimi 非 Option）", i)
-		}
-		// tsukimi 直接把 Index 当数组下标用，错位会导致取错轨道。
-		if stream.Index != int64(i) {
-			t.Errorf("第 %d 条流 Index=%d，必须等于数组下标", i, stream.Index)
-		}
-	}
+	assertClientStreamIndexes(t, source.MediaStreams)
 	if playback.PlaySessionID == "" {
 		t.Error("PlaySessionId 不能为空（openemby_tv 回传进度时必带）")
 	}
@@ -224,6 +216,19 @@ func TestContractPlaybackInfo(t *testing.T) {
 	// 兼容入口：POST /Items/{id}/PlaybackInfo 同样返回该形状。
 	if resp, raw := embyRaw(t, ts, "POST", "/Items/1/PlaybackInfo", token, `{}`); resp.StatusCode != http.StatusOK {
 		t.Errorf("POST PlaybackInfo: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func assertClientStreamIndexes(t *testing.T, streams []tsukimiMediaStream) {
+	t.Helper()
+	for i, stream := range streams {
+		if stream.StreamType == "" {
+			t.Errorf("第 %d 条流缺 Type（tsukimi 非 Option）", i)
+		}
+		// tsukimi 直接把 Index 当数组下标用，错位会导致取错轨道。
+		if stream.Index != int64(i) {
+			t.Errorf("第 %d 条流 Index=%d，必须等于数组下标", i, stream.Index)
+		}
 	}
 }
 

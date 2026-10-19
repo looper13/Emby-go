@@ -1,4 +1,6 @@
-export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; resumeTicks?: number }
+import type { TrackEngine } from './player-tracks';
+import { bindNativeTracks } from './player-tracks';
+export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; resumeTicks?: number; onTracks?: (engine: TrackEngine) => void; hlsStartPosition?: number }
 export interface PlayerHandle { url: string; muted: boolean; video?: HTMLVideoElement; on: (name: string, callback: () => void) => void; play: () => Promise<unknown>; destroy: () => void }
 export type PlayerFactory = (stage: HTMLElement, options: PlayerOptions) => PlayerHandle;
 export function playbackType(containerOrURL: unknown = '') {
@@ -22,8 +24,16 @@ export function managePlayer(stage: HTMLElement, options: PlayerOptions, factory
       if (!reported) report(playbackErrorMessage(player.video?.error?.code, usedProxy ? options.proxyURL! : options.url));
       reported = true; return;
     }
-    usedProxy = true; player.url = options.proxyURL; player.muted = true;
-    try { void player.play().catch(() => {}); } catch { /* Manual playback remains available. */ }
+    usedProxy = true;
+    const video = player.video;
+    const state = video ? { time: video.currentTime, paused: video.paused, muted: video.muted, volume: video.volume, rate: video.playbackRate } : undefined;
+    if (video && state) video.addEventListener('loadedmetadata', () => {
+      if (!active) return;
+      video.currentTime = state.time; video.muted = state.muted; video.volume = state.volume; video.playbackRate = state.rate;
+      if (state.paused) video.pause(); else void player.play().catch(() => {});
+    }, { once: true });
+    player.url = options.proxyURL;
+    if (!state?.paused) try { void player.play().catch(() => {}); } catch { /* Manual playback remains available. */ }
   });
   return { player, destroy() { if (!active) return; active = false; try { player.destroy(); } catch { /* Dispose the lifetime even if vendor cleanup fails. */ } } };
 }
@@ -31,8 +41,12 @@ export async function loadPlayerFactory(type = 'mp4'): Promise<PlayerFactory> {
   const module = await import('../vendor/artplayer.min.js');
   const hls = playbackType(type) === 'm3u8' ? await import('./player-hls') : undefined;
   const Constructor = (module.default ?? (window as unknown as { Artplayer: unknown }).Artplayer) as new (options: Record<string, unknown>) => PlayerHandle;
-  return (stage, options) => new Constructor({ container: stage, url: options.url, type: options.type, title: options.title,
-    customType: hls ? { m3u8: hls.createHlsPlayback() } : {},
+  return (stage, options) => {
+    const player = new Constructor({ container: stage, url: options.url, type: options.type, title: options.title,
+    customType: hls ? { m3u8: hls.createHlsPlayback(options.onTracks, options.hlsStartPosition) } : {},
     autoplay: true, volume: 1, playbackRate: true, aspectRatio: true, fullscreen: true, fullscreenWeb: true,
     setting: true, hotkey: true, pip: true, theme: '#e0a44b', lang: 'zh-cn' });
+    if (!hls && player.video && options.onTracks) player.on('destroy', bindNativeTracks(player.video, options.onTracks));
+    return player;
+  };
 }

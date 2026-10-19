@@ -82,6 +82,16 @@ function submit() { if (dirty.value && !props.saving && props.state.writable) em
       </section>
 
       <section class="panel">
+        <div class="panel-head"><h3>字幕与音轨</h3><span class="config-tag live">无需重启</span></div>
+        <p class="hint">本地外挂字幕无需 FFmpeg。启用后可提取内封文本字幕，并在网页播放时重封装其他音轨；重封装的视频经过本服务，占用带宽与临时磁盘，视频编码保持原样。</p>
+        <div class="field-grid">
+          <div class="field full"><label class="check"><input id="cfg-ffmpeg-enabled" v-model="draft.ffmpeg_enabled" type="checkbox">启用 FFmpeg 播放处理</label></div>
+          <div class="field full"><label for="cfg-ffmpeg">FFmpeg 路径</label><input id="cfg-ffmpeg" v-model="draft.ffmpeg_path" class="mono" placeholder="留空 = 从系统 PATH 查找" data-private-path></div>
+          <div class="field"><label for="cfg-playback-concurrency">播放处理并发</label><input id="cfg-playback-concurrency" v-model.number="draft.playback_concurrency" type="number" min="1" max="4"><small class="hint">字幕提取与音轨处理共用，默认 2。已有会话不受修改影响。</small></div>
+          <div class="field"><label for="cfg-playback-cache">每个播放会话缓存上限（MiB）</label><input id="cfg-playback-cache" v-model.number="draft.playback_cache_mb" type="number" min="64" max="65536"><small class="hint">默认 2048，达到上限时停止处理。高码率或长影片可调大；关闭播放后清理。</small></div>
+        </div>
+      </section>
+      <section class="panel">
         <div class="panel-head"><h3>Emby 备用域名</h3><span class="config-tag live">即时生效</span></div>
         <p class="hint">向支持线路切换的客户端提供候选入口。</p>
         <div v-for="(domain, index) in draft.server_domains" :key="index" class="config-domain">

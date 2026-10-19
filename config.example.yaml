@@ -69,3 +69,10 @@ ffprobe_path: ""          # ffprobe 可执行文件路径；留空则从 PATH �
 probe_timeout_seconds: 90 # 单条探测超时（秒）：远程直链建连+读取较慢，建议不低于 30
 probe_concurrency: 2      # 并发探测数（上限 8）：过高会拖慢网盘/代理，反而整体变慢
 
+# 可选字幕提取与音轨处理。默认直连；开启后处理流占用本服务带宽和临时磁盘。
+# 本地字幕仅在单条详情 / PlaybackInfo 请求中发现，列表与普通扫库不发现字幕。
+ffmpeg_enabled: false
+ffmpeg_path: ""          # 留空从 PATH 查找
+playback_concurrency: 2   # 字幕提取与播放处理共用并发，范围 1–4
+playback_cache_mb: 2048   # 每会话临时磁盘上限，64–65536 MiB；关闭播放后清理
+

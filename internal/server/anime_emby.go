@@ -50,6 +50,7 @@ func (a *App) animeDTO(raw string, c *gin.Context) gin.H {
 		}
 		item["ParentId"] = externalLibraryID(l.ID)
 		item["MediaSources"] = []gin.H{a.mediaSourceFor(m, raw, m.SourcePath, c)}
+		item["MediaStreams"] = item["MediaSources"].([]gin.H)[0]["MediaStreams"]
 		if kind == "episode" {
 			name := ep.Name
 			if name == "" {

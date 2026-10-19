@@ -39,6 +39,10 @@ type Patch struct {
 	ClearRedisPassword    bool            `json:"clear_redis_password" yaml:"-"`
 	RedisDB               *int            `json:"redis_db" yaml:"redis_db"`
 	FFProbePath           *string         `json:"ffprobe_path" yaml:"ffprobe_path"`
+	FFmpegEnabled         *bool           `json:"ffmpeg_enabled" yaml:"ffmpeg_enabled"`
+	FFmpegPath            *string         `json:"ffmpeg_path" yaml:"ffmpeg_path"`
+	PlaybackConcurrency   *int            `json:"playback_concurrency" yaml:"playback_concurrency"`
+	PlaybackCacheMB       *int            `json:"playback_cache_mb" yaml:"playback_cache_mb"`
 	ProbeTimeoutSec       *int            `json:"probe_timeout_seconds" yaml:"probe_timeout_seconds"`
 	ProbeConcurrency      *int            `json:"probe_concurrency" yaml:"probe_concurrency"`
 	ServerDomains         *[]ServerDomain `json:"server_domains" yaml:"server_domains"`
@@ -199,7 +203,7 @@ func (c Config) validateEdit() error {
 	if strings.TrimSpace(c.DBPath) == "" {
 		return invalid("数据库路径不能为空")
 	}
-	for _, path := range []string{c.DBPath, c.ActorsDir, c.FFProbePath} {
+	for _, path := range []string{c.DBPath, c.ActorsDir, c.FFProbePath, c.FFmpegPath} {
 		if strings.ContainsAny(path, "\x00\r\n") {
 			return invalid("路径不能包含空字符或换行")
 		}
@@ -217,6 +221,12 @@ func (c Config) validateEdit() error {
 	}
 	if c.ProbeConcurrency < 0 || c.ProbeConcurrency > 8 {
 		return invalid("探测并发必须为 1–8（0 使用默认值 2）")
+	}
+	if c.PlaybackConcurrency < 0 || c.PlaybackConcurrency > 4 {
+		return invalid("播放处理并发必须为 1–4（0 使用默认值 2）")
+	}
+	if c.PlaybackCacheMB != 0 && (c.PlaybackCacheMB < 64 || c.PlaybackCacheMB > 65536) {
+		return invalid("播放缓存须为 64–65536 MiB（0 使用默认值 2048）")
 	}
 	if len(c.ServerDomains) > 32 {
 		return invalid("备用域名最多 32 条")

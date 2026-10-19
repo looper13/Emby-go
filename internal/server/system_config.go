@@ -37,6 +37,8 @@ func publicConfig(cfg config.Config) gin.H {
 		"redis_addr": cfg.RedisAddr, "redis_db": cfg.RedisDB, "redis_password_configured": cfg.RedisPassword != "",
 		"ffprobe_path": cfg.FFProbePath, "probe_timeout_seconds": int(cfg.ProbeTimeout().Seconds()),
 		"probe_concurrency": cfg.ProbeWorkers(), "server_domains": domains,
+		"ffmpeg_enabled": cfg.FFmpegEnabled, "ffmpeg_path": cfg.FFmpegPath, "playback_concurrency": playbackWorkers(cfg),
+		"playback_cache_mb": playbackCacheMB(cfg),
 	}
 }
 
@@ -122,6 +124,8 @@ func (a *App) adminSaveConfig(c *gin.Context) {
 	a.cfg.ServerDomains = append([]config.ServerDomain{}, saved.ServerDomains...)
 	a.cfg.DisableLibraryMonitor, a.cfg.LibraryMonitorMode = saved.DisableLibraryMonitor, saved.MonitorMode()
 	a.cfg.FFProbePath, a.cfg.ProbeTimeoutSec, a.cfg.ProbeConcurrency = saved.FFProbePath, saved.ProbeTimeoutSec, saved.ProbeConcurrency
+	a.cfg.FFmpegEnabled, a.cfg.FFmpegPath, a.cfg.PlaybackConcurrency = saved.FFmpegEnabled, saved.FFmpegPath, saved.PlaybackConcurrency
+	a.cfg.PlaybackCacheMB = saved.PlaybackCacheMB
 	a.cfgMu.Unlock()
 	if before.DisableLibraryMonitor != saved.DisableLibraryMonitor || before.MonitorMode() != saved.MonitorMode() {
 		a.closeLibraryMonitors()

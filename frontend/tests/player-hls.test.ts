@@ -4,6 +4,7 @@ import { createHlsPlayback } from '../src/lib/player-hls';
 import { loadPlayerFactory, managePlayer, playbackType } from '../src/lib/player';
 import { usePlayerStore } from '../src/stores/player';
 import type { PlayerHandle } from '../src/lib/player';
+import type { TrackEngine } from '../src/lib/player-tracks';
 import movie from '../../vue-migration/fixtures/json/item-detail.json';
 
 const mocks = vi.hoisted(() => {
@@ -12,20 +13,26 @@ const mocks = vi.hoisted(() => {
     destroy: ReturnType<typeof vi.fn>; recoverMediaError: ReturnType<typeof vi.fn>;
     error: (event: string, data: { fatal: boolean; type: string }) => void;
     attached: () => void;
+    audioTracks: { name: string; lang: string }[]; subtitleTracks: { name: string; lang: string }[];
+    audioTrack: number; subtitleTrack: number; listeners: Map<string, () => void>;
   }[] = [];
   return { supported: true, engines, constructorOptions: vi.fn() };
 });
 vi.mock('hls.js', () => ({ default: class {
   static isSupported = () => mocks.supported;
-  static Events = { ERROR: 'hlsError', MEDIA_ATTACHED: 'hlsMediaAttached' };
+  static Events = { ERROR: 'hlsError', MEDIA_ATTACHED: 'hlsMediaAttached', AUDIO_TRACKS_UPDATED: 'audioUpdate', SUBTITLE_TRACKS_UPDATED: 'subtitleUpdate', AUDIO_TRACK_SWITCHED: 'audioSwitched', SUBTITLE_TRACK_SWITCH: 'subtitleSwitch' };
   static ErrorTypes = { MEDIA_ERROR: 'mediaError', NETWORK_ERROR: 'networkError' };
   loadSource = vi.fn(); attachMedia = vi.fn(); destroy = vi.fn(); recoverMediaError = vi.fn();
   error = (_event: string, _data: { fatal: boolean; type: string }) => {};
   attached = () => {};
+  audioTracks = [{ name: '日语', lang: 'jpn' }, { name: '英语', lang: 'eng' }];
+  subtitleTracks = [{ name: '中文', lang: 'chi' }]; audioTrack = 0; subtitleTrack = -1;
+  listeners = new Map<string, () => void>();
   constructor() { mocks.engines.push(this); }
   on(event: string, callback: typeof this.error) {
     if (event === 'hlsError') this.error = callback;
-    else this.attached = callback as unknown as () => void;
+    else if (event === 'hlsMediaAttached') this.attached = callback as unknown as () => void;
+    else this.listeners.set(event, callback as unknown as () => void);
   }
 } }));
 vi.mock('../src/vendor/artplayer.min.js', () => ({ default: class {
@@ -48,6 +55,18 @@ function error(index: number, type = 'networkError', fatal = true) {
 }
 
 describe('HLS playback', () => {
+  it('exposes real HLS alternate tracks, switches indexes and ignores old engine updates', () => {
+    let tracks!: TrackEngine; const update = vi.fn((next: TrackEngine) => { tracks = next; });
+    const play = createHlsPlayback(update); const { video, art, events } = host();
+    play(video, '/master.m3u8', art);
+    expect(tracks.audio().map(track => track.label)).toEqual(['日语', '英语']);
+    tracks.selectAudio('1'); expect(mocks.engines[0]!.audioTrack).toBe(1);
+    tracks.selectSubtitle('0'); expect(mocks.engines[0]!.subtitleTrack).toBe(0);
+    tracks.selectSubtitle('-1'); expect(mocks.engines[0]!.subtitleTrack).toBe(-1);
+    const old = mocks.engines[0]!; play(video, '/other.m3u8', art);
+    const count = update.mock.calls.length; old.listeners.get('audioUpdate')!(); expect(update).toHaveBeenCalledTimes(count);
+    events.get('destroy')!(); mocks.engines[1]!.listeners.get('subtitleUpdate')!(); expect(update).toHaveBeenCalledTimes(count);
+  });
   it('recognizes containers and signed URLs and preserves MP4/WebM', () => {
     for (const value of ['m3u8', 'M3U8', 'm3u', 'https://cdn.test/INDEX.M3U8?token=x#t=3']) expect(playbackType(value)).toBe('m3u8');
     expect(playbackType('https://cdn.test/a.webm?token=x')).toBe('webm');

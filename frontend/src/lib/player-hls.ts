@@ -1,4 +1,6 @@
 import Hls from 'hls.js';
+import type { TrackEngine } from './player-tracks';
+import { bindNativeTracks } from './player-tracks';
 
 interface HlsPlayer {
   isDestroy?: boolean;
@@ -11,11 +13,13 @@ interface HlsPlayer {
 
 // One handler per player, shared by its direct and proxy URLs. Switching URLs
 // cancels the old requests/worker; a single destroy listener owns the lifetime.
-export function createHlsPlayback() {
+export function createHlsPlayback(onTracks?: (engine: TrackEngine) => void, startPosition = -1) {
   let current: Hls | undefined;
+  let releaseNative: (() => void) | undefined;
   let registered = false;
   let disposed = false;
   function release() {
+    releaseNative?.(); releaseNative = undefined;
     const previous = current;
     current = undefined;
     previous?.destroy();
@@ -32,13 +36,28 @@ export function createHlsPlayback() {
     if (!Hls.isSupported()) {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = url;
+        if (onTracks) releaseNative = bindNativeTracks(video, onTracks);
       } else {
         art.notice.show = '当前浏览器不支持 HLS 播放，请更换浏览器';
       }
       return;
     }
-    const hls = new Hls();
+    const hls = new Hls({ startPosition });
     current = hls;
+    if (onTracks) {
+      const engine: TrackEngine = {
+        audio: () => hls.audioTracks.map((track, index) => ({ id: String(index), label: track.name || track.lang || `音轨 ${index + 1}`, language: track.lang })),
+        subtitles: () => hls.subtitleTracks.map((track, index) => ({ id: String(index), label: track.name || track.lang || `字幕 ${index + 1}`, language: track.lang })),
+        selectAudio: id => { hls.audioTrack = Number(id); }, selectSubtitle: id => { hls.subtitleTrack = Number(id); },
+        audioId: () => String(hls.audioTrack), subtitleId: () => String(hls.subtitleTrack),
+      };
+      const update = () => { if (current === hls && !disposed) onTracks(engine); };
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, update);
+      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, update);
+      hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, update);
+      hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, update);
+      update();
+    }
     let recovered = false;
     hls.on(Hls.Events.MEDIA_ATTACHED, () => {
       // Start after MediaSource is attached. Relying on video.autoplay alone
