@@ -5,7 +5,8 @@ import type { MovieDto, ImageDto } from '../../api/contracts';
 import { numberUnlessInTitle, statusText, fmtDuration } from '../../lib/media';
 import { imageURL } from '../../lib/image-url';
 import MediaImage from './MediaImage.vue';
-const props = defineProps<{ movie: MovieDto; images?: ImageDto[]; playable?: boolean; busy?: Set<string> }>();
+import FavoriteButton from './FavoriteButton.vue';
+const props = defineProps<{ movie: MovieDto; images?: ImageDto[]; playable?: boolean; busy?: Set<string>; favorite?: boolean }>();
 const emit = defineEmits<{ back: []; play: []; probe: []; reread: []; scrape: []; entity: [key: string, value: string] }>();
 const tag = (type: string) => props.images?.find(image => image.ImageType === type)?.ImageTag;
 const cover = computed(() => props.movie.cover_url.trim());
@@ -18,7 +19,7 @@ const backdrop = computed(() => props.movie.BackdropPath ? imageURL(props.movie.
     <div class="item-hero-body">
       <MediaImage v-if="poster" class="item-hero-poster" :src="poster" :fallback="cover" alt="" />
       <div class="item-hero-text"><button id="item-back" class="btn item-back" title="返回媒体墙 (Esc)" @click="emit('back')">← 返回媒体墙</button>
-        <h1 class="item-hero-title">{{ movie.Title || movie.id }}</h1>
+        <div class="item-title-actions"><h1 class="item-hero-title">{{ movie.Title || movie.id }}</h1><FavoriteButton v-if="['success','manual'].includes(movie.Status)" :item-id="movie.id" :favorite="favorite" :label="movie.Title" /></div>
         <p v-if="movie.television" class="detail-sub">{{ movie.television.title }} · {{ movie.television.season === 0 ? '特别篇' : `第 ${movie.television.season} 季` }} · 第 {{ movie.television.episode }} 集</p>
         <p class="detail-sub">{{ [numberUnlessInTitle(movie.Title, movie.Number), movie.Year, fmtDuration(movie.RuntimeSeconds), movie.Rating ? `★ ${movie.Rating}` : ''].filter(Boolean).join(' · ') || '—' }}</p>
         <div class="detail-badges"><span class="badge" :class="movie.Status">{{ statusText[movie.Status] || movie.Status }}</span><span v-if="movie.collection" class="badge manual">合集 {{ movie.collection }}</span><button v-for="tagName in movie.Tags" :key="tagName" class="tag-chip" data-entity-key="tag" :data-entity-value="tagName" :title="'按标签筛选：' + tagName" @click="emit('entity', 'tag', tagName)">#{{ tagName }}</button></div>
@@ -27,3 +28,7 @@ const backdrop = computed(() => props.movie.BackdropPath ? imageURL(props.movie.
     </div>
   </header>
 </template>
+<style scoped>
+.item-title-actions { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.item-title-actions h1 { min-width: 0; overflow-wrap: anywhere; }
+</style>

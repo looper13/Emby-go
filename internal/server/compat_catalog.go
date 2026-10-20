@@ -113,8 +113,11 @@ func (a *App) years(c *gin.Context)           { a.catalogList(c, "Year") }
 func (a *App) officialRatings(c *gin.Context) { a.catalogList(c, "OfficialRating") }
 
 func (a *App) catalogList(c *gin.Context, kind string) {
-	if userID := c.Query("UserId"); userID != "" && userID != "1" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+	a.catalogItems(c, []string{kind}, false)
+}
+
+func (a *App) catalogItems(c *gin.Context, kinds []string, entityQuery bool) {
+	if !validFavoriteQuery(c) {
 		return
 	}
 	libraryID, collection := parseParentScope(c.Query("ParentId"))
@@ -139,7 +142,7 @@ func (a *App) catalogList(c *gin.Context, kind string) {
 	}
 	// Only Movie/Video exist in this library model. Do not offer movie-derived
 	// filters when a client explicitly browses an unsupported media type.
-	if !catalogIncludesMovies(c) {
+	if !entityQuery && !catalogIncludesMovies(c) {
 		a.emptyItems(c)
 		return
 	}
@@ -148,35 +151,46 @@ func (a *App) catalogList(c *gin.Context, kind string) {
 	minimum := strings.ToLower(c.Query("NameStartsWithOrGreater"))
 	maximum := strings.ToLower(c.Query("NameLessThan"))
 	desc := strings.EqualFold(c.Query("SortOrder"), "Descending")
-	actorVersion := ""
-	if kind == "Person" {
-		actorVersion = a.db.ActorVersion()
-	}
-	key := responseKey("catalog", a.cacheScope(libraryID), kind, collection, start, limit, term, prefix, minimum, maximum, desc, c.Query("EnableImages"), actorVersion)
+	key := responseKey("catalog-favorites", a.cacheScope(libraryID), kinds, collection, start, limit, term, prefix, minimum, maximum, desc, c.Query("EnableImages"), a.db.ActorVersion(), a.db.ItemFavoriteVersion(), favoriteFilter(c), c.Query("Filters"), c.Query("ExcludeItemTypes"), entityQuery)
 	a.cachedResponse(c, key, 30*time.Second, func() ([]byte, error) {
-		var names []string
-		var err error
-		if kind == "Person" {
-			names, err = a.db.Persons(libraryID, collection)
-		} else {
-			names, err = a.db.CatalogNames(kind, libraryID, collection)
-		}
-		if err != nil {
-			return nil, err
-		}
-		filtered := make([]string, 0, len(names))
-		for _, name := range names {
-			if strings.TrimSpace(name) == "" {
-				continue
+		type entry struct{ name, kind string }
+		filtered := []entry{}
+		for _, kind := range kinds {
+			var names []string
+			var err error
+			if kind == "Person" {
+				names, err = a.db.Persons(libraryID, collection)
+			} else {
+				names, err = a.db.CatalogNames(kind, libraryID, collection)
 			}
-			lower := strings.ToLower(name)
-			if (term == "" || strings.Contains(lower, term)) && (prefix == "" || strings.HasPrefix(lower, prefix)) && (minimum == "" || lower >= minimum) && (maximum == "" || lower < maximum) {
-				filtered = append(filtered, name)
+			if err != nil {
+				return nil, err
+			}
+			for _, name := range names {
+				if strings.TrimSpace(name) == "" {
+					continue
+				}
+				if !matchesFavorite(c, a.db.ItemFavorite(entityId(kind, name))) {
+					continue
+				}
+				if entityQuery {
+					excluded := false
+					for _, typ := range splitQueryTypes(c.Query("ExcludeItemTypes")) {
+						excluded = excluded || strings.EqualFold(typ, kind)
+					}
+					if excluded {
+						continue
+					}
+				}
+				lower := strings.ToLower(name)
+				if (term == "" || strings.Contains(lower, term)) && (prefix == "" || strings.HasPrefix(lower, prefix)) && (minimum == "" || lower >= minimum) && (maximum == "" || lower < maximum) {
+					filtered = append(filtered, entry{name, kind})
+				}
 			}
 		}
 		sort.Slice(filtered, func(i, j int) bool {
-			left, right := strings.ToLower(filtered[i]), strings.ToLower(filtered[j])
-			if kind == "Year" {
+			left, right := strings.ToLower(filtered[i].name), strings.ToLower(filtered[j].name)
+			if filtered[i].kind == "Year" && filtered[j].kind == "Year" {
 				ly, _ := strconv.Atoi(left)
 				ry, _ := strconv.Atoi(right)
 				if ly != ry {
@@ -187,7 +201,7 @@ func (a *App) catalogList(c *gin.Context, kind string) {
 				}
 			}
 			if left == right {
-				left, right = filtered[i], filtered[j]
+				left, right = filtered[i].name+filtered[i].kind, filtered[j].name+filtered[j].kind
 			}
 			if desc {
 				return left > right
@@ -198,27 +212,14 @@ func (a *App) catalogList(c *gin.Context, kind string) {
 		pageStart := min(start, total)
 		pageEnd := pageStart + min(limit, total-pageStart)
 		items := make([]gin.H, 0, pageEnd-pageStart)
-		for _, name := range filtered[pageStart:pageEnd] {
+		for _, value := range filtered[pageStart:pageEnd] {
+			name, kind := value.name, value.kind
 			item := gin.H{"Name": name}
 			switch kind {
-			case "Tag":
-				item["Id"] = entityId(kind, name)
 			case "Year":
 				item["Id"] = name
-			case "Studio", "Person":
-				item["Id"], item["Type"], item["IsFolder"], item["ServerId"] = entityId(kind, name), kind, kind == "Studio", a.serverID
-				item["ImageTags"] = gin.H{}
-				if !strings.EqualFold(c.Query("EnableImages"), "false") {
-					avatarTag := ""
-					if kind == "Person" {
-						_, avatarTag = a.personAvatar(name)
-					}
-					if avatarTag != "" {
-						item["ImageTags"] = gin.H{"Primary": avatarTag}
-					} else if poster := a.entityPosterPath(kind, name); poster != "" {
-						item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
-					}
-				}
+			case "Studio", "Person", "Genre", "Tag":
+				item = a.namedItem(kind, name, !strings.EqualFold(c.Query("EnableImages"), "false"))
 			}
 			items = append(items, item)
 		}

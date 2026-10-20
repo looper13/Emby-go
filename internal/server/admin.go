@@ -409,6 +409,14 @@ func (a *App) adminItems(c *gin.Context) {
 		Limit:      limit,
 		Offset:     offset,
 	}
+	if raw := c.Query("favorite"); raw != "" {
+		if raw != "true" && raw != "false" {
+			c.JSON(400, gin.H{"error": "无效的收藏筛选参数"})
+			return
+		}
+		favorite := raw == "true"
+		query.Favorite = &favorite
+	}
 	if strings.EqualFold(query.SortBy, "random") {
 		seed, err := strconv.ParseUint(c.Query("seed"), 10, 31)
 		if err != nil || seed == 0 {

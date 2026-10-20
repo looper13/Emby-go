@@ -1,12 +1,12 @@
 const pages = new Set([
   'overview', 'libraries', 'items', 'manual', 'settings', 'apikeys',
-  'actors', 'scrape', 'scheduled', 'tasks', 'probe', 'anime', 'anime/settings', 'anime/mikan',
+  'actors', 'favorites', 'scrape', 'scheduled', 'tasks', 'probe', 'anime', 'anime/settings', 'anime/mikan',
 ]);
 const filterKeys = new Set([
   'library_id', 'status', 'search', 'sort', 'order', 'source_protocol',
   'genre', 'tag', 'studio', 'person', 'collection', 'scrape', 'limit', 'offset',
   'year', 'season', 'weekday', 'source', 'playable',
-  'view', 'tv_series', 'tv_season',
+  'view', 'tv_series', 'tv_season', 'favorite', 'type',
 ]);
 
 export function isValidItemId(value: string): boolean {

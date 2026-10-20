@@ -14,6 +14,9 @@ import AnimeBindingDialog from '../components/anime/AnimeBindingDialog.vue';
 import ArtworkJob from '../components/anime/ArtworkJob.vue';
 import TMDBMappingDialog from '../components/anime/TMDBMappingDialog.vue';
 import type { TMDBMapping } from '../api/anime-artwork';
+import FavoriteButton from '../components/media/FavoriteButton.vue';
+import { favoritesApi, type FavoriteItem } from '../api/favorites';
+import { usePageRequest } from '../composables/usePageRequest';
 const route = useRoute(), player = usePlayerStore(), toasts = useToastStore();
 const id = computed(() => String(route.params.id));
 const { data, error, loading, load, active } = useAdminRead(signal => animeApi.bangumiSubject(id.value, signal));
@@ -22,6 +25,14 @@ const dialog = ref<{target:string;title:string;binding:AnimeBinding}|null>(null)
 const tmdbDialog = ref<{title:string;episode?:TMDBMapping}|null>(null), imageVersion = ref(0);
 const episodes = computed(() => data.value?.episodes.slice(offset.value, offset.value + 50) ?? []);
 const movie = computed(() => `anime-movie:${data.value?.subject.id}`);
+const favorite = ref<FavoriteItem | null>(null), favoriteScope = usePageRequest();
+watch(data, async value => {
+  const current = favoriteScope.begin(); favorite.value = null;
+  if (!value) return;
+  const target = value.binding ? `anime-movie:${value.subject.id}` : `anime-series:${value.subject.id}`;
+  try { const item = await favoritesApi.item(target, current.signal); if (current.isCurrent()) favorite.value = item; }
+  catch { /* Only visible, bound Emby items have a favorite identity. */ }
+});
 let timer: ReturnType<typeof setInterval>|undefined;
 onScopeDispose(() => clearInterval(timer));
 watch(id, () => { clearInterval(timer); dialog.value=null;tmdbDialog.value=null;offset.value=0;void load(); });
@@ -42,7 +53,7 @@ function check(target:string){void action(()=>animeApi.check(target));}
   <template v-if="data">
     <section class="panel anime-hero">
       <div class="bangumi-poster"><MediaImage :src="`/api/anime/subjects/${id}/image?size=large&v=${imageVersion}`" :alt="data.subject.name" /></div>
-      <div><h2>{{ data.subject.name }}</h2><p>{{ data.subject.original_name }}</p><p>{{ data.subject.platform }} · {{ data.subject.date || '首播日期未知' }} · {{ data.subject.rating || '暂无评分' }}</p><p class="bangumi-summary">{{ data.subject.summary || '暂无简介' }}</p><a :href="`https://bgm.tv/subject/${data.subject.bangumi_id}`" target="_blank" rel="noopener noreferrer">Bangumi 来源</a></div>
+      <div><div class="row-actions"><h2>{{ data.subject.name }}</h2><FavoriteButton v-if="favorite" :item-id="favorite.Id" :favorite="favorite.UserData.IsFavorite" :label="favorite.Name" /></div><p>{{ data.subject.original_name }}</p><p>{{ data.subject.platform }} · {{ data.subject.date || '首播日期未知' }} · {{ data.subject.rating || '暂无评分' }}</p><p class="bangumi-summary">{{ data.subject.summary || '暂无简介' }}</p><a :href="`https://bgm.tv/subject/${data.subject.bangumi_id}`" target="_blank" rel="noopener noreferrer">Bangumi 来源</a></div>
     </section>
     <ArtworkJob :subjects="[data.subject.bangumi_id]" people @updated="imageVersion++" />
     <nav class="bangumi-tabs" aria-label="番剧内容"><button v-for="tab in [{id:'episodes',label:'章节'},{id:'people',label:'角色与制作人员'},{id:'stills',label:'每集剧照'},{id:'releases',label:'发布资源'}]" :key="tab.id" :aria-pressed="section===tab.id" :class="{selected:section===tab.id}" @click="section=tab.id">{{ tab.label }}</button></nav>

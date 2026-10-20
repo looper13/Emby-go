@@ -274,6 +274,26 @@ Emby 兼容 API 同时注册在根路径与 `/emby` 前缀下：
 
 已对齐的浏览主链路：认证 → Views（媒体库 + 合集）→ Latest/Resume/Suggestions → Items（排序/过滤/分页/搜索）→ 详情/图片 → 相似推荐 → PlaybackInfo → `/Videos/{id}/stream`（302 直拉）→ 进度/收藏/评分上报。
 
+### 收藏
+
+控制台侧栏「收藏」按影片与单集、剧集与季、演员、类型、厂商、标签、合集分类，支持搜索、分页、打开条目和取消收藏。影片详情、演员列表、电视节目和实体筛选栏提供心形按钮；媒体墙与演员列表支持「仅收藏」。已绑定且可见的番剧条目也能收藏，未绑定的外部目录不进入 Emby 收藏。
+
+沿用 Emby 的用户收藏接口，`{id}` 使用对应列表或详情返回的 `Id`，当前仍为单管理员 `UserId=1`：
+
+```text
+POST   /Users/1/FavoriteItems/{id}         添加收藏
+DELETE /Users/1/FavoriteItems/{id}         取消收藏
+POST   /Users/1/FavoriteItems/{id}/Delete  取消收藏的兼容入口
+GET    /Items?UserId=1&Recursive=true&Filters=IsFavorite&IncludeItemTypes=Movie,Episode
+GET    /Persons?UserId=1&IsFavorite=true
+GET    /Genres?UserId=1&IsFavorite=true
+GET    /Studios?UserId=1&IsFavorite=true
+```
+
+以上路由也支持 `/emby` 前缀与小写路径；收藏参数支持 `IsFavorite=true/false`，写入返回 HTTP 200 的 `UserItemDataDto`，包含 `IsFavorite`、`ItemId`、`Key` 和播放状态。条目详情及列表中的 `UserData.IsFavorite` 与写入结果一致。根收藏查询会合并类型、去重番剧媒体别名，再进行排序和分页。
+
+收藏存储在 SQLite：原有影片收藏与播放进度保持不变，非影片实体使用启动时自动创建的 `item_favorites` 表。收藏演员、类型、合集或剧集不会连带收藏其影片或单集，也不会改写 NFO。暂时不可见的实体不列入收藏，原身份重新出现时仍保留收藏状态。API 合约已做本地回归，具体第三方 Emby 客户端仍需实机验收。
+
 ### API 密钥
 
 后台「API 密钥」创建后，可用密钥直接调用 Emby API（等价于登录令牌，长期有效）：

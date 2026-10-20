@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"emby-go/internal/store"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,6 +22,7 @@ func (a *App) userDataJSON(id int64) (gin.H, bool) {
 		percentage = float64(d.PositionTicks) / float64(m.RuntimeSeconds*10000000) * 100
 	}
 	return gin.H{
+		"Key":                   strconv.FormatInt(id, 10),
 		"ItemId":                strconv.FormatInt(id, 10),
 		"ServerId":              a.serverID,
 		"PlaybackPositionTicks": d.PositionTicks,
@@ -40,9 +43,23 @@ func (a *App) favoriteItem(c *gin.Context, favorite bool) {
 	if !a.validUser(c) {
 		return
 	}
-	movie, err := a.resolveUserMedia(c.Param("id"))
+	canonical, movie, item, err := a.favoriteTarget(c, c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		if store.NotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	if movie == nil {
+		if err := a.db.SetItemFavorite(canonical, favorite); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		data := userDataOf(item)
+		data["Key"], data["ItemId"], data["ServerId"], data["IsFavorite"] = canonical, c.Param("id"), a.serverID, favorite
+		c.JSON(http.StatusOK, data)
 		return
 	}
 	id := movie.ID

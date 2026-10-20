@@ -470,7 +470,7 @@ func (a *App) boxsetItemFrom(name string, stat store.CollectionStat) gin.H {
 		"Id": boxsetID(name), "Name": name, "Type": "BoxSet", "IsFolder": true,
 		"ServerId": a.serverID, "ChildCount": stat.Count,
 		"BackdropImageTags": []string{},
-		"UserData":          zeroUserData(),
+		"UserData":          a.itemUserData(boxsetID(name)),
 	}
 	if poster := a.artReference(stat.Poster, false); poster != "" {
 		item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
@@ -522,12 +522,7 @@ func (a *App) counts(c *gin.Context) {
 
 // genres 处理 GET /Genres（库内流派实体列表，可按媒体库/合集范围过滤）。
 func (a *App) genres(c *gin.Context) {
-	if userID := c.Query("UserId"); userID != "" && userID != "1" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-		return
-	}
-	libraryID, collection := parseParentScope(c.Query("ParentId"))
-	a.entityBrowse(c, "Genre", libraryID, collection)
+	a.catalogList(c, "Genre")
 }
 
 func (a *App) resume(c *gin.Context) {
@@ -987,7 +982,10 @@ func (a *App) suggestions(c *gin.Context) {
 // 依据 IncludeItemTypes 区分「影片列表」与「流派/标签/制片商/演员实体列表」，
 // 不支持的类型（如 Series/Episode）返回空结果而非错把影片当该类型返回。
 func (a *App) itemsQuery(c *gin.Context) {
-	if a.animeRequestedItems(c) || a.animeItems(c) || a.televisionItems(c) || a.animeRootItems(c) {
+	if !validFavoriteQuery(c) {
+		return
+	}
+	if a.favoriteRootItems(c) || a.animeRequestedItems(c) || a.animeItems(c) || a.televisionItems(c) || a.animeRootItems(c) {
 		return
 	}
 	parentRaw := c.Query("ParentId")
@@ -1029,7 +1027,7 @@ func (a *App) itemsQuery(c *gin.Context) {
 	// 若同时请求了影片（如搜索页的 IncludeItemTypes=Movie,Series,Video,Person），
 	// 以影片结果为准，否则 SearchTerm 会被整份实体列表顶掉。
 	if len(virtual) > 0 && !movieWanted {
-		a.entityBrowse(c, virtual[0], lib, collection)
+		a.catalogItems(c, virtual, true)
 		return
 	}
 
@@ -1048,7 +1046,7 @@ func (a *App) itemsQuery(c *gin.Context) {
 		studios := joinEntityNames(c, "Studios", "Studio", "StudioIds")
 		person := joinEntityNames(c, "Person", "Person", "PersonIds")
 		unplayed := strings.Contains(strings.ToLower(c.Query("Filters")), "isunplayed")
-		favorite := strings.Contains(strings.ToLower(c.Query("Filters")), "isfavorite")
+		favorite := favoriteFilter(c)
 		ms, total, e := a.db.SearchScoped(0, collection, c.Query("SearchTerm"), c.Query("Years"), genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start, c.Query("OfficialRatings"))
 		if e != nil {
 			c.JSON(500, gin.H{"error": e.Error()})
@@ -1080,13 +1078,13 @@ func (a *App) itemsQuery(c *gin.Context) {
 	person := joinEntityNames(c, "Person", "Person", "PersonIds")
 	filterLower := strings.ToLower(c.Query("Filters"))
 	unplayed := strings.Contains(filterLower, "isunplayed")
-	favorite := strings.Contains(filterLower, "isfavorite")
+	favorite := favoriteFilter(c)
 
 	// Fields 决定响应体内容，须纳入缓存键，否则不同 Fields 的请求会互相串缓存。
 	fields := requestedFields(c)
 	term, years := c.Query("SearchTerm"), c.Query("Years")
 	// 缓存键不需要带请求来源：响应里的流地址是相对路径，与宿主无关。
-	key := responseKey("items", a.cacheScope(lib), term, years, genre, tags, studios, person, c.Query("Filters"), sortBy, c.Query("SortOrder"), fields.key(), start, limit, c.Query("OfficialRatings"))
+	key := responseKey("items", a.cacheScope(lib), term, years, genre, tags, studios, person, c.Query("Filters"), favorite, sortBy, c.Query("SortOrder"), fields.key(), start, limit, c.Query("OfficialRatings"))
 	a.cachedResponse(c, key, 15*time.Second, func() ([]byte, error) {
 		ms, total, err := a.db.SearchScoped(lib, "", term, years, genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, start, c.Query("OfficialRatings"))
 		if err != nil {
@@ -1229,20 +1227,18 @@ func (a *App) boxsetListResponse(c *gin.Context, start, limit int, term string) 
 	term = strings.ToLower(strings.TrimSpace(term))
 	names := make([]string, 0, len(stats))
 	for name := range stats {
-		if term == "" || strings.Contains(strings.ToLower(name), term) {
+		if (term == "" || strings.Contains(strings.ToLower(name), term)) && matchesFavorite(c, a.db.ItemFavorite(boxsetID(name))) {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
-	if start > len(names) {
-		start = len(names)
+	if strings.EqualFold(c.Query("SortOrder"), "Descending") {
+		sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	}
-	end := start + limit
-	if end > len(names) {
-		end = len(names)
-	}
-	items := make([]gin.H, 0, end-start)
-	for _, name := range names[start:end] {
+	from := min(start, len(names))
+	end := from + min(limit, len(names)-from)
+	items := make([]gin.H, 0, end-from)
+	for _, name := range names[from:end] {
 		items = append(items, a.boxsetItemFrom(name, stats[name]))
 	}
 	c.JSON(http.StatusOK, gin.H{"Items": items, "TotalRecordCount": len(names), "StartIndex": start})
@@ -1295,64 +1291,11 @@ func entityId(kind, name string) string {
 	return strings.ToLower(kind) + ":" + base64.RawURLEncoding.EncodeToString([]byte(name))
 }
 
-// entityBrowse 对库内影片去重聚合出某类实体列表（Type=kind），按名排序后分页。
-// collection 用于合集上下文限定（""/"*"/具体合集名），保证只返回该上下文内数量≥1 的实体。
-func (a *App) entityBrowse(c *gin.Context, kind string, libraryID int64, collection string) {
-	start, _ := strconv.Atoi(c.DefaultQuery("StartIndex", "0"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "100"))
-	if start < 0 {
-		start = 0
-	}
-	if limit < 1 || limit > 1000 {
-		limit = 100
-	}
-	// 实体名需扫全库 JSON 列去重，逐项还要查代表海报，故按（版本/类型/范围/分页）缓存。
-	key := responseKey("entities", a.cacheScope(libraryID), kind, collection, start, limit)
-	a.cachedResponse(c, key, 30*time.Second, func() ([]byte, error) {
-		var (
-			names []string
-			err   error
-		)
-		switch strings.ToLower(kind) {
-		case "genre":
-			names, err = a.db.Genres(libraryID, collection)
-		case "tag":
-			names, err = a.db.Tags(libraryID, collection)
-		case "studio":
-			names, err = a.db.Studios(libraryID, collection)
-		case "person":
-			names, err = a.db.Persons(libraryID, collection)
-		default:
-			return json.Marshal(gin.H{"Items": []gin.H{}, "TotalRecordCount": 0, "StartIndex": start})
-		}
-		if err != nil {
-			return nil, err
-		}
-		sort.Strings(names)
-		if start > len(names) {
-			start = len(names)
-		}
-		end := start + limit
-		if end > len(names) {
-			end = len(names)
-		}
-		items := make([]gin.H, 0, end-start)
-		for _, name := range names[start:end] {
-			item := gin.H{
-				"Id": entityId(kind, name), "Name": name, "Type": kind,
-				"IsFolder": false, "ServerId": a.serverID,
-			}
-			if poster := a.entityPosterPath(kind, name); poster != "" {
-				item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
-			}
-			items = append(items, item)
-		}
-		return json.Marshal(gin.H{"Items": items, "TotalRecordCount": len(names), "StartIndex": start})
-	})
-}
-
 func (a *App) item(c *gin.Context) {
 	if c.Param("uid") != "" && !a.validUser(c) {
+		return
+	}
+	if !validFavoriteQuery(c) {
 		return
 	}
 	rawID := c.Param("id")
@@ -1407,14 +1350,16 @@ func (a *App) item(c *gin.Context) {
 		}
 		// 虚拟实体（genre:/tag:/studio:/person:）详情：避免 404，返回最小 BaseItemDto。
 		if kind, name, ok := entityKind(rawID); ok {
-			item := gin.H{
-				"Id": rawID, "Name": name, "Type": kind,
-				"IsFolder": false, "ServerId": a.serverID,
+			exists, err := a.db.EntityExists(kind, name)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
 			}
-			if poster := a.entityPosterPath(kind, name); poster != "" {
-				item["ImageTags"] = gin.H{"Primary": a.posterTag(poster)}
+			if !exists {
+				c.JSON(404, gin.H{"error": "not found"})
+				return
 			}
-			c.JSON(http.StatusOK, item)
+			c.JSON(http.StatusOK, a.namedItem(kind, name, !strings.EqualFold(c.Query("EnableImages"), "false")))
 			return
 		}
 		c.JSON(404, gin.H{"error": "not found"})

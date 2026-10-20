@@ -110,6 +110,8 @@ func (a *App) animeDTO(raw string, c *gin.Context) gin.H {
 	}
 	item := gin.H{"Id": raw, "Name": name, "OriginalTitle": sub.OriginalName, "Overview": sub.Summary, "Type": typ, "IsFolder": true, "ServerId": a.serverID, "ParentId": parent, "ChildCount": childCount, "RecursiveItemCount": count, "ImageTags": gin.H{}, "BackdropImageTags": []string{}, "ProviderIds": gin.H{"Bangumi": strconv.FormatInt(sub.BangumiID, 10)}, "CommunityRating": sub.Rating, "UserData": gin.H{"PlaybackPositionTicks": 0, "PlayCount": 0, "Played": unplayed == 0, "IsFavorite": false, "UnplayedItemCount": unplayed}}
 	item["DateCreated"] = embyTime(sub.UpdatedAt)
+	item["UserData"].(gin.H)["IsFavorite"] = a.db.ItemFavorite(raw)
+	item["UserData"].(gin.H)["Key"], item["UserData"].(gin.H)["ItemId"] = raw, raw
 	if len(sub.Date) >= 4 {
 		if year, err := strconv.Atoi(sub.Date[:4]); err == nil {
 			item["ProductionYear"] = year
@@ -308,7 +310,7 @@ func (a *App) animeRootItems(c *gin.Context) bool {
 		}
 		start, limit := animePageWindow(c)
 		filters := strings.ToLower(c.Query("Filters"))
-		ms, count, err := a.db.SearchWithoutAnime(exclude, c.Query("SearchTerm"), c.Query("Years"), joinEntityNames(c, "Genres", "Genre", "GenreIds"), joinEntityNames(c, "Tags", "Tag", "TagIds"), joinEntityNames(c, "Studios", "Studio", "StudioIds"), joinEntityNames(c, "Person", "Person", "PersonIds"), strings.Contains(filters, "isunplayed"), strings.Contains(filters, "isfavorite"), firstSortKey(c.DefaultQuery("SortBy", "SortName")), strings.EqualFold(c.Query("SortOrder"), "Descending"), start+limit, c.Query("OfficialRatings"))
+		ms, count, err := a.db.SearchWithoutAnime(exclude, c.Query("SearchTerm"), c.Query("Years"), joinEntityNames(c, "Genres", "Genre", "GenreIds"), joinEntityNames(c, "Tags", "Tag", "TagIds"), joinEntityNames(c, "Studios", "Studio", "StudioIds"), joinEntityNames(c, "Person", "Person", "PersonIds"), strings.Contains(filters, "isunplayed"), favoriteFilter(c), firstSortKey(c.DefaultQuery("SortBy", "SortName")), strings.EqualFold(c.Query("SortOrder"), "Descending"), start+limit, c.Query("OfficialRatings"))
 		if err != nil {
 			c.JSON(500, gin.H{"error": "media query failed"})
 			return true

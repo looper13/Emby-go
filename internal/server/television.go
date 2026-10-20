@@ -81,6 +81,10 @@ func (a *App) televisionFolderDTO(raw string, episodes []store.Movie, c *gin.Con
 	if !ok {
 		return nil
 	}
+	raw = store.TVSeriesID(lib, path)
+	if kind == "Season" {
+		raw = store.TVSeasonID(lib, path, season)
+	}
 	m, count, children := televisionFolderMovie(raw, episodes)
 	if count == 0 {
 		return nil
@@ -101,7 +105,8 @@ func (a *App) televisionFolderDTO(raw string, episodes []store.Movie, c *gin.Con
 	item["ParentId"] = externalLibraryID(lib)
 	item["ChildCount"], item["RecursiveItemCount"] = children, count
 	item["Overview"], item["OriginalTitle"], item["ProductionYear"] = m.Plot, m.OriginalTitle, m.Year
-	item["UserData"] = gin.H{"PlaybackPositionTicks": 0, "PlayCount": 0, "IsFavorite": false, "Played": unplayed == 0, "UnplayedItemCount": unplayed}
+	item["UserData"] = a.itemUserData(raw)
+	item["UserData"].(gin.H)["Played"], item["UserData"].(gin.H)["UnplayedItemCount"] = unplayed == 0, unplayed
 	if kind == "Season" {
 		item["ParentId"], item["SeriesId"], item["SeriesName"], item["IndexNumber"] = store.TVSeriesID(lib, path), store.TVSeriesID(lib, path), episodes[0].Television.Title, season
 	}
@@ -276,7 +281,7 @@ func (a *App) televisionItems(c *gin.Context) bool {
 		for id := range animeIDs {
 			exclude = append(exclude, id)
 		}
-		ms, count, err := a.db.SearchMediaExcluding(exclude, []string{"Movie"}, lib, c.Query("SearchTerm"), c.Query("Years"), joinEntityNames(c, "Genres", "Genre", "GenreIds"), joinEntityNames(c, "Tags", "Tag", "TagIds"), joinEntityNames(c, "Studios", "Studio", "StudioIds"), joinEntityNames(c, "Person", "Person", "PersonIds"), strings.Contains(filters, "isunplayed"), strings.Contains(filters, "isfavorite"), firstSortKey(c.DefaultQuery("SortBy", "SortName")), strings.EqualFold(c.Query("SortOrder"), "Descending"), start+limit, 0, c.Query("OfficialRatings"))
+		ms, count, err := a.db.SearchMediaExcluding(exclude, []string{"Movie"}, lib, c.Query("SearchTerm"), c.Query("Years"), joinEntityNames(c, "Genres", "Genre", "GenreIds"), joinEntityNames(c, "Tags", "Tag", "TagIds"), joinEntityNames(c, "Studios", "Studio", "StudioIds"), joinEntityNames(c, "Person", "Person", "PersonIds"), strings.Contains(filters, "isunplayed"), favoriteFilter(c), firstSortKey(c.DefaultQuery("SortBy", "SortName")), strings.EqualFold(c.Query("SortOrder"), "Descending"), start+limit, 0, c.Query("OfficialRatings"))
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return true
@@ -333,11 +338,8 @@ func televisionItemMatches(c *gin.Context, item gin.H) bool {
 		}
 	}
 	filters := strings.ToLower(c.Query("Filters"))
-	if d, ok := item["UserData"].(store.UserData); ok {
-		return (!strings.Contains(filters, "isunplayed") || !d.Played) && (!strings.Contains(filters, "isplayed") || d.Played) && (!strings.Contains(filters, "isfavorite") || d.IsFavorite)
-	}
-	d, _ := item["UserData"].(gin.H)
-	return (!strings.Contains(filters, "isunplayed") || d["Played"] != true) && (!strings.Contains(filters, "isplayed") || d["Played"] == true) && (!strings.Contains(filters, "isfavorite") || d["IsFavorite"] == true)
+	d := userDataOf(item)
+	return (!strings.Contains(filters, "isunplayed") || d["Played"] != true) && (!strings.Contains(filters, "isplayed") || d["Played"] == true) && matchesFavorite(c, d["IsFavorite"] == true)
 }
 
 func (a *App) televisionSeasons(c *gin.Context) {

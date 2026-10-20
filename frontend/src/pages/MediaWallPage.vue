@@ -16,6 +16,8 @@ import { entityParams, statusText } from '../lib/media';
 import { useMediaActions } from '../composables/useMediaActions';
 import { usePlayerStore } from '../stores/player';
 import TelevisionBrowser from '../components/media/TelevisionBrowser.vue';
+import FavoriteButton from '../components/media/FavoriteButton.vue';
+import { favoriteEntityId, favoritesApi, type FavoriteItem } from '../api/favorites';
 
 const route = useRoute(); const router = useRouter();
 const history = inject(viewHistoryKey)!;
@@ -26,9 +28,18 @@ const libraries = ref<LibraryDto[]>([]); const pageError = ref('');
 const search = ref(''); const ready = ref(false); const more = ref<HTMLElement | null>(null);
 const actions = useMediaActions(refresh, () => route.fullPath);
 const entity = computed(() => entityParams.map(([key, label]) => [key, label, value(key)]).find(row => row[2]));
+const entityItem = ref<FavoriteItem | null>(null), entityScope = usePageRequest();
+watch(entity, async currentEntity => {
+  const current = entityScope.begin(); entityItem.value = null;
+  if (!currentEntity) return;
+  try {
+    const item = await favoritesApi.item(favoriteEntityId(currentEntity[0]!, currentEntity[2]!), current.signal);
+    if (current.isCurrent()) entityItem.value = item;
+  } catch { /* Unknown or no longer visible entities cannot be favorited. */ }
+}, { immediate: true });
 const library = computed(() => libraries.value.find(lib => String(lib.Id) === value('library_id')));
 const televisionLibrary = computed(() => library.value?.Type === 'tvshows' || library.value?.Type === 'mixed');
-const browseTelevision = computed(() => televisionLibrary.value && value('view') !== 'index' && !value('status') && !entity.value && !value('scrape'));
+const browseTelevision = computed(() => televisionLibrary.value && value('view') !== 'index' && !value('status') && !entity.value && !value('scrape') && !value('favorite'));
 const showWall = computed(() => !browseTelevision.value || library.value?.Type !== 'tvshows');
 const scopeLabel = computed(() => [library.value?.Name, entity.value ? `${entity.value[1]}：${entity.value[2]}` : '', statusText[value('status')] || value('status')].filter(Boolean).join(' · '));
 const emptyTitle = computed(() => { const what = entity.value ? `「${entity.value[2]}」的影片` : library.value ? `「${library.value.Name}」的影片` : '影片'; return value('status') ? `没有 ${statusText[value('status')] || value('status')} 的${what}` : `没有符合条件的${what}`; });
@@ -131,7 +142,7 @@ watch(() => tasks.revision, () => {
     <div class="panel-head wall-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
     <p v-if="pageError" role="alert">{{ pageError }} <button class="btn" @click="enter()">重试</button></p>
     <BackgroundTaskProgress kind="probe" :progress="tasks.probe.progress" :visible="tasks.probe.visible" :busy="tasks.probe.busy" :unavailable="tasks.probe.unavailable" :cancelling="tasks.probe.cancelling" @cancel="tasks.probe.cancel()" />
-    <WallFilters :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle" />
+    <WallFilters :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle"><template #entity-action><FavoriteButton v-if="entityItem" :item-id="entityItem.Id" :favorite="entityItem.UserData.IsFavorite" :label="entityItem.Name" /></template></WallFilters>
     <div v-if="televisionLibrary && !value('status') && !entity" class="television-views" role="tablist" aria-label="媒体视图"><button class="btn btn-sm" role="tab" :aria-selected="browseTelevision" @click="filter('view','')">{{ library?.Type === 'mixed' ? '影片与电视节目' : '电视节目' }}</button><button class="btn btn-sm" role="tab" :aria-selected="!browseTelevision" @click="filter('view','index')">全部媒体索引</button></div>
     <TelevisionBrowser v-if="browseTelevision && library" :key="library.Id" :library="library.Id" :search="value('search')" :revision="tasks.revision" :series="value('tv_series')" :season="value('tv_season')" @browse="browseSeries" @open="open" />
     <h3 v-if="browseTelevision && library?.Type === 'mixed'">影片</h3>

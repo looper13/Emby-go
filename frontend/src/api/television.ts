@@ -1,10 +1,11 @@
 import { apiClient } from './client';
-import { record, count, string } from './admin';
+import { record, count, string, boolean } from './admin';
 
 export interface TelevisionItem {
   Id: string; Name: string; Type: 'Series' | 'Season' | 'Episode';
   ImageTags: Record<string, string>; ChildCount: number; RecursiveItemCount: number;
   IndexNumber: number; SeriesName: string; ProductionYear: number; Overview: string;
+  Favorite?: boolean;
 }
 export function parseTelevision(value: unknown) {
   const result = record(value);
@@ -18,7 +19,7 @@ export function parseTelevision(value: unknown) {
       : type === 'Series' ? /^tv-series:[1-9]\d*:[A-Za-z0-9_-]+$/u.test(id)
         : /^tv-season:[1-9]\d*:\d+:[A-Za-z0-9_-]+$/u.test(id);
     if (!validID) throw new Error('服务响应格式不正确');
-    return { Id: id, Name: string(r.Name), Type: type, ImageTags: tags as Record<string,string>, ChildCount: count(r.ChildCount ?? 0), RecursiveItemCount: count(r.RecursiveItemCount ?? 0), IndexNumber: count(r.IndexNumber ?? 0), SeriesName: string(r.SeriesName ?? ''), ProductionYear: count(r.ProductionYear ?? 0), Overview: string(r.Overview ?? '') };
+    return { Id: id, Name: string(r.Name), Type: type, ImageTags: tags as Record<string,string>, ChildCount: count(r.ChildCount ?? 0), RecursiveItemCount: count(r.RecursiveItemCount ?? 0), IndexNumber: count(r.IndexNumber ?? 0), SeriesName: string(r.SeriesName ?? ''), ProductionYear: count(r.ProductionYear ?? 0), Overview: string(r.Overview ?? ''), Favorite: r.UserData == null ? false : boolean(record(r.UserData).IsFavorite ?? false) };
   });
   return { items, total: count(result.TotalRecordCount) };
 }

@@ -70,7 +70,7 @@ watch(() => tasks.revision, () => { void enter(true); });
 </script>
 <template>
   <article v-if="data" class="item-page" style="grid-template-columns:minmax(0,1fr)">
-    <ItemHero :movie="data.movie" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity" />
+    <ItemHero :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity" />
     <div class="item-sections" style="grid-template-columns:minmax(0,1fr)">
       <PlotSection :plot="data.movie.Plot" :expanded="plotExpanded" @toggle="plotExpanded = !plotExpanded" />
       <TrailerSection :url="data.movie.trailer_url?.trim() || ''" :thumb="trailerThumb" :fallback="data.movie.cover_url" @play="player.trailer(data.movie, data.movie.trailer_url || '')" />

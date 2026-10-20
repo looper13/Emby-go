@@ -13,21 +13,29 @@ import ActorSettingsForm from '../components/scrape/ActorSettingsForm.vue';
 import ActorImportPanel from '../components/scrape/ActorImportPanel.vue';
 import BackgroundTaskProgress from '../components/tasks/BackgroundTaskProgress.vue';
 import MediaImage from '../components/media/MediaImage.vue';
+import FavoriteButton from '../components/media/FavoriteButton.vue';
 import ReadState from '../components/common/ReadState.vue';
 
 const tasks = useTasksStore(), toasts = useToastStore();
 const library = ref(0), status = ref<ActorStatus>('all'), search = ref(''), term = ref(''), offset = ref(0), limit = 48;
+const favoritesOnly = ref(false);
 const saving = ref(false), dirty = ref(false), testing = ref(new Set<string>()), indexStatus = ref<GFriendsStatus>();
 const { data, error, loading, load, active } = useAdminRead(async signal => {
   const [settings, libs] = await Promise.all([scrapeApi.settings(signal), adminApi.libraries(signal)]);
   return { settings, libraries: libs.items || [] };
 });
 const { data: actors, error: actorsError, loading: actorsLoading, load: loadActors } = useAdminRead(signal =>
-  actorsApi.list({ library_id: library.value, status: status.value, search: term.value, offset: offset.value, limit }, signal));
+  actorsApi.list({ library_id: library.value, status: status.value, search: term.value, offset: offset.value, limit, ...(favoritesOnly.value ? {favorite:'true'} : {}) }, signal));
 const sourceLabel = computed(() => ({ metatube: 'MetaTube', gfriends: 'GFriends', gfriends_then_metatube: 'GFriends 优先，MetaTube 回退' })[data.value?.settings.avatar_source ?? 'metatube']);
 const scopeLabel = computed(() => data.value?.libraries.find(lib => lib.Id === library.value)?.Name || '全部媒体库');
-watch([library, status, term], () => { offset.value = 0; void loadActors(); });
+watch([library, status, term, favoritesOnly], () => { offset.value = 0; void loadActors(); });
 watch(() => tasks.revision, () => { void loadActors(); });
+watch(actors, result => {
+  if (result && offset.value > 0 && result.items.length === 0) {
+    offset.value = Math.max(0, Math.ceil(result.total / limit) - 1) * limit;
+    void loadActors();
+  }
+});
 function searchActors() { term.value = search.value.trim(); }
 function page(delta: number) { offset.value = Math.max(0, offset.value + delta * limit); void loadActors(); }
 async function save(value: Partial<ScrapeSettings>) {
@@ -84,15 +92,16 @@ async function test(target: SourceTest) {
         <div class="field"><label for="actor-search">搜索演员</label><input id="actor-search" v-model="search" type="search" placeholder="输入演员姓名"></div>
         <div class="field"><label for="actor-status">头像状态</label><select id="actor-status" v-model="status"><option value="all">全部演员</option><option value="missing">缺少头像</option><option value="ready">已有头像</option></select></div>
         <button class="btn" type="submit">搜索</button>
+        <label class="actor-favorite-filter"><input v-model="favoritesOnly" type="checkbox">仅收藏</label>
       </form>
       <ReadState :error="actorsError" :loading="actorsLoading" :empty="!actors" @retry="loadActors" />
       <p v-if="actorsLoading && actors" role="status">正在更新演员列表…</p>
       <template v-if="actors && !actorsError && !actorsLoading">
         <div v-if="actors.items.length" class="actor-grid">
-          <RouterLink v-for="actor in actors.items" :key="actor.name" class="actor-card" :to="{path:'/items',query:{person:actor.name,...(library ? {library_id:String(library)} : {})}}">
+          <article v-for="actor in actors.items" :key="actor.name" class="actor-card"><RouterLink :to="{path:'/items',query:{person:actor.name,...(library ? {library_id:String(library)} : {})}}">
             <div class="actor-portrait"><MediaImage v-if="actor.has_image" :src="imageURL(entityIdOf('person',actor.name),'Primary',240,actor.image_tag)" loading="lazy" :alt="actor.name + '的头像'" /><span v-else class="actor-placeholder"><Users :size="32" aria-hidden="true" /></span><span class="portrait-status" :class="{missing:!actor.has_image}">{{ actor.has_image ? '已有头像' : '缺少头像' }}</span></div>
             <strong>{{ actor.name }}</strong><small>{{ actor.movie_count }} 部影片 · 查看作品</small>
-          </RouterLink>
+          </RouterLink><div class="actor-favorite-action"><FavoriteButton :item-id="entityIdOf('person',actor.name)" :favorite="actor.favorite" :label="actor.name" @changed="loadActors" /></div></article>
         </div>
         <p v-else class="actor-empty">{{ actors.stats.total === 0 ? '当前媒体库还没有演员。扫描带有演员信息的 NFO 后，会显示在这里。' : '没有符合筛选条件的演员。可调整姓名或头像状态后重试。' }}</p>
         <nav v-if="actors.total > limit || offset > 0" class="actor-pagination" aria-label="演员分页"><button class="btn btn-sm" :disabled="offset===0" @click="page(-1)">上一页</button><span>{{ Math.floor(offset/limit)+1 }} / {{ Math.max(1,Math.ceil(actors.total/limit)) }}</span><button class="btn btn-sm" :disabled="offset+limit>=actors.total" @click="page(1)">下一页</button></nav>
@@ -120,6 +129,10 @@ async function test(target: SourceTest) {
 .actor-filters .field:first-child { flex: 1; min-width: 160px; }
 .actor-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(140px,1fr)); gap: 22px 16px; }
 .actor-card { min-width: 0; text-decoration: none; color: inherit; }
+.actor-card > a { display: block; text-decoration: none; color: inherit; }
+.actor-favorite-action { display: flex; justify-content: flex-end; margin-top: 8px; }
+.actor-favorite-filter { display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; }
+.actor-favorite-filter input { width: 16px; height: 16px; }
 .actor-card:hover strong { color: var(--accent); }
 .actor-portrait { position: relative; aspect-ratio: 3/4; border-radius: 10px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); }
 .actor-portrait :deep(img) { width: 100%; height: 100%; object-fit: cover; }

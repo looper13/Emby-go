@@ -35,6 +35,7 @@ type detailActor struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 	ImageTag  string `json:"image_tag,omitempty"`
 	HasImage  bool   `json:"has_image"`
+	Favorite  bool   `json:"favorite"`
 }
 
 func (a *App) adminItemDetail(c *gin.Context) {
@@ -99,7 +100,7 @@ func (a *App) adminItemDetail(c *gin.Context) {
 	actors := make([]detailActor, 0, 8)
 	if list, err := a.db.Actors(movie.ID); err == nil {
 		for _, actor := range list {
-			item := detailActor{Name: actor.Name, AvatarURL: actor.AvatarURL}
+			item := detailActor{Name: actor.Name, AvatarURL: actor.AvatarURL, Favorite: a.db.ItemFavorite(entityId("Person", actor.Name))}
 			if path, tag := a.personAvatar(actor.Name); path != "" {
 				item.HasImage, item.ImageTag = true, tag
 			}

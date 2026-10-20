@@ -9,10 +9,12 @@ func (s *Store) CatalogNames(kind string, libraryID int64, collection string) ([
 	var expression, from, extra string
 	from = "movies m"
 	switch kind {
-	case "Tag", "Studio":
+	case "Tag", "Studio", "Genre":
 		column := "tags"
 		if kind == "Studio" {
 			column = "studios"
+		} else if kind == "Genre" {
+			column = "genres"
 		}
 		from += ", json_each(m." + column + ") j"
 		expression = "TRIM(CAST(j.value AS TEXT))"
@@ -51,4 +53,25 @@ func (s *Store) CatalogNames(kind string, libraryID int64, collection string) ([
 		names = append(names, name)
 	}
 	return names, rows.Err()
+}
+
+func (s *Store) EntityExists(kind, name string) (bool, error) {
+	from, predicate := "movies m", ""
+	switch kind {
+	case "Person":
+		predicate = "(TRIM(m.director)=? OR EXISTS(SELECT 1 FROM movie_actors a WHERE a.movie_id=m.id AND a.actor_name=?))"
+	case "Genre", "Tag", "Studio":
+		column := map[string]string{"Genre": "genres", "Tag": "tags", "Studio": "studios"}[kind]
+		from += ", json_each(m." + column + ") j"
+		predicate = "j.type='text' AND TRIM(CAST(j.value AS TEXT))=?"
+	default:
+		return false, nil
+	}
+	var exists bool
+	args := []any{name}
+	if kind == "Person" {
+		args = append(args, name)
+	}
+	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM "+from+" WHERE m.status IN ('success','manual') AND "+predicate+")", args...).Scan(&exists)
+	return exists, err
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users } from '@lucide/vue';
+import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users, Heart } from '@lucide/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ref, watch } from 'vue';
 import { useTasksStore } from '../stores/tasks';
@@ -10,6 +10,7 @@ const tasks = useTasksStore();
 const navigation = [
   { page: 'overview', label: '总览', icon: LayoutGrid }, { page: 'libraries', label: '媒体库', icon: Folder },
   { page: 'anime', label: '动漫', icon: Sparkles },
+  { page: 'favorites', label: '收藏', icon: Heart },
   { page: 'items', label: '媒体墙', icon: Film }, { page: 'actors', label: '演员', icon: Users }, { page: 'manual', label: '手动补录', icon: CirclePlus },
   { page: 'settings', label: '设置', icon: Settings }, { page: 'apikeys', label: 'API 密钥', icon: KeyRound },
   { page: 'scrape', label: '刮削', icon: Sparkles }, { page: 'scheduled', label: '计划任务', icon: Clock },

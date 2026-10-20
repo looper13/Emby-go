@@ -167,7 +167,7 @@ func animeItemMatches(c *gin.Context, item gin.H) bool {
 			return false
 		}
 	}
-	data, _ := item["UserData"].(gin.H)
+	data := userDataOf(item)
 	filters := strings.ToLower(c.Query("Filters"))
 	if strings.Contains(filters, "isunplayed") && data["Played"] == true {
 		return false
@@ -175,7 +175,7 @@ func animeItemMatches(c *gin.Context, item gin.H) bool {
 	if strings.Contains(filters, "isplayed") && data["Played"] != true {
 		return false
 	}
-	if strings.Contains(filters, "isfavorite") && data["IsFavorite"] != true {
+	if !matchesFavorite(c, data["IsFavorite"] == true) {
 		return false
 	}
 	return true

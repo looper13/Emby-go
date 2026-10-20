@@ -4,6 +4,7 @@ import { ArrowLeft, RefreshCw } from '@lucide/vue';
 import { televisionApi, type TelevisionItem } from '../../api/television';
 import { usePageRequest } from '../../composables/usePageRequest';
 import MediaImage from './MediaImage.vue';
+import FavoriteButton from './FavoriteButton.vue';
 import { imageURL } from '../../lib/image-url';
 const props = defineProps<{ library: number; search: string; revision: number; series?: string; season?: string }>();
 const emit = defineEmits<{ open: [id: number]; browse: [series: string, season: string] }>();
@@ -58,14 +59,15 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
 </script>
 <template>
   <div class="television-browser">
-    <div class="television-head"><button v-if="selected || series" class="icon-btn" title="返回电视节目" @click="back"><ArrowLeft :size="18" /></button><h3>{{ title }}</h3><span class="hint">{{ total }} {{ selected ? '集' : '部' }}</span></div>
+    <div class="television-head"><button v-if="selected || series" class="icon-btn" title="返回电视节目" @click="back"><ArrowLeft :size="18" /></button><h3>{{ title }}</h3><FavoriteButton v-if="selected" :item-id="selected.Id" :favorite="selected.Favorite" :label="selected.Name" /><span class="hint">{{ total }} {{ selected ? '集' : '部' }}</span></div>
     <div v-if="selected && seasons.length" class="television-seasons" role="tablist" aria-label="季"><button v-for="s in seasons" :key="s.Id" role="tab" :aria-selected="season === s.Id" class="btn btn-sm" :class="{'season-active':season === s.Id}" @click="emit('browse',selected.Id,s.Id)">{{ s.Name }}</button></div>
+    <div v-if="selected && season" class="season-favorite"><span>{{ seasons.find(s => s.Id === season)?.Name }}</span><FavoriteButton :item-id="season" :favorite="seasons.find(s => s.Id === season)?.Favorite" :label="seasons.find(s => s.Id === season)?.Name" /></div>
     <p v-if="error" role="alert">{{ error }} <button class="btn btn-sm" @click="retry"><RefreshCw :size="14" /><span>重试</span></button></p>
     <div class="television-grid" :class="{'episode-grid':selected}">
-      <button v-for="item in items" :key="item.Id" class="television-card" :data-tv-id="item.Id" @click="select(item)">
+      <article v-for="item in items" :key="item.Id" class="television-entry"><button class="television-card" :data-tv-id="item.Id" @click="select(item)">
         <div class="television-cover"><MediaImage v-if="item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" alt="" loading="lazy" /><span v-else class="image-placeholder">{{ item.Name }}</span></div>
         <strong>{{ selected ? `${item.IndexNumber}. ${item.Name}` : item.Name }}</strong><small>{{ selected ? item.SeriesName : [item.ProductionYear || '',`${item.ChildCount} 季`,`${item.RecursiveItemCount} 集`].filter(Boolean).join(' · ') }}</small>
-      </button>
+      </button><div class="television-favorite"><FavoriteButton :item-id="item.Id" :favorite="item.Favorite" :label="item.Name" /></div></article>
     </div>
     <p v-if="loading" role="status">加载中…</p>
     <p v-else-if="!error && !items.length" class="hint">{{ selected ? '暂无单集' : '暂无电视节目' }}</p>
@@ -74,6 +76,10 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
 </template>
 <style scoped>
 .television-browser { margin: 18px 0 24px; min-width: 0; }
+.television-entry { min-width: 0; }
+.television-entry .television-card { width: 100%; }
+.television-favorite { display: flex; justify-content: flex-end; margin-top: 8px; }
+.season-favorite { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
 .television-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; min-width: 0; }
 .television-head h3 { font-size: 18px; margin: 0; overflow-wrap: anywhere; }
 .television-head .hint { margin: 0; white-space: nowrap; }

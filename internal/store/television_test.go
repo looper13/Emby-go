@@ -93,7 +93,7 @@ func TestTelevisionRoundTripFilteringAndUserData(t *testing.T) {
 		}
 	}
 	for _, types := range [][]string{{"Video"}, {"Movie", "Episode"}} {
-		ms, total, err := s.SearchMediaTypes(types, l.ID, "", "", "", "", "", "", false, false, "SortName", false, 10, 0, "")
+		ms, total, err := s.SearchMediaTypes(types, l.ID, "", "", "", "", "", "", false, nil, "SortName", false, 10, 0, "")
 		if err != nil || total != 2 || len(ms) != 2 {
 			t.Fatal(types, ms, total, err)
 		}

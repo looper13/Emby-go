@@ -199,7 +199,7 @@ describe('login and minimal application', () => {
     expect(new Headers(call?.[1]?.headers).has('X-Emby-Token')).toBe(false);
     expect(wrapper.find('#content > .cards').exists()).toBe(true);
     expect(wrapper.find('a[href="/admin"]').exists()).toBe(false);
-    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['overview', 'libraries', 'anime', 'items', 'actors', 'manual', 'settings', 'apikeys', 'scrape', 'scheduled', 'tasks', 'probe']);
+    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['overview', 'libraries', 'anime', 'favorites', 'items', 'actors', 'manual', 'settings', 'apikeys', 'scrape', 'scheduled', 'tasks', 'probe']);
     expect(wrapper.find('#scan').exists()).toBe(true);
     expect(wrapper.find('#reindex').exists()).toBe(true);
   });

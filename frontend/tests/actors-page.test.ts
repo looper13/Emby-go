@@ -13,7 +13,7 @@ import fixture from '../../vue-migration/fixtures/json/scrape-settings.json';
 let pinia: Pinia;
 const cleanup: (() => void)[] = [];
 const settings = parseScrapeSettings({...fixture, avatar_source:'gfriends', avatar_configured:true});
-const inventory: ActorsResult = {items:[{name:'Example',movie_count:2,has_image:false,image_tag:''}],total:1,stats:{total:1,missing:1,ready:0}};
+const inventory: ActorsResult = {items:[{name:'Example',movie_count:2,has_image:false,image_tag:'',favorite:false}],total:1,stats:{total:1,missing:1,ready:0}};
 beforeEach(() => {
   pinia=createPinia(); setActivePinia(pinia);
   vi.spyOn(scrapeApi,'settings').mockResolvedValue(settings);

@@ -148,9 +148,9 @@ func (s *Store) TVFolderEpisodes(id string) ([]Movie, error) {
 
 func televisionJSON(tv *Television) string { b, _ := json.Marshal(tv); return string(b) }
 
-func (s *Store) SearchMediaTypes(types []string, libraryID int64, term, years, genre, tags, studios, person string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, ratings string) ([]Movie, int, error) {
+func (s *Store) SearchMediaTypes(types []string, libraryID int64, term, years, genre, tags, studios, person string, unplayed bool, favorite *bool, sortBy string, desc bool, limit, offset int, ratings string) ([]Movie, int, error) {
 	return s.SearchMediaExcluding(nil, types, libraryID, term, years, genre, tags, studios, person, unplayed, favorite, sortBy, desc, limit, offset, ratings)
 }
-func (s *Store) SearchMediaExcluding(exclude []int64, types []string, libraryID int64, term, years, genre, tags, studios, person string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, ratings string) ([]Movie, int, error) {
+func (s *Store) SearchMediaExcluding(exclude []int64, types []string, libraryID int64, term, years, genre, tags, studios, person string, unplayed bool, favorite *bool, sortBy string, desc bool, limit, offset int, ratings string) ([]Movie, int, error) {
 	return s.searchExcluding(exclude, libraryID, term, "", years, genre, tags, studios, person, "", "", "", unplayed, favorite, movieOrder{by: sortBy, desc: desc, itemTypes: types}, limit, offset, ratings)
 }

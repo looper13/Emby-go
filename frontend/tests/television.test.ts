@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
+import { createPinia, disposePinia } from 'pinia';
 import TelevisionBrowser from '../src/components/media/TelevisionBrowser.vue';
 import LibraryForm from '../src/components/libraries/LibraryForm.vue';
 import { parseLibraries } from '../src/api/contracts';
 import { televisionApi, parseTelevision, type TelevisionItem } from '../src/api/television';
 
 const wrappers: VueWrapper[] = [];
-afterEach(() => { for (const wrapper of wrappers.splice(0)) wrapper.unmount(); vi.restoreAllMocks(); });
+const stores: ReturnType<typeof createPinia>[] = [];
+afterEach(() => { for (const wrapper of wrappers.splice(0)) wrapper.unmount(); stores.splice(0).forEach(disposePinia); vi.restoreAllMocks(); });
 const series: TelevisionItem = { Id:'tv-series:2:L3Nob3c',Name:'Drama',Type:'Series',ImageTags:{Primary:'cover'},ChildCount:2,RecursiveItemCount:3,IndexNumber:0,SeriesName:'',ProductionYear:2026,Overview:'' };
 const season: TelevisionItem = { ...series,Id:'tv-season:2:1:L3Nob3c',Name:'第 1 季',Type:'Season',IndexNumber:1 };
 const episode: TelevisionItem = { ...series,Id:'5',Name:'Pilot',Type:'Episode',SeriesName:'Drama',IndexNumber:1 };
-function browser(library=2, context: { series?: string; season?: string } = {}) { const w=mount(TelevisionBrowser,{props:{library,search:'',revision:0,...context}}); wrappers.push(w); return w; }
+function browser(library=2, context: { series?: string; season?: string } = {}) { const pinia=createPinia(); stores.push(pinia); const w=mount(TelevisionBrowser,{props:{library,search:'',revision:0,...context},global:{plugins:[pinia]}}); wrappers.push(w); return w; }
 describe('library types and television browsing', () => {
   it('preserves the content type contract and rejects unknown values', () => {
     for (const Type of ['movies','tvshows','mixed','']) expect(parseLibraries({items:[{Id:1,Name:'Library',Path:'/media',Type}],total:1}).items?.[0]?.Type).toBe(Type);

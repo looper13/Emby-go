@@ -43,11 +43,11 @@ export interface WallDto {
   userdata?: Record<string, WallUserData>;
 }
 export interface ImageDto { ImageType: string; ImageTag?: string; ImageIndex?: number }
-export interface ActorDto { name: string; has_image: boolean; image_tag?: string }
+export interface ActorDto { name: string; has_image: boolean; image_tag?: string; favorite?: boolean }
 export interface StreamDto { Index?: number; Type?: string; Codec?: string; Width?: number; Height?: number; BitRate?: number; Profile?: string; BitDepth?: number; ChannelLayout?: string; Channels?: number; Language?: string; SampleRate?: number; IsDefault?: boolean; IsForced?: boolean; IsExternal?: boolean }
 export interface FileDto { index: number; role: string; name: string; path: string; size: number; probed: boolean; streams: StreamDto[] }
 export interface SimilarDto { Id: string; Name: string; ImageTags?: Record<string, string>; ProductionYear?: number; RunTimeTicks?: number; CommunityRating?: number }
-export interface DetailDto { movie: MovieDto; library_name: string; playable: boolean; images?: ImageDto[]; actors?: ActorDto[]; files?: FileDto[]; modified_at?: string }
+export interface DetailDto { movie: MovieDto; library_name: string; playable: boolean; favorite?: boolean; images?: ImageDto[]; actors?: ActorDto[]; files?: FileDto[]; modified_at?: string }
 
 export function parseMovie(value: unknown): MovieDto {
   if (!isRecord(value) || !isCount(value.id) || value.id === 0 || !isCount(value.library_id)
@@ -96,9 +96,12 @@ export function parseWall(value: unknown): WallDto {
 
 export function parseDetail(value: unknown): DetailDto {
   if (!isRecord(value) || typeof value.library_name !== 'string' || typeof value.playable !== 'boolean') return invalidDto();
+  const favorite = value.userdata == null ? false : obj(value.userdata).IsFavorite;
+  if (typeof favorite !== 'boolean') return invalidDto();
   return { movie: parseMovie(value.movie), library_name: value.library_name, playable: value.playable,
+    favorite,
     images: array(value.images).map(v => { const r = obj(v); return { ImageType: str(r.ImageType), ImageTag: optionalString(r.ImageTag), ImageIndex: optionalNumber(r.ImageIndex) }; }),
-    actors: array(value.actors).map(v => { const r = obj(v); if (typeof r.has_image !== 'boolean') return invalidDto(); return { name: str(r.name), has_image: r.has_image, image_tag: optionalString(r.image_tag) }; }),
+    actors: array(value.actors).map(v => { const r = obj(v); if (typeof r.has_image !== 'boolean' || (r.favorite != null && typeof r.favorite !== 'boolean')) return invalidDto(); return { name: str(r.name), has_image: r.has_image, image_tag: optionalString(r.image_tag), favorite: r.favorite === true }; }),
     files: array(value.files).map(v => { const r = obj(v); if (!isCount(r.index) || !isCount(r.size) || typeof r.probed !== 'boolean') return invalidDto();
       return { index: r.index, size: r.size, probed: r.probed, name: str(r.name), path: str(r.path), role: str(r.role), streams: array(r.streams).map(parseStream) }; }),
     modified_at: optionalString(value.modified_at) };

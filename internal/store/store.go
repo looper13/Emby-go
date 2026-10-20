@@ -32,6 +32,9 @@ type Store struct {
 	actorVersion         atomic.Uint64
 	versionMu            sync.RWMutex
 	libraryVersions      map[string]int64
+	itemFavoritesMu      sync.RWMutex
+	itemFavorites        map[string]bool
+	itemFavoriteVersion  atomic.Uint64
 	// featuresReady 在首次倒排特征回填结束时关闭（见 Open）。
 	featuresReady chan struct{}
 	// visibleCount/visibleVersion 可见影片数缓存（见 visibleMovieCount）。
@@ -141,6 +144,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.loadItemFavorites(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.migrateAnime(); err != nil {
 		db.Close()
 		return nil, err
@@ -241,6 +248,7 @@ func (s *Store) init() error {
 CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL, type TEXT DEFAULT 'movies', enabled INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, library_id INTEGER NOT NULL, source_path TEXT UNIQUE NOT NULL, file_size INTEGER DEFAULT 0, file_mtime TEXT, source_protocol TEXT, source_container TEXT, number TEXT, status TEXT NOT NULL, nfo_path TEXT, output_dir TEXT, title TEXT, original_title TEXT, plot TEXT, year INTEGER, premiered TEXT, rating REAL, director TEXT, series TEXT, maker TEXT, label TEXT, collection TEXT, official_rating TEXT, sortname TEXT, taglines TEXT, provider_id TEXT, genres TEXT, tags TEXT, studios TEXT, poster_path TEXT, backdrop_path TEXT, landscape_path TEXT, runtime_seconds INTEGER DEFAULT 0, additional_parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(library_id) REFERENCES libraries(id));
 CREATE TABLE IF NOT EXISTS userdata (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, position_ticks INTEGER DEFAULT 0, play_count INTEGER DEFAULT 0, played INTEGER DEFAULT 0, last_played_at TEXT, last_stopped_ticks INTEGER DEFAULT -1, is_favorite INTEGER NOT NULL DEFAULT 0, likes INTEGER NOT NULL DEFAULT 0, hide_from_resume INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS item_favorites (item_id TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS scan_fingerprints (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_movies_library_directory ON movies(library_id,output_dir);
 CREATE TABLE IF NOT EXISTS api_probe (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT, path TEXT, query TEXT, body_preview TEXT, created_at TEXT NOT NULL);
@@ -972,17 +980,17 @@ func (s *Store) Movie(id int64) (Movie, error) {
 }
 
 func (s *Store) SearchFiltered(libraryID int64, term, years, genre string, unplayed bool, sortBy string, desc bool, limit, offset int) ([]Movie, int, error) {
-	return s.search(libraryID, term, "", years, genre, "", "", "", "", "", "", unplayed, false, sortBy, desc, limit, offset)
+	return s.search(libraryID, term, "", years, genre, "", "", "", "", "", "", unplayed, nil, sortBy, desc, limit, offset)
 }
 
 // SearchScoped 供合集上下文检索：collection="*" 限定“属于任一合集”，
 // 非空串限定为某个具体合集，空串表示不限合集。
-func (s *Store) SearchScoped(libraryID int64, collection, term, years, genre, tags, studios, person string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
+func (s *Store) SearchScoped(libraryID int64, collection, term, years, genre, tags, studios, person string, unplayed bool, favorite *bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	return s.search(libraryID, term, "", years, genre, tags, studios, person, collection, "", "", unplayed, favorite, sortBy, desc, limit, offset, officialRatings...)
 }
 
 func (s *Store) SearchAll(libraryID int64, term, status, sortBy string, desc bool, limit, offset int) ([]Movie, int, error) {
-	return s.search(libraryID, term, status, "", "", "", "", "", "", "", "", false, false, sortBy, desc, limit, offset)
+	return s.search(libraryID, term, status, "", "", "", "", "", "", "", "", false, nil, sortBy, desc, limit, offset)
 }
 
 // AdminQuery 管理端列表（媒体墙）的查询条件。
@@ -1001,6 +1009,7 @@ type AdminQuery struct {
 	Studio     string
 	Person     string
 	Collection string // ""=不限；"*"=任一合集成员；其它=具体合集名
+	Favorite   *bool
 	// Scrape 按刮削结果筛选：""=不限；"failed"=刮削失败；"confirm"=待人工确认。
 	Scrape     string
 	SortBy     string
@@ -1017,7 +1026,7 @@ func (s *Store) SearchAdmin(q AdminQuery) ([]Movie, int, error) {
 		seed = 1
 	}
 	return s.searchExcluding(nil, q.LibraryID, q.Term, q.Status, "", q.Genre, q.Tag, q.Studio, q.Person, q.Collection, q.Protocol, q.Scrape,
-		false, false, movieOrder{by: q.SortBy, desc: q.Desc, randomSeed: seed, itemTypes: strings.Fields(q.MediaType)}, q.Limit, q.Offset)
+		false, q.Favorite, movieOrder{by: q.SortBy, desc: q.Desc, randomSeed: seed, itemTypes: strings.Fields(q.MediaType)}, q.Limit, q.Offset)
 }
 
 // MoviesForProbe 返回媒体信息探测的候选影片，只挑有 NFO 的条目：
@@ -1061,7 +1070,7 @@ func (s *Store) MoviesForProbe(libraryID int64, status string, limit int) ([]Mov
 	return out, rows.Err()
 }
 
-func (s *Store) search(libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
+func (s *Store) search(libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed bool, favorite *bool, sortBy string, desc bool, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	return s.searchExcluding(nil, libraryID, term, status, years, genre, tags, studios, person, collection, protocol, scrape, unplayed, favorite, movieOrder{by: sortBy, desc: desc}, limit, offset, officialRatings...)
 }
 
@@ -1072,7 +1081,7 @@ type movieOrder struct {
 	itemTypes  []string
 }
 
-func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed, favorite bool, order movieOrder, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
+func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed bool, favorite *bool, order movieOrder, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
 	where := []string{}
 	args := []any{}
 	if len(order.itemTypes) > 0 {
@@ -1175,8 +1184,8 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		if len(terms) > 0 {
 			clauses := make([]string, 0, len(terms))
 			for _, t := range terms {
-				clauses = append(clauses, "EXISTS (SELECT 1 FROM movie_actors ma WHERE ma.movie_id=movies.id AND ma.actor_name LIKE ?)")
-				args = append(args, t)
+				clauses = append(clauses, "(TRIM(movies.director) LIKE ? OR EXISTS (SELECT 1 FROM movie_actors ma WHERE ma.movie_id=movies.id AND ma.actor_name LIKE ?))")
+				args = append(args, t, t)
 			}
 			where = append(where, "("+strings.Join(clauses, " OR ")+")")
 		}
@@ -1184,8 +1193,12 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 	if unplayed {
 		where = append(where, "NOT EXISTS (SELECT 1 FROM userdata WHERE userdata.movie_id=movies.id AND userdata.played=1)")
 	}
-	if favorite {
-		where = append(where, "EXISTS (SELECT 1 FROM userdata WHERE userdata.movie_id=movies.id AND userdata.is_favorite=1)")
+	if favorite != nil {
+		predicate := "EXISTS (SELECT 1 FROM userdata WHERE userdata.movie_id=movies.id AND userdata.is_favorite=1)"
+		if !*favorite {
+			predicate = "NOT " + predicate
+		}
+		where = append(where, predicate)
 	}
 	// status=StatusAll 时可能一条过滤条件都没有（此时 where 为空），
 	// 必须整段省掉 WHERE，否则会拼出 "SELECT ... FROM movies WHERE " 的残缺 SQL。
@@ -1662,10 +1675,13 @@ func (s *Store) Studios(libraryID int64, collection string) ([]string, error) {
 	return s.distinctStrings(libraryID, collection, "studios")
 }
 
-// Persons 返回可见影片涉及的演员名集合（可按媒体库/合集范围过滤）。
+// Persons includes the actor and director identities emitted in People DTOs.
 func (s *Store) Persons(libraryID int64, collection string) ([]string, error) {
-	query := `SELECT DISTINCT ma.actor_name FROM movie_actors ma
-		JOIN movies ON movies.id=ma.movie_id
+	query := `WITH people AS (
+		SELECT movie_id, actor_name AS name FROM movie_actors
+		UNION SELECT id, TRIM(director) FROM movies WHERE TRIM(COALESCE(director,''))<>''
+	) SELECT DISTINCT people.name FROM people
+		JOIN movies ON movies.id=people.movie_id
 		WHERE movies.status IN ('success','manual')`
 	args := []any{}
 	if libraryID > 0 {
@@ -1678,7 +1694,7 @@ func (s *Store) Persons(libraryID int64, collection string) ([]string, error) {
 		query += " AND movies.collection=?"
 		args = append(args, collection)
 	}
-	query += " ORDER BY ma.actor_name"
+	query += " ORDER BY people.name"
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err

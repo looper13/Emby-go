@@ -460,6 +460,9 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Tags", true, a.tagsList},
 		{"GET", "/Studios", true, a.studios},
 		{"GET", "/Persons", true, a.persons},
+		{"GET", "/Genres/:name", true, func(c *gin.Context) { a.namedItemDetail(c, "Genre") }},
+		{"GET", "/Persons/:name", true, func(c *gin.Context) { a.namedItemDetail(c, "Person") }},
+		{"GET", "/Studios/:name", true, func(c *gin.Context) { a.namedItemDetail(c, "Studio") }},
 		{"GET", "/Years", true, a.years},
 		{"GET", "/OfficialRatings", true, a.officialRatings},
 		{"GET", "/Library/VirtualFolders", true, a.virtualFolders},
@@ -521,7 +524,7 @@ func noStore(c *gin.Context) {
 // registerEmby 注册全部 Emby 兼容路由，每条同时挂 PascalCase 与全小写变体。
 func (a *App) registerEmby(g *gin.RouterGroup) {
 	for _, route := range a.embyRoutes() {
-		handlers := make([]gin.HandlerFunc, 0, 3)
+		handlers := []gin.HandlerFunc{normalizeEmbyQuery}
 		// 图片端点除外：serveImage 自己带 public/max-age 与 ETag，挂 noStore 会把
 		// 海报墙的缓存打掉（每张图全量重下）；其余 API 一律禁止缓存。
 		// imageInfo（/Items/:id/Images 结尾、无斜杠）不在排除之列，走 noStore。
