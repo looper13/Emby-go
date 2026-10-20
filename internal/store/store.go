@@ -255,6 +255,7 @@ CREATE TABLE IF NOT EXISTS api_probe (id INTEGER PRIMARY KEY AUTOINCREMENT, meth
 CREATE TABLE IF NOT EXISTS actors (name TEXT PRIMARY KEY, avatar_url TEXT, avatar_tag TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS movie_actors (movie_id INTEGER, actor_name TEXT, PRIMARY KEY(movie_id, actor_name), FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE, FOREIGN KEY(actor_name) REFERENCES actors(name));
+CREATE INDEX IF NOT EXISTS idx_movie_actors_actor_movie ON movie_actors(actor_name,movie_id);
 CREATE TABLE IF NOT EXISTS movie_features (movie_id INTEGER NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, weight INTEGER NOT NULL, PRIMARY KEY(movie_id, kind, value), FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '0');
 CREATE TABLE IF NOT EXISTS administrators (id INTEGER PRIMARY KEY CHECK(id=1), username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -1747,8 +1748,12 @@ var entityColumns = map[string]string{
 // EntityPoster returns a representative stored poster or source reference for
 // request-time artwork discovery. collection limits the scope (""/"*"/name).
 func (s *Store) EntityPoster(kind, name string, libraryID int64, collection string) (string, error) {
-	query := `SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM movies
-		WHERE status IN ('success','manual')`
+	from := "movies"
+	if kind == "Person" {
+		from = "movie_actors ma JOIN movies ON movies.id=ma.movie_id"
+	}
+	query := `SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM ` + from + `
+		WHERE movies.status IN ('success','manual')`
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -1761,7 +1766,7 @@ func (s *Store) EntityPoster(kind, name string, libraryID int64, collection stri
 		args = append(args, collection)
 	}
 	if kind == "Person" {
-		query += " AND EXISTS (SELECT 1 FROM movie_actors ma WHERE ma.movie_id=movies.id AND ma.actor_name=?)"
+		query += " AND ma.actor_name=?"
 		args = append(args, name)
 	} else {
 		column, ok := entityColumns[kind]

@@ -7,10 +7,12 @@ import "context"
 type ActorSummary struct {
 	Name       string
 	MovieCount int
+	AvatarTag  string
 }
 
 func (s *Store) ActorSummaries(ctx context.Context, libraryID int64) ([]ActorSummary, error) {
-	query := `SELECT a.name, COUNT(DISTINCT m.id) FROM actors a
+	// The movie_actors primary key already makes each movie unique per actor.
+	query := `SELECT a.name, COUNT(*), COALESCE(a.avatar_tag,'') FROM actors a
 		JOIN movie_actors ma ON ma.actor_name=a.name
 		JOIN movies m ON m.id=ma.movie_id
 		WHERE m.status IN ('success','manual')`
@@ -28,7 +30,7 @@ func (s *Store) ActorSummaries(ctx context.Context, libraryID int64) ([]ActorSum
 	var out []ActorSummary
 	for rows.Next() {
 		var item ActorSummary
-		if err := rows.Scan(&item.Name, &item.MovieCount); err != nil {
+		if err := rows.Scan(&item.Name, &item.MovieCount, &item.AvatarTag); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

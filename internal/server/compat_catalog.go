@@ -211,6 +211,23 @@ func (a *App) catalogItems(c *gin.Context, kinds []string, entityQuery bool) {
 		total := len(filtered)
 		pageStart := min(start, total)
 		pageEnd := pageStart + min(limit, total-pageStart)
+		images := !strings.EqualFold(c.Query("EnableImages"), "false")
+		people := []string{}
+		if images {
+			for _, value := range filtered[pageStart:pageEnd] {
+				if value.kind == "Person" {
+					people = append(people, value.name)
+				}
+			}
+		}
+		personTags := map[string]string{}
+		if len(people) > 0 {
+			var err error
+			personTags, err = a.personImageTags(c.Request.Context(), people)
+			if err != nil {
+				return nil, err
+			}
+		}
 		items := make([]gin.H, 0, pageEnd-pageStart)
 		for _, value := range filtered[pageStart:pageEnd] {
 			name, kind := value.name, value.kind
@@ -218,8 +235,13 @@ func (a *App) catalogItems(c *gin.Context, kinds []string, entityQuery bool) {
 			switch kind {
 			case "Year":
 				item["Id"] = name
-			case "Studio", "Person", "Genre", "Tag":
-				item = a.namedItem(kind, name, !strings.EqualFold(c.Query("EnableImages"), "false"))
+			case "Person":
+				item = a.namedItem(kind, name, false)
+				if tag := personTags[name]; tag != "" {
+					item["ImageTags"] = gin.H{"Primary": tag}
+				}
+			case "Studio", "Genre", "Tag":
+				item = a.namedItem(kind, name, images)
 			}
 			items = append(items, item)
 		}

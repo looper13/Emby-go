@@ -1,9 +1,14 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"emby-go/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,6 +19,38 @@ type adminActor struct {
 	HasImage   bool   `json:"has_image"`
 	ImageTag   string `json:"image_tag"`
 	Favorite   bool   `json:"favorite"`
+}
+
+func (a *App) adminActorInventory(ctx context.Context, libraryID int64) ([]adminActor, error) {
+	key := responseKey("adminactors-inventory", a.cacheScope(libraryID))
+	raw, err := a.cache.Load(ctx, key, 30*time.Second, func() ([]byte, error) {
+		actors, err := a.db.ActorSummaries(ctx, libraryID)
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(actors))
+		known := make(map[string]store.ActorRef, len(actors))
+		for _, actor := range actors {
+			names = append(names, actor.Name)
+			known[actor.Name] = store.ActorRef{Name: actor.Name, AvatarTag: actor.AvatarTag}
+		}
+		portraits, err := a.personAvatars(ctx, names, known)
+		if err != nil {
+			return nil, err
+		}
+		items := make([]adminActor, 0, len(actors))
+		for _, actor := range actors {
+			portrait := portraits[actor.Name]
+			items = append(items, adminActor{Name: actor.Name, MovieCount: actor.MovieCount, HasImage: portrait.Path != "", ImageTag: portrait.Tag})
+		}
+		return json.Marshal(items)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var items []adminActor
+	err = json.Unmarshal(raw, &items)
+	return items, err
 }
 
 // adminActors is read-only: never downloads portraits or substitutes movie posters.
@@ -32,7 +69,7 @@ func (a *App) adminActors(c *gin.Context) {
 	}
 	ctx, cancel := a.requestContext(c)
 	defer cancel()
-	actors, err := a.db.ActorSummaries(ctx, libraryID)
+	actors, err := a.adminActorInventory(ctx, libraryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -45,9 +82,7 @@ func (a *App) adminActors(c *gin.Context) {
 			c.JSON(http.StatusRequestTimeout, gin.H{"error": "演员列表读取超时，请重试"})
 			return
 		}
-		// Reuse the same short-lived local asset cache as the Person image API.
-		path, tag := a.personAvatar(actor.Name)
-		hasImage := path != ""
+		hasImage := actor.HasImage
 		if hasImage {
 			ready++
 		}
@@ -59,7 +94,8 @@ func (a *App) adminActors(c *gin.Context) {
 			continue
 		}
 		if total >= offset && len(items) < limit {
-			items = append(items, adminActor{Name: actor.Name, MovieCount: actor.MovieCount, HasImage: hasImage, ImageTag: tag, Favorite: favorite})
+			actor.Favorite = favorite
+			items = append(items, actor)
 		}
 		total++
 	}

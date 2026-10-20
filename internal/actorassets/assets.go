@@ -171,6 +171,10 @@ func ReadBounded(dir, rel string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer r.Close()
+	return readBounded(r, rel, limit)
+}
+
+func readBounded(r *os.Root, rel string, limit int64) ([]byte, error) {
 	f, err := r.Open(rel)
 	if err != nil {
 		return nil, err
@@ -249,18 +253,34 @@ func (s *Store) init() error {
 	return nil
 }
 func (s *Store) Load(name string) (Manifest, error) {
-	var m Manifest
-	if b, err := ReadBounded(s.Dir, "layout.json", 4096); err == nil {
+	r, err := os.OpenRoot(s.Dir)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer r.Close()
+	if err := validateLayout(r); err != nil {
+		return Manifest{}, err
+	}
+	return loadManifest(r, name)
+}
+
+func validateLayout(r *os.Root) error {
+	if b, err := readBounded(r, "layout.json", 4096); err == nil {
 		var layout struct {
 			Version int `json:"schema_version"`
 		}
 		if json.Unmarshal(b, &layout) != nil || layout.Version != 1 {
-			return m, errors.New("unsupported actor layout")
+			return errors.New("unsupported actor layout")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return m, err
+		return err
 	}
-	b, err := ReadBounded(s.Dir, filepath.Join(PersonDir(name), "actor.json"), maxManifestBytes)
+	return nil
+}
+
+func loadManifest(r *os.Root, name string) (Manifest, error) {
+	var m Manifest
+	b, err := readBounded(r, filepath.Join(PersonDir(name), "actor.json"), maxManifestBytes)
 	if err != nil {
 		return m, err
 	}
@@ -270,7 +290,19 @@ func (s *Store) Load(name string) (Manifest, error) {
 	return m, validate(m, name)
 }
 func (s *Store) Resolve(name string) (string, string, error) {
-	m, err := s.Load(name)
+	r, err := os.OpenRoot(s.Dir)
+	if err != nil {
+		return "", "", err
+	}
+	defer r.Close()
+	if err := validateLayout(r); err != nil {
+		return "", "", err
+	}
+	return s.resolve(r, name)
+}
+
+func (s *Store) resolve(r *os.Root, name string) (string, string, error) {
+	m, err := loadManifest(r, name)
 	if err != nil {
 		return "", "", err
 	}
@@ -278,7 +310,7 @@ func (s *Store) Resolve(name string) (string, string, error) {
 		return "", "", os.ErrNotExist
 	}
 	rel := filepath.Join(PersonDir(name), filepath.FromSlash(m.Avatar.File))
-	b, err := ReadBounded(s.Dir, rel, MaxImageBytes)
+	b, err := readBounded(r, rel, MaxImageBytes)
 	if err != nil {
 		return "", "", err
 	}
