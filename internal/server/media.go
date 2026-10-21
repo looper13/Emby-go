@@ -431,6 +431,9 @@ func (a *App) playback(c *gin.Context) {
 	}
 	a.enableDetailTracks(c, movie, sourcePath)
 	source := a.mediaSourceWithURL(movie, id, sourcePath, raw, c)
+	// Native players cannot use the browser session cookie. This is the same
+	// authorized HTTP source exposed by /stream, without our account token.
+	source["ExternalStreamUrl"] = raw
 	defaultAudio := source["DefaultAudioStreamIndex"]
 	explicitAudio := false
 	var selection struct {

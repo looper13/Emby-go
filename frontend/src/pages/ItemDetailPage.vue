@@ -7,6 +7,8 @@ import { usePageRequest } from '../composables/usePageRequest';
 import { isValidItemId } from '../router/legacy-url';
 import { viewHistoryKey } from '../router/view-history';
 import ItemHero from '../components/media/ItemHero.vue';
+import DetailPlaybackControls from '../components/media/DetailPlaybackControls.vue';
+import type { TrackSelection } from '../lib/player-tracks';
 import { useTasksStore } from '../stores/tasks';
 import { useToastStore } from '../stores/toasts';
 import { usePlayerStore } from '../stores/player';
@@ -27,6 +29,7 @@ const route = useRoute(); const router = useRouter(); const history = inject(vie
 const scope = usePageRequest(); const data = shallowRef<DetailDto | null>(null); const error = ref('');
 const tasks = useTasksStore(); const toasts = useToastStore();
 const player = usePlayerStore(); const actions = useMediaActions(() => enter(true), () => route.fullPath);
+const playbackSelection = shallowRef<TrackSelection>();
 const scrapePreview = useScrapePreviewStore(); let mounted = true; onScopeDispose(() => { mounted = false; });
 function scrape() { if (!data.value || tasks.mutationBusy) return; const path = route.fullPath, id = data.value.movie.id; void scrapePreview.open(id, () => { if (route.fullPath === path && data.value?.movie.id === id && mounted) return enter(true); }); }
 const plotExpanded = ref(false); const filesExpanded = ref(false); const similar = shallowRef<SimilarDto[]>([]); let similarLoaded = false;
@@ -70,7 +73,9 @@ watch(() => tasks.revision, () => { void enter(true); });
 </script>
 <template>
   <article v-if="data" class="item-page" style="grid-template-columns:minmax(0,1fr)">
-    <ItemHero :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity" />
+    <ItemHero :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie, playbackSelection)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity">
+      <template #playback><DetailPlaybackControls v-if="data.playable" :key="data.movie.id" :item-id="data.movie.id" :refresh-key="data" @selection="playbackSelection = $event" /></template>
+    </ItemHero>
     <div class="item-sections" style="grid-template-columns:minmax(0,1fr)">
       <PlotSection :plot="data.movie.Plot" :expanded="plotExpanded" @toggle="plotExpanded = !plotExpanded" />
       <TrailerSection :url="data.movie.trailer_url?.trim() || ''" :thumb="trailerThumb" :fallback="data.movie.cover_url" @play="player.trailer(data.movie, data.movie.trailer_url || '')" />

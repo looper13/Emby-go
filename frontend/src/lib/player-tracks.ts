@@ -40,13 +40,45 @@ export interface PlaybackSource {
   DefaultAudioStreamIndex?: number; DefaultSubtitleStreamIndex?: number;
   SupportsAudioSelection?: boolean; RunTimeTicks?: number;
   TrackRevision?: string; ResumePositionTicks?: number;
+  ExternalStreamUrl?: string;
 }
 
-const preferences = new Map<string, { audio?: string; subtitle?: string }>();
-export function trackPreference(key: string) { return preferences.get(key); }
-export function rememberTrack(key: string, kind: 'audio' | 'subtitle', value: string) {
-  preferences.set(key, { ...preferences.get(key), [kind]: value });
-  if (preferences.size > 128) preferences.delete(preferences.keys().next().value!);
+export interface TrackSelection {
+  sourceId: string;
+  revision?: string;
+  audioIndex?: number;
+  subtitleIndex?: number;
+}
+export function audioTrackOptions(source: PlaybackSource, nativeAudio = false) {
+  return source.MediaStreams.filter(track => track.Type === 'Audio').map(track => ({
+    value: track.Index,
+    label: trackLabel(track) + (track.ContainerIndexKnown === false ? ' · 需重新探测' : ''),
+    disabled: track.Index !== source.DefaultAudioStreamIndex &&
+      !(nativeAudio && !track.IsExternal) && (!source.SupportsAudioSelection || track.ContainerIndexKnown === false),
+  }));
+}
+export function subtitleTrackOptions(source: PlaybackSource, nativeSubtitles = false) {
+  return source.MediaStreams.filter(track => track.Type === 'Subtitle').map(track => {
+    const nativeOnly = track.IsTextSubtitleStream === false || (track.IsExternal && !['srt', 'subrip', 'vtt', 'webvtt', 'ass', 'ssa'].includes(track.Codec?.toLowerCase() ?? ''));
+    const available = !!track.DeliveryUrl || (nativeSubtitles && !track.IsExternal);
+    return { value: track.Index, label: trackLabel(track) + (nativeOnly ? ' · 需原生客户端' : !available ? ' · 需启用 FFmpeg' : ''), disabled: !available || nativeOnly };
+  });
+}
+export function selectionMatches(source: PlaybackSource, selection?: TrackSelection) {
+  return selection?.sourceId === source.Id && selection.revision === source.TrackRevision;
+}
+export function resolveTrackSelection(source: PlaybackSource, selection?: TrackSelection, nativeAudio = false) {
+  const audio = audioTrackOptions(source, nativeAudio), subtitles = subtitleTrackOptions(source, nativeAudio);
+  const defaultAudio = audio.find(track => track.value === source.DefaultAudioStreamIndex && !track.disabled)?.value ?? -1;
+  const defaultSubtitle = subtitles.find(track => track.value === source.DefaultSubtitleStreamIndex && !track.disabled)?.value ?? -1;
+  const matched = selectionMatches(source, selection);
+  return {
+    audioIndex: matched && audio.some(track => track.value === selection?.audioIndex && !track.disabled) ? selection!.audioIndex! : defaultAudio,
+    subtitleIndex: matched && (selection?.subtitleIndex === -1 || subtitles.some(track => track.value === selection?.subtitleIndex && !track.disabled)) ? selection!.subtitleIndex! : defaultSubtitle,
+  };
+}
+export function supportsNativeAudio(source?: PlaybackSource) {
+  return /^(m3u8|m3u)$/iu.test(source?.Container ?? '') || 'audioTracks' in HTMLMediaElement.prototype;
 }
 export function parsePlaybackSource(raw: unknown): PlaybackSource {
   const response = raw as { MediaSources?: PlaybackSource[] };

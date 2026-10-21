@@ -24,11 +24,15 @@ const backdrop = computed(() => props.movie.BackdropPath ? imageURL(props.movie.
         <p class="detail-sub">{{ [numberUnlessInTitle(movie.Title, movie.Number), movie.Year, fmtDuration(movie.RuntimeSeconds), movie.Rating ? `★ ${movie.Rating}` : ''].filter(Boolean).join(' · ') || '—' }}</p>
         <div class="detail-badges"><span class="badge" :class="movie.Status">{{ statusText[movie.Status] || movie.Status }}</span><span v-if="movie.collection" class="badge manual">合集 {{ movie.collection }}</span><button v-for="tagName in movie.Tags" :key="tagName" class="tag-chip" data-entity-key="tag" :data-entity-value="tagName" :title="'按标签筛选：' + tagName" @click="emit('entity', 'tag', tagName)">#{{ tagName }}</button></div>
         <div class="item-hero-actions"><button v-if="playable ?? ['success', 'manual'].includes(movie.Status)" id="detail-play" class="btn btn-accent" @click="emit('play')"><Play :size="15" aria-hidden="true" /><span>播放</span></button><span v-else class="hint" style="margin:0">该媒体不可播放（待补录 / 协议不兼容）</span><button id="detail-probe" class="btn" :disabled="busy?.has('probe:' + movie.id)" @click="emit('probe')"><Activity :size="15" aria-hidden="true" /><span>探测媒体信息</span></button><button v-if="!movie.television" id="detail-scrape" class="btn" @click="emit('scrape')"><Search :size="15" aria-hidden="true" /><span>刮削</span></button><button id="detail-reread" class="btn" :disabled="busy?.has('reread:' + movie.id)" @click="emit('reread')"><RefreshCw :size="15" aria-hidden="true" /><span>重读源</span></button></div>
+        <slot name="playback" />
       </div>
     </div>
   </header>
 </template>
 <style scoped>
+.item-hero { overflow: visible; }
+.item-hero-bg { overflow: hidden; border-radius: inherit; }
+.item-hero-text { flex: 1; width: 100%; }
 .item-title-actions { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .item-title-actions h1 { min-width: 0; overflow-wrap: anywhere; }
 </style>

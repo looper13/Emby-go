@@ -15,6 +15,8 @@ import { apiClient } from "../api/client";
 import ReadState from "../components/common/ReadState.vue";
 import AnimeReleases from "../components/anime/AnimeReleases.vue";
 import AnimeBindingDialog from "../components/anime/AnimeBindingDialog.vue";
+import DetailPlayButton from '../components/media/DetailPlayButton.vue';
+import type { TrackSelection } from '../lib/player-tracks';
 const route = useRoute(),
   router = useRouter(),
   toasts = useToastStore(),
@@ -109,7 +111,7 @@ async function refresh() {
   await action("refresh", () => animeApi.refresh({ id: Number(id.value) }));
   watchTask();
 }
-async function play(target: string, name: string) {
+async function play(target: string, name: string, selection?: TrackSelection) {
   const requested = id.value;
   await action(target, async () => {
     const source = await animeApi.playback(target);
@@ -135,6 +137,7 @@ async function play(target: string, name: string) {
       type: playbackType(source.Container),
       itemId: target,
       resumeTicks: ticks,
+      selection,
     });
   });
 }
@@ -331,14 +334,7 @@ function releasePage(delta: number) {
             @click="check(filmID)"
           >
             检查资源</button
-          ><button
-            v-if="data.binding.status === 'playable'"
-            class="btn btn-accent"
-            :disabled="!!busy"
-            @click="play(filmID, title)"
-          >
-            播放
-          </button>
+          ><DetailPlayButton v-if="data.binding.status === 'playable'" :item-id="filmID" :disabled="!!busy" @play="play(filmID, title, $event)" />
         </div>
       </div>
     </section>
@@ -396,14 +392,7 @@ function releasePage(delta: number) {
             @click="check(item.item_id)"
           >
             检查资源</button
-          ><button
-            v-if="item.binding.status === 'playable'"
-            class="btn btn-accent btn-sm"
-            :disabled="!!busy"
-            @click="play(item.item_id, `${title} / ${item.episode.sort}`)"
-          >
-            播放
-          </button>
+          ><DetailPlayButton v-if="item.binding.status === 'playable'" :item-id="item.item_id" :disabled="!!busy" @play="play(item.item_id, `${title} / ${item.episode.sort}`, $event)" />
         </div>
       </article>
       <div class="anime-pagination">

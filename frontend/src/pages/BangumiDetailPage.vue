@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw, Play, Link, Check, Search } from '@lucide/vue';
+import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw, Link, Check, Search } from '@lucide/vue';
 import { animeApi, animeStatus, type AnimeBinding } from '../api/anime';
 import { apiClient } from '../api/client';
 import { useAdminRead } from '../composables/useAdminRead';
@@ -17,6 +17,8 @@ import type { TMDBMapping } from '../api/anime-artwork';
 import FavoriteButton from '../components/media/FavoriteButton.vue';
 import { favoritesApi, type FavoriteItem } from '../api/favorites';
 import { usePageRequest } from '../composables/usePageRequest';
+import DetailPlayButton from '../components/media/DetailPlayButton.vue';
+import type { TrackSelection } from '../lib/player-tracks';
 const route = useRoute(), player = usePlayerStore(), toasts = useToastStore();
 const id = computed(() => String(route.params.id));
 const { data, error, loading, load, active } = useAdminRead(signal => animeApi.bangumiSubject(id.value, signal));
@@ -38,11 +40,11 @@ onScopeDispose(() => clearInterval(timer));
 watch(id, () => { clearInterval(timer); dialog.value=null;tmdbDialog.value=null;offset.value=0;void load(); });
 async function action(fn:()=>Promise<unknown>) { if(busy.value)return;busy.value=true;try{await fn();if(active())await load();}catch(e){toasts.show(e instanceof Error?e.message:'操作失败','error');}finally{busy.value=false;} }
 async function refresh() { await action(()=>animeApi.refreshSubject(id.value));clearInterval(timer);timer=setInterval(async()=>{try{const p=await animeApi.progress();if(!p.running){clearInterval(timer);if(p.error)toasts.show(p.error,'error');await load();}}catch{clearInterval(timer);}},1500); }
-async function play(target:string,title:string) { await action(async()=>{
+async function play(target:string,title:string,selection?:TrackSelection) { await action(async()=>{
   const requested=id.value;const source=await animeApi.playback(target);const detail=await apiClient.request(`/Items/${encodeURIComponent(target)}`,{auth:'required'});
   const ud=typeof detail==='object'&&detail!==null&&'UserData' in detail?detail.UserData:null;
   const ticks=typeof ud==='object'&&ud!==null&&'PlaybackPositionTicks' in ud?Number(ud.PlaybackPositionTicks):0;
-  if(active()&&requested===id.value)player.open({title,url:`/Videos/${encodeURIComponent(target)}/stream`,proxyURL:`/Videos/${encodeURIComponent(target)}/proxy`,type:playbackType(source.Container),itemId:target,resumeTicks:ticks});
+  if(active()&&requested===id.value)player.open({title,url:`/Videos/${encodeURIComponent(target)}/stream`,proxyURL:`/Videos/${encodeURIComponent(target)}/proxy`,type:playbackType(source.Container),itemId:target,resumeTicks:ticks,selection});
 }); }
 function bind(target:string,title:string,binding:AnimeBinding){dialog.value={target,title,binding};}
 function check(target:string){void action(()=>animeApi.check(target));}
@@ -59,9 +61,9 @@ function check(target:string){void action(()=>animeApi.check(target));}
     <nav class="bangumi-tabs" aria-label="番剧内容"><button v-for="tab in [{id:'episodes',label:'章节'},{id:'people',label:'角色与制作人员'},{id:'stills',label:'每集剧照'},{id:'releases',label:'发布资源'}]" :key="tab.id" :aria-pressed="section===tab.id" :class="{selected:section===tab.id}" @click="section=tab.id">{{ tab.label }}</button></nav>
     <section v-if="section==='episodes'" class="panel">
       <h2>{{ data.binding ? '剧场版' : '章节' }}</h2>
-      <div v-if="data.binding" class="anime-episode"><div><strong>{{ data.subject.name }}</strong><p>{{ animeStatus(data.binding.status) }}</p></div><div class="row-actions"><button class="btn" :disabled="busy" @click="bind(movie,data.subject.name,data.binding)"><Link :size="16" />关联媒体</button><button v-if="data.binding.movie_id" class="btn" :disabled="busy" @click="check(movie)"><Check :size="16" />检查资源</button><button v-if="data.binding.status==='playable'" class="btn btn-accent" :disabled="busy" @click="play(movie,data.subject.name)"><Play :size="16" />播放</button></div></div>
+      <div v-if="data.binding" class="anime-episode"><div><strong>{{ data.subject.name }}</strong><p>{{ animeStatus(data.binding.status) }}</p></div><div class="row-actions"><button class="btn" :disabled="busy" @click="bind(movie,data.subject.name,data.binding)"><Link :size="16" />关联媒体</button><button v-if="data.binding.movie_id" class="btn" :disabled="busy" @click="check(movie)"><Check :size="16" />检查资源</button><DetailPlayButton v-if="data.binding.status==='playable'" :item-id="movie" :disabled="busy" @play="play(movie,data.subject.name,$event)" /></div></div>
       <template v-else>
-        <div v-for="item in episodes" :key="item.episode.id" class="anime-episode"><div><strong>{{ item.episode.season===0?'特别篇':'正片' }} {{ item.episode.sort }} · {{ item.episode.name || item.episode.original_name }}</strong><p>{{ animeStatus(item.binding.status) }}<span v-if="!item.episode.active"> · 来源已不再列出</span></p><small v-if="item.binding.error">{{ item.binding.error }}</small></div><div class="row-actions"><button class="btn" :disabled="busy" @click="bind(item.item_id,item.episode.name,item.binding)"><Link :size="16" />关联媒体</button><button v-if="item.binding.movie_id" class="btn" :disabled="busy" @click="check(item.item_id)"><Check :size="16" />检查资源</button><button v-if="item.binding.status==='playable'" class="btn btn-accent" :disabled="busy" @click="play(item.item_id,item.episode.name)"><Play :size="16" />播放</button></div></div>
+        <div v-for="item in episodes" :key="item.episode.id" class="anime-episode"><div><strong>{{ item.episode.season===0?'特别篇':'正片' }} {{ item.episode.sort }} · {{ item.episode.name || item.episode.original_name }}</strong><p>{{ animeStatus(item.binding.status) }}<span v-if="!item.episode.active"> · 来源已不再列出</span></p><small v-if="item.binding.error">{{ item.binding.error }}</small></div><div class="row-actions"><button class="btn" :disabled="busy" @click="bind(item.item_id,item.episode.name,item.binding)"><Link :size="16" />关联媒体</button><button v-if="item.binding.movie_id" class="btn" :disabled="busy" @click="check(item.item_id)"><Check :size="16" />检查资源</button><DetailPlayButton v-if="item.binding.status==='playable'" :item-id="item.item_id" :disabled="busy" @play="play(item.item_id,item.episode.name,$event)" /></div></div>
         <p v-if="!data.episodes.length">暂无章节</p><div class="anime-pagination"><button class="btn" title="上一页" aria-label="上一页" :disabled="offset===0" @click="offset=Math.max(0,offset-50)"><ChevronLeft :size="18" /></button><span>{{ data.episodes.length }} 个章节</span><button class="btn" title="下一页" aria-label="下一页" :disabled="offset+50>=data.episodes.length" @click="offset+=50"><ChevronRight :size="18" /></button></div>
       </template>
     </section>

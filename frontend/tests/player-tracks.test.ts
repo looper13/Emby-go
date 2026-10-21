@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { bindNativeTracks, offsetVtt, parsePlaybackSource, rememberTrack, subtitlePath, trackLabel, trackPreference } from '../src/lib/player-tracks';
+import { bindNativeTracks, offsetVtt, parsePlaybackSource, resolveTrackSelection, subtitlePath, trackLabel } from '../src/lib/player-tracks';
 
 describe('playback track delivery', () => {
   it('retains actual stream indexes and rejects missing sources', () => {
@@ -33,8 +33,7 @@ describe('playback track delivery', () => {
     expect(update).toHaveBeenCalledTimes(count);
   });
   it('keeps user selection separate for replaced media sources', () => {
-    rememberTrack('movie:old-source', 'audio', 'server:7'); rememberTrack('movie:old-source', 'subtitle', '-1');
-    expect(trackPreference('movie:old-source')).toEqual({ audio: 'server:7', subtitle: '-1' });
-    expect(trackPreference('movie:new-source')).toBeUndefined();
+    const source = { Id: 'new-source', DefaultAudioStreamIndex: 1, SupportsAudioSelection: true, MediaStreams: [{ Type: 'Audio', Index: 1 }, { Type: 'Audio', Index: 7 }] };
+    expect(resolveTrackSelection(source, { sourceId: 'old-source', audioIndex: 7, subtitleIndex: -1 })).toEqual({ audioIndex: 1, subtitleIndex: -1 });
   });
 });

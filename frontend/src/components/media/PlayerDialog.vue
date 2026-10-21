@@ -7,7 +7,7 @@ import {
 } from '../../lib/player';
 import { useToastStore } from '../../stores/toasts';
 import { apiClient } from '../../api/client';
-import { offsetVtt, parsePlaybackSource, rememberTrack, trackPreference, subtitlePath, trackLabel, type PlaybackSource, type TrackEngine } from '../../lib/player-tracks';
+import { offsetVtt, parsePlaybackSource, resolveTrackSelection, selectionMatches, subtitleTrackOptions, supportsNativeAudio, subtitlePath, trackLabel, type PlaybackSource, type TrackEngine } from '../../lib/player-tracks';
 import { playbackType } from '../../lib/player';
 const props = defineProps<{ options: PlayerOptions }>();
 const emit = defineEmits<{ close: [] }>();
@@ -29,27 +29,12 @@ let subtitleRequest: AbortController | undefined;
 let subtitleObjectURL: string | undefined;
 let subtitleElement: HTMLTrackElement | undefined;
 let generation = 0;
-let preferenceKey = '';
-let initialAudioChoice: string | undefined;
-let initialHlsChoice: string | undefined;
-let initialHlsSubtitle: string | undefined;
+let initialNativeAudio: number | undefined;
+let disableNativeSubtitles = false;
 let baseOptions = { ...props.options };
 const duration = computed(() => (source.value?.RunTimeTicks ?? 0) / 1e7);
 function clock(seconds: number) { const value = Math.max(0, Math.floor(seconds)); return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`; }
-const audioOptions = computed(() => {
-  const native = !remuxSession.value ? engine.value?.audio() ?? [] : [];
-  return [...native.map(track => ({ value: 'hls:'+track.id, label: track.label, disabled: false })),
-  ...(source.value?.MediaStreams ?? []).filter(track => track.Type === 'Audio' && (!native.length || track.IsExternal)).map(track => ({
-    value: 'server:'+track.Index, label: trackLabel(track)+(track.ContainerIndexKnown === false ? ' · 需重新探测' : ''), disabled: (!source.value?.SupportsAudioSelection || track.ContainerIndexKnown === false) && track.Index !== source.value?.DefaultAudioStreamIndex,
-  }))];
-});
-const subtitleOptions = computed(() => [
-  ...(engine.value?.subtitles() ?? []).map(track => ({ value: 'hls:'+track.id, label: track.label, disabled: false })),
-  ...(source.value?.MediaStreams ?? []).filter(track => track.Type === 'Subtitle').map(track => {
-    const nativeOnly = track.IsTextSubtitleStream === false || (track.IsExternal && !['srt', 'subrip', 'vtt', 'webvtt', 'ass', 'ssa'].includes(track.Codec?.toLowerCase() ?? ''));
-    return { value: 'server:'+track.Index, label: trackLabel(track)+(nativeOnly ? ' · 需原生客户端' : !track.DeliveryUrl ? ' · 需启用 FFmpeg' : ''), disabled: !track.DeliveryUrl || nativeOnly };
-  }),
-]);
+const subtitleOptions = computed(() => source.value ? subtitleTrackOptions(source.value, supportsNativeAudio(source.value)) : []);
 let active = true;
 let session: ReturnType<typeof managePlayer> | undefined;
 let progressTimer: ReturnType<typeof setInterval> | undefined;
@@ -118,16 +103,22 @@ function clearSubtitle() {
 async function chooseSubtitle(value: string) {
   subtitleRequest?.abort(); subtitleRequest = new AbortController();
   const request = subtitleRequest;
-  trackError.value = '';
   try {
-    if (value === '-1' || value.startsWith('hls:')) {
+    if (value === '-1') {
       selectedSubtitle.value = value;
-      if (preferenceKey) rememberTrack(preferenceKey, 'subtitle', value);
-      engine.value?.selectSubtitle(value === '-1' ? '-1' : value.slice(4));
+      engine.value?.selectSubtitle('-1');
       clearSubtitle(); return;
     }
     const track = source.value?.MediaStreams.find(track => 'server:'+track.Index === value && track.Type === 'Subtitle');
-    if (!track?.DeliveryUrl || !subtitleOptions.value.some(option => option.value === value && !option.disabled)) throw new Error('该字幕暂不支持网页加载');
+    if (track && !track.DeliveryUrl && !track.IsExternal && supportsNativeAudio(source.value)) {
+      const declared = source.value!.MediaStreams.filter(entry => entry.Type === 'Subtitle' && !entry.IsExternal);
+      const available = engine.value?.subtitles() ?? [];
+      const target = available.length === declared.length ? available[declared.findIndex(entry => entry.Index === track.Index)] : undefined;
+      if (!target) throw new Error('浏览器未提供所选字幕轨道');
+      if (engine.value?.subtitleId() !== target.id) engine.value?.selectSubtitle(target.id);
+      return;
+    }
+    if (!track?.DeliveryUrl || !subtitleOptions.value.some(option => 'server:'+option.value === value && !option.disabled)) throw new Error('该字幕暂不支持网页加载');
     let text = await apiClient.request(subtitlePath(track.DeliveryUrl), { auth: 'required', responseType: 'text', signal: request.signal });
     if (!active || request.signal.aborted || typeof text !== 'string') return;
     if (offset.value > 0) text = offsetVtt(text, offset.value);
@@ -144,7 +135,6 @@ async function chooseSubtitle(value: string) {
     subtitleObjectURL = objectURL; subtitleElement = element;
     session?.player.video?.appendChild(element); element.track.mode = 'showing';
     selectedSubtitle.value = value;
-    if (preferenceKey) rememberTrack(preferenceKey, 'subtitle', value);
   } catch (error) {
     if (!request.signal.aborted && active) trackError.value = error instanceof Error ? error.message : '字幕加载失败';
   }
@@ -162,14 +152,17 @@ async function mountPlayback(options: PlayerOptions, state?: ReturnType<typeof p
   session = managePlayer(stage.value, { ...options, onTracks(next) {
     if (!active || serial !== generation) return;
     engine.value = { ...next };
-    if (!remuxSession.value && next.audio().length) selectedAudio.value = 'hls:'+next.audioId();
-    if (initialHlsChoice && next.audio().some(track => 'hls:'+track.id === initialHlsChoice)) {
-      const choice = initialHlsChoice; initialHlsChoice = undefined; next.selectAudio(choice.slice(4)); selectedAudio.value = choice;
+    if (!remuxSession.value && initialNativeAudio !== undefined) {
+      const tracks = source.value?.MediaStreams.filter(track => track.Type === 'Audio' && !track.IsExternal) ?? [];
+      const index = tracks.findIndex(track => track.Index === initialNativeAudio);
+      const target = next.audio().length === tracks.length ? next.audio()[index] : undefined;
+      if (target) { initialNativeAudio = undefined; next.selectAudio(target.id); }
     }
-    if (initialHlsSubtitle && next.subtitles().some(track => 'hls:'+track.id === initialHlsSubtitle)) {
-      const choice = initialHlsSubtitle; initialHlsSubtitle = undefined; selectedSubtitle.value = choice; next.selectSubtitle(choice.slice(4));
-    }
-    if (!selectedSubtitle.value.startsWith('hls:') && next.subtitleId() !== '-1') next.selectSubtitle('-1');
+    const nativeSubtitles = source.value?.MediaStreams.filter(track => track.Type === 'Subtitle' && !track.IsExternal) ?? [];
+    const subtitleIndex = nativeSubtitles.findIndex(track => 'server:'+track.Index === selectedSubtitle.value && !track.DeliveryUrl);
+    const subtitle = !remuxSession.value && next.subtitles().length === nativeSubtitles.length ? next.subtitles()[subtitleIndex] : undefined;
+    if (subtitle) { if (next.subtitleId() !== subtitle.id) next.selectSubtitle(subtitle.id); }
+    else if (disableNativeSubtitles && next.subtitleId() !== '-1') next.selectSubtitle('-1');
   } }, factory, message => toasts.show(message, 'error'));
   trackHost.value = stage.value.querySelector<HTMLElement>('.art-video-player') ?? stage.value;
   let loaded = false;
@@ -182,7 +175,7 @@ async function mountPlayback(options: PlayerOptions, state?: ReturnType<typeof p
       if (state.paused) video.pause(); else void session.player.play().catch(() => {});
     } else if (!resumed && options.resumeTicks) { video.currentTime = options.resumeTicks / 1e7; resumed = true; }
     if (selectedSubtitle.value !== '-1') void chooseSubtitle(selectedSubtitle.value);
-    if (initialAudioChoice) { const choice = initialAudioChoice; initialAudioChoice = undefined; void chooseAudio(choice); }
+    if (initialNativeAudio !== undefined) trackError.value = '浏览器尚未提供所选音轨；可返回详情页启用 FFmpeg 后重试';
   });
   session.player.on('video:timeupdate', () => { if (serial === generation) position.value = offset.value + (session?.player.video?.currentTime ?? 0); });
   session.player.on('video:playing', () => { began = true; });
@@ -193,10 +186,6 @@ async function mountPlayback(options: PlayerOptions, state?: ReturnType<typeof p
 async function chooseAudio(value: string, seek?: number) {
   if (changingAudio.value) return;
   trackError.value = '';
-  if (value.startsWith('hls:') && seek === undefined) {
-    engine.value?.selectAudio(value.slice(4)); selectedAudio.value = value;
-    if (preferenceKey) rememberTrack(preferenceKey, 'audio', value); return;
-  }
   if (!props.options.itemId || !value.startsWith('server:')) return;
   changingAudio.value = true;
   const state = playbackState();
@@ -210,7 +199,6 @@ async function chooseAudio(value: string, seek?: number) {
     remuxSession.value = result.SessionId; offset.value = result.StartTimeTicks / 1e7;
     await mountPlayback({ ...baseOptions, type: 'm3u8', url: result.Url, proxyURL: undefined, resumeTicks: undefined, hlsStartPosition: 0 }, state ? { ...state, time: 0 } : undefined);
     selectedAudio.value = value;
-    if (preferenceKey) rememberTrack(preferenceKey, 'audio', value);
   } catch (error) {
     if (active && !controller.signal.aborted) {
       trackError.value = error instanceof Error ? error.message : '音轨切换失败';
@@ -228,18 +216,19 @@ onMounted(async () => {
         source.value = parsePlaybackSource(await apiClient.request(`/Items/${encodeURIComponent(props.options.itemId)}/PlaybackInfo`, { auth: 'required', method: 'POST', readOnly: true, signal: controller.signal }));
         baseOptions = { ...baseOptions, type: playbackType(source.value.Container) };
         if (baseOptions.resumeTicks == null && source.value.ResumePositionTicks) baseOptions.resumeTicks = source.value.ResumePositionTicks;
-        selectedAudio.value = 'server:'+source.value.DefaultAudioStreamIndex;
-        const initial = 'server:'+source.value.DefaultSubtitleStreamIndex;
-        if (subtitleOptions.value.some(track => track.value === initial && !track.disabled)) selectedSubtitle.value = initial;
-        preferenceKey = props.options.itemId+':'+(source.value.TrackRevision ?? '');
-        const preference = trackPreference(preferenceKey);
-        if (preference?.subtitle?.startsWith('hls:')) initialHlsSubtitle = preference.subtitle;
-        if (preference?.subtitle === '-1' || subtitleOptions.value.some(track => track.value === preference?.subtitle && !track.disabled)) selectedSubtitle.value = preference!.subtitle!;
-        if (preference?.audio?.startsWith('hls:')) initialHlsChoice = preference.audio;
-        else if (preference?.audio && audioOptions.value.some(track => track.value === preference.audio && !track.disabled) && preference.audio !== selectedAudio.value) initialAudioChoice = preference.audio;
+        const selected = resolveTrackSelection(source.value, props.options.selection, supportsNativeAudio(source.value));
+        selectedAudio.value = 'server:'+selected.audioIndex;
+        selectedSubtitle.value = selected.subtitleIndex === -1 ? '-1' : 'server:'+selected.subtitleIndex;
+        disableNativeSubtitles = selected.subtitleIndex !== -1 ||
+          (selectionMatches(source.value, props.options.selection) && props.options.selection?.subtitleIndex === -1);
+        if (props.options.selection && !selectionMatches(source.value, props.options.selection)) trackError.value = '媒体轨道已变化，已使用默认选项';
+        if (selected.audioIndex !== -1 && selected.audioIndex !== source.value.DefaultAudioStreamIndex) {
+          if (source.value.SupportsAudioSelection) await chooseAudio(selectedAudio.value, (baseOptions.resumeTicks ?? 0) / 1e7);
+          else initialNativeAudio = selected.audioIndex;
+        }
       } catch (error) { if (active) trackError.value = error instanceof Error ? error.message : '选轨信息加载失败'; }
     }
-    await mountPlayback(baseOptions);
+    if (!session) await mountPlayback(baseOptions);
     if (active && props.options.itemId) progressTimer = setInterval(() => reportProgress(), 10000);
   } catch {
     if (active) {
@@ -280,17 +269,10 @@ onScopeDispose(() => {
           ✕
         </button>
       </div>
+      <p v-if="!trackHost" class="player-loading" role="status">{{ changingAudio ? '正在准备所选音轨…' : '正在加载播放器…' }}</p>
       <div id="player-stage" ref="stage" class="player-stage"></div>
-      <Teleport v-if="trackHost && options.itemId" :to="trackHost">
+      <Teleport v-if="trackHost && options.itemId && (changingAudio || trackError || remuxSession)" :to="trackHost">
         <div class="player-track-toolbar" @keydown.stop @click.stop @dblclick.stop>
-          <label>音轨 <select aria-label="选择音轨" :value="selectedAudio" :disabled="changingAudio || !audioOptions.length" @change="chooseAudio(($event.target as HTMLSelectElement).value)">
-            <option v-if="!audioOptions.length" value="">默认音轨</option>
-            <option v-for="track in audioOptions" :key="track.value" :value="track.value" :disabled="track.disabled">{{ track.label }}{{ track.disabled ? ' · 需启用 FFmpeg' : '' }}</option>
-          </select></label>
-          <label>字幕 <select aria-label="选择字幕" :value="selectedSubtitle" @change="chooseSubtitle(($event.target as HTMLSelectElement).value)">
-            <option value="-1">关闭字幕</option>
-            <option v-for="track in subtitleOptions" :key="track.value" :value="track.value" :disabled="track.disabled">{{ track.label }}</option>
-          </select></label>
           <span v-if="changingAudio" role="status">正在切换音轨…</span>
           <span v-if="trackError" class="player-track-error" role="alert">{{ trackError }}</span>
           <label v-if="remuxSession && duration > 0" class="player-track-seek">播放位置
@@ -303,9 +285,9 @@ onScopeDispose(() => {
   </div>
 </template>
 <style scoped>
+.player-loading { position: absolute; top: 50%; left: 16px; right: 16px; text-align: center; color: #fff; font-size: 14px; }
 .player-track-toolbar { position: absolute; z-index: 30; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; background: rgb(0 0 0 / 75%); border-radius: 6px; color: #fff; font-size: 12px; }
 .player-track-toolbar label { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1 1 120px; white-space: nowrap; }
-.player-track-toolbar select { min-width: 0; max-width: 100%; width: 100%; padding: 4px; background: #242424; color: #fff; border: 1px solid #777; border-radius: 4px; }
 .player-track-error { flex-basis: 100%; color: #ffb6ac; }
 .player-track-toolbar .player-track-seek { flex-basis: 100%; }
 .player-track-seek input { flex: 1; min-width: 30px; }
