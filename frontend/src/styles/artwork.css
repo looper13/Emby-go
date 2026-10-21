@@ -1,7 +1,12 @@
 /* 剧照灯箱：在详情页内查看原图并左右切换，替代原先打开新标签页的方式。
    Vue 专有样式，legacy.css 需与旧版 style.css 保持逐字节一致，不能写在那里。 */
+.detail-artwork-grid {
+  min-width: 0;
+  grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr));
+}
 .detail-artwork-grid button {
   display: block;
+  min-width: 0;
   width: 100%;
   padding: 0;
   border: 0;
