@@ -78,6 +78,7 @@ function browseSeries(series: string, season: string) {
 }
 function clearEntity() { clearTimeout(timer); const q = { ...route.query }; for (const [key] of entityParams) delete q[key]; void router.push({ path: '/items', query: q }); }
 function refresh() {
+  wall.dirty = true;
   const card = document.activeElement?.closest<HTMLElement>('.wall-card');
   return enter({ scrollY: window.scrollY, wallCount: wall.items.length, focusID: card?.dataset.play ?? '' });
 }
@@ -92,8 +93,21 @@ async function load(retry = false) {
   await nextTick();
   return loaded;
 }
+async function revalidate() {
+  const current = request;
+  if (!current?.isCurrent()) return;
+  const refreshed = await wall.refresh(current.signal);
+  await nextTick();
+  if (!current.isCurrent()) return;
+  if (refreshed && wall.dirty) { void revalidate(); return; }
+  maybeLoad();
+}
+function retryLoad() {
+  if (wall.refreshError) void revalidate();
+  else void load(true).then(maybeLoad);
+}
 function maybeLoad() {
-  if (showWall.value && ready.value && !wall.error && !wall.loading && !wall.done
+  if (showWall.value && ready.value && !wall.error && !wall.refreshError && !wall.loading && !wall.done
     && more.value && more.value.getBoundingClientRect().top <= innerHeight + 600) void load().then(maybeLoad);
 }
 async function enter(position?: ViewPosition) {
@@ -121,6 +135,7 @@ async function enter(position?: ViewPosition) {
       const card = Array.from(document.querySelectorAll<HTMLElement>('.wall-card')).find(card => card.dataset.play === restore.focusID);
       card?.focus({ preventScroll: true }); window.scrollTo(0, restore.scrollY);
     }
+    if (cached && wall.needsRefresh()) { void revalidate(); return; }
     maybeLoad();
   } catch (cause) {
     if (current.isCurrent()) pageError.value = cause instanceof Error ? cause.message : '加载失败';
@@ -151,7 +166,7 @@ watch(() => tasks.revision, () => {
     <MediaGrid :can-manage="auth.isAdministrator" v-if="showWall" :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
     <div id="wall-empty"><EmptyState v-if="showWall && ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : auth.isAdministrator ? '开始扫描或手动补录后再来看看。' : ''" /></div>
     <div v-show="showWall" id="wall-more" ref="more" class="wall-more">
-      <WallLoadState :error="wall.error" :loading="wall.loading" :ready="ready" :done="wall.done" :total="wall.total" @retry="load(true).then(maybeLoad)" />
+      <WallLoadState :error="wall.error" :refresh-error="wall.refreshError" :refreshing="wall.refreshing" :loading="wall.loading" :ready="ready" :done="wall.done" :total="wall.total" @retry="retryLoad" />
     </div>
   </section>
 </template>

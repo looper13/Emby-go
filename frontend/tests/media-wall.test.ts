@@ -32,18 +32,69 @@ describe('media wall state and request ownership', () => {
     for (const invalid of [null, { items: [], total: -1 }, { items: [{}], total: 1 }, { ...wallFixture, image_tags: { 1: { Primary: 2 } } }]) expect(() => parseWall(invalid)).toThrow();
     expect(() => parseDetail({ ...detailFixture, movie: { ...detailFixture.movie, id: Number.MAX_SAFE_INTEGER + 1 } })).toThrow();
   });
-  it('restores 300 entries without pagination, but dirty/expired/failed snapshots reload', async () => {
+  it('restores 300 entries immediately, including dirty, expired and failed snapshots', async () => {
     const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
     const wall = useMediaWallStore(); const query = new URLSearchParams('status=success');
     wall.prepare(query, false); const signal = new AbortController().signal;
     for (let i = 0; i < 3; i++) await wall.loadMore(signal);
     expect(wall.items).toHaveLength(300); expect(api).toHaveBeenCalledTimes(3);
     expect(wall.prepare(query, true)).toBe(true); expect(api).toHaveBeenCalledTimes(3);
-    wall.dirty = true; expect(wall.prepare(query, true)).toBe(false);
-    for (let i = 0; i < 3; i++) await wall.loadMore(signal);
+    wall.dirty = true; expect(wall.prepare(query, true)).toBe(true);
+    expect(wall.items).toHaveLength(300); expect(wall.total).toBe(350);
+    expect(wall.needsRefresh()).toBe(true);
+    await wall.refresh(signal); expect(wall.dirty).toBe(false);
+    wall.loadedAt = Date.now() - 60_000; expect(wall.prepare(query, true)).toBe(true);
+    expect(wall.items).toHaveLength(300); expect(wall.needsRefresh()).toBe(true);
+    wall.error = 'failure'; expect(wall.prepare(query, true)).toBe(true);
     expect(wall.items).toHaveLength(300);
-    wall.loadedAt = Date.now() - 60_000; expect(wall.prepare(query, true)).toBe(false);
-    await wall.loadMore(signal); wall.error = 'failure'; expect(wall.prepare(query, true)).toBe(false);
+  });
+  it('publishes a refreshed snapshot only after every previously loaded page is ready', async () => {
+    const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
+    const wall = useMediaWallStore(), signal = new AbortController().signal;
+    wall.prepare(new URLSearchParams(), false);
+    for (let i = 0; i < 3; i++) await wall.loadMore(signal);
+    const previous = wall.items;
+    let finish!: (value: ReturnType<typeof batch>) => void;
+    api.mockImplementationOnce(async () => ({ ...batch(1000), total: 301 }))
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce({ ...batch(1200), total: 301 });
+    const refreshing = wall.refresh(signal);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(wall.refreshing).toBe(true); expect(wall.items).toBe(previous); expect(wall.total).toBe(350);
+    expect(await wall.loadMore(signal)).toBe(false);
+    finish({ ...batch(1100), total: 301 });
+    expect(await refreshing).toBe(true);
+    expect(wall.items).toHaveLength(300); expect(wall.items[0]?.id).toBe(1001); expect(wall.total).toBe(301);
+    expect(wall.refreshing).toBe(false);
+  });
+  it('retains the whole snapshot after refresh failure and retries from the first page', async () => {
+    const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
+    const wall = useMediaWallStore(), signal = new AbortController().signal;
+    wall.prepare(new URLSearchParams(), false);
+    await wall.loadMore(signal); await wall.loadMore(signal);
+    const previous = wall.items;
+    api.mockResolvedValueOnce(batch(1000)).mockRejectedValueOnce(new Error('offline'));
+    expect(await wall.refresh(signal)).toBe(false);
+    expect(wall.items).toBe(previous); expect(wall.total).toBe(350); expect(wall.refreshError).toBe('offline');
+    const calls = api.mock.calls.length;
+    expect(await wall.loadMore(signal)).toBe(false); expect(api).toHaveBeenCalledTimes(calls);
+    api.mockResolvedValueOnce({ ...batch(2000, 2), total: 2 });
+    expect(await wall.refresh(signal)).toBe(true);
+    expect(api.mock.lastCall![0].get('offset')).toBe('0');
+    expect(wall.items).toHaveLength(2); expect(wall.total).toBe(2); expect(wall.done).toBe(true); expect(wall.refreshError).toBe('');
+  });
+  it('cancels background replacement without losing the snapshot or accepting late results', async () => {
+    const api = vi.spyOn(catalogApi, 'items').mockResolvedValue(batch(0));
+    const wall = useMediaWallStore(), query = new URLSearchParams('sort=random'), signal = new AbortController().signal;
+    wall.prepare(query, false); await wall.loadMore(signal);
+    let finish!: (value: ReturnType<typeof batch>) => void;
+    api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    wall.dirty = true; const refreshing = wall.refresh(signal);
+    wall.cancel(); expect(wall.items).toHaveLength(100); expect(wall.dirty).toBe(true);
+    wall.prepare(new URLSearchParams('search=new'), false);
+    api.mockResolvedValueOnce({ ...batch(500, 1), total: 1 }); await wall.loadMore(signal);
+    finish(batch(1000)); await refreshing;
+    expect(wall.items.map(item => item.id)).toEqual([501]); expect(wall.total).toBe(1); expect(wall.dirty).toBe(false);
   });
   it('ignores late results and errors even if the transport ignores cancellation', async () => {
     let resolve!: (v: ReturnType<typeof batch>) => void;
@@ -92,12 +143,64 @@ describe('media wall state and request ownership', () => {
     expect(api.mock.calls.slice(0, 2).map(([q]) => q.get('offset'))).toEqual(['0', '100']);
     expect(wall.prepare(query, true)).toBe(true);
     wall.loadedAt = Date.now() - 60_000;
-    expect(wall.prepare(query, true)).toBe(false);
-    await wall.loadMore(signal);
+    expect(wall.prepare(query, true)).toBe(true);
+    await wall.refresh(signal);
     expect(api.mock.lastCall![0].get('seed')).toBe('12345');
     wall.clear(); wall.prepare(query, true); await wall.loadMore(signal);
     expect(api.mock.lastCall![0].get('seed')).toBe('98765');
     expect(api.mock.lastCall![0].get('tag')).toBe('keep');
+  });
+  it('updates playback and favorite fields in place without invalidating an unfiltered wall', async () => {
+    vi.spyOn(catalogApi, 'items').mockResolvedValue({ ...batch(0), userdata: { '1': { favorite: false, played: false, position_ticks: 0 } } });
+    const wall = useMediaWallStore(), signal = new AbortController().signal;
+    wall.prepare(new URLSearchParams(), false); await wall.loadMore(signal);
+    const previous = wall.items;
+    apiClient.setAuthHandlers({ getToken: () => 'test', onUnauthorized: () => {} });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    try {
+      await apiClient.request('/Sessions/Playing/Progress', { auth: 'required', method: 'POST', json: { ItemId: '1', PositionTicks: 12300000 } });
+      await apiClient.request('/Users/1/PlayedItems/1', { auth: 'required', method: 'POST' });
+      await apiClient.request('/Users/1/FavoriteItems/1', { auth: 'required', method: 'POST' });
+      expect(wall.items).toBe(previous); expect(wall.total).toBe(350); expect(wall.dirty).toBe(false);
+      expect(wall.userdata['1']).toEqual({ position_ticks: 12300000, played: true, favorite: true });
+      expect(wall.prepare(new URLSearchParams(), true)).toBe(true); expect(wall.needsRefresh()).toBe(false);
+      await apiClient.request('/Users/1/PlayedItems/1', { auth: 'required', method: 'DELETE' });
+      expect(wall.userdata['1']?.played).toBe(false);
+      await apiClient.request('/Users/1/FavoriteItems/anime-episode%3A1', { auth: 'required', method: 'POST' });
+      expect(wall.dirty).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it('does not restore another filter and cannot republish a refresh after the account is cleared', async () => {
+    const api = vi.spyOn(catalogApi, 'items').mockResolvedValue(batch(0));
+    const wall = useMediaWallStore(), signal = new AbortController().signal;
+    wall.prepare(new URLSearchParams('status=success'), false); await wall.loadMore(signal);
+    expect(wall.prepare(new URLSearchParams('status=pending'), true)).toBe(false);
+    expect(wall.items).toEqual([]); expect(wall.total).toBe(0);
+    await wall.loadMore(signal);
+    let finish!: (value: ReturnType<typeof batch>) => void;
+    api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refreshing = wall.refresh(signal);
+    wall.clear(); finish(batch(1000)); await refreshing;
+    expect(wall.items).toEqual([]); expect(wall.userdata).toEqual({}); expect(wall.total).toBe(0);
+    expect(wall.refreshing).toBe(false); expect(wall.dirty).toBe(false);
+  });
+  it('revalidates favorite membership, and preserves newer userdata and invalidations during refresh', async () => {
+    const api = vi.spyOn(catalogApi, 'items').mockResolvedValue({ ...batch(0), userdata: { '1': { favorite: true, played: false, position_ticks: 0 } } });
+    const wall = useMediaWallStore(), signal = new AbortController().signal;
+    wall.prepare(new URLSearchParams('favorite=true'), false); await wall.loadMore(signal);
+    apiClient.setAuthHandlers({ getToken: () => 'test', onUnauthorized: () => {} });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    try {
+      await apiClient.request('/Users/1/FavoriteItems/1', { auth: 'required', method: 'DELETE' });
+      expect(wall.dirty).toBe(true); expect(wall.userdata['1']?.favorite).toBe(false);
+      let finish!: (value: ReturnType<typeof batch>) => void;
+      api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const refreshing = wall.refresh(signal);
+      await apiClient.request('/Sessions/Playing/Stopped', { auth: 'required', method: 'POST', json: { ItemId: '1', PositionTicks: 999 } });
+      await apiClient.request('/api/admin/items/1/reread', { auth: 'required', method: 'POST' });
+      finish(batch(0)); await refreshing;
+      expect(wall.userdata['1']?.position_ticks).toBe(999); expect(wall.dirty).toBe(true);
+    } finally { vi.unstubAllGlobals(); }
   });
   it('uses newest premiere dates first and removes random seeds from nonrandom requests', async () => {
     const api = vi.spyOn(catalogApi, 'items').mockResolvedValue(batch(0));

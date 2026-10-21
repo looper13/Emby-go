@@ -23,6 +23,8 @@ export interface RequestOptions extends Omit<RequestInit, 'headers'> {
   readOnly?: boolean;
 }
 
+export interface ApiWriteEvent { path: string; method: string; json: unknown }
+
 export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
@@ -42,8 +44,8 @@ function errorMessage(payload: unknown, fallback: string): string {
 export function createApiClient(fetcher: typeof fetch = (...args) => globalThis.fetch(...args)) {
   let handlers: AuthHandlers | undefined;
   let rejectedToken: string | null = null;
-  const writes = new Set<() => void>();
-  function onWriteSuccess(listener: () => void): () => void {
+  const writes = new Set<(event: ApiWriteEvent) => void>();
+  function onWriteSuccess(listener: (event: ApiWriteEvent) => void): () => void {
     writes.add(listener);
     return () => { writes.delete(listener); };
   }
@@ -103,8 +105,10 @@ export function createApiClient(fetcher: typeof fetch = (...args) => globalThis.
         rejectedToken = sentToken;
         authHandlers.onUnauthorized(sentToken);
       }
-      if (response.ok && !readOnly && !['GET', 'HEAD'].includes((init.method ?? 'GET').toUpperCase())) {
-        for (const listener of writes) listener();
+      const method = (init.method ?? 'GET').toUpperCase();
+      if (response.ok && !readOnly && !['GET', 'HEAD'].includes(method)
+        && (!sentToken || (authHandlers === handlers && authHandlers?.getToken() === sentToken))) {
+        for (const listener of writes) listener({ path, method, json });
       }
       if (response.status === 204) return null;
 

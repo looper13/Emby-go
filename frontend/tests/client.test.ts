@@ -125,6 +125,24 @@ describe('API client', () => {
     expect(unauthorized).not.toHaveBeenCalled();
   });
 
+  it('reports the successful write target and payload, but ignores an old account response', async () => {
+    const response = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockReturnValueOnce(response.promise);
+    const client = createApiClient(fetcher), listener = vi.fn();
+    let token = 'first-user';
+    client.setAuthHandlers({ getToken: () => token, onUnauthorized: vi.fn() });
+    client.onWriteSuccess(listener);
+    const payload = { ItemId: '5', PositionTicks: 1234 };
+    await client.request('/Sessions/Playing/Progress', { auth: 'required', method: 'POST', json: payload });
+    expect(listener).toHaveBeenCalledExactlyOnceWith({ path: '/Sessions/Playing/Progress', method: 'POST', json: payload });
+    const oldWrite = client.request('/Users/1/FavoriteItems/5', { auth: 'required', method: 'POST' });
+    token = 'second-user';
+    response.resolve(new Response(null, { status: 204 }));
+    await oldWrite;
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it('honors cancellation before fetching and after body decoding has started', async () => {
     const body = deferred<string>();
     const response = json({ initialized: true });
