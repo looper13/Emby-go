@@ -22,7 +22,7 @@ describe('library types and television browsing', () => {
   it('submits all three content types and locks inputs while creating', async () => {
     const w=mount(LibraryForm,{props:{submitting:false}}); wrappers.push(w);
     await w.get('#lib-name').setValue('Library'); await w.get('#lib-path').setValue('/media');
-    for (const Type of ['movies','tvshows','mixed']) { await w.get('#lib-type').setValue(Type); await w.get('form').trigger('submit'); expect(w.emitted('submit')?.at(-1)?.[0]).toEqual({Name:'Library',Path:'/media',Type}); }
+    for (const Type of ['movies','tvshows','mixed']) { await w.get('#lib-type').setValue(Type); await w.get('form').trigger('submit'); expect(w.emitted('submit')?.at(-1)?.[0]).toEqual({Name:'Library',Path:'/media',Type,ProxyEnabled:false}); }
     await w.setProps({submitting:true}); expect(w.get('#lib-type').attributes('disabled')).toBeDefined(); await w.get('form').trigger('submit'); expect(w.emitted('submit')).toHaveLength(3);
   });
   it('navigates series and seasons into the existing numeric episode detail', async () => {
