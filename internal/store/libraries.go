@@ -36,12 +36,26 @@ func (l Library) IsDirectory() bool {
 	return l.Path != "" && (l.SourceType == "" || l.SourceType == SourceDirectory)
 }
 
-const libraryColumns = `id,name,COALESCE(path,''),type,enabled,source_type,COALESCE(system_key,''),revision`
+const libraryColumns = `id,name,COALESCE(path,''),type,enabled,source_type,COALESCE(system_key,''),revision,COALESCE(proxy_enabled,0)`
 
 func readLibrary(row interface{ Scan(...any) error }) (Library, error) {
 	var l Library
-	err := row.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Enabled, &l.SourceType, &l.SystemKey, &l.Revision)
+	err := row.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Enabled, &l.SourceType, &l.SystemKey, &l.Revision, &l.ProxyEnabled)
 	return l, err
+}
+
+func (s *Store) UpdateLibraryProxy(id int64, enabled bool, revision int64) (Library, error) {
+	result, err := s.db.Exec(`UPDATE libraries SET proxy_enabled=?,revision=revision+1 WHERE id=? AND enabled=1 AND source_type=? AND revision=?`, enabled, id, SourceDirectory, revision)
+	if err != nil {
+		return Library{}, err
+	}
+	if err := affectedOne(result, nil); err != nil {
+		return Library{}, err
+	}
+	if err := s.BumpVersion(id); err != nil {
+		return Library{}, err
+	}
+	return s.Library(id)
 }
 
 func (s *Store) EnsureAnimeLibrary() (Library, error) {

@@ -367,6 +367,7 @@ func (a *App) routes() {
 	a.registerAnime(admin)
 	admin.GET("/libraries", a.bind((*App).adminLibraries))
 	admin.POST("/libraries", a.bind((*App).adminAddLibrary))
+	admin.PUT("/libraries/:id", a.bind((*App).adminUpdateLibrary))
 	admin.GET("/shows", a.bind((*App).adminTelevision))
 	admin.DELETE("/libraries/:id", a.bind((*App).adminDeleteLibrary))
 	admin.POST("/scan", a.bind((*App).adminScan))
@@ -556,6 +557,7 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 	streams := g.Group("", a.requireAuth, a.requireLibraryAccess)
 	registerStreamRoutes(streams, a.bind((*App).stream))
 	registerProxyRoutes(streams, a.bind((*App).proxyStream))
+	registerTrailerRoutes(streams, a.bind((*App).trailer))
 	for _, base := range []string{"/Videos/:id/hls/:session/:file", "/videos/:id/hls/:session/:file"} {
 		g.GET(base, noStore, a.bind((*App).hlsResource))
 	}
@@ -564,6 +566,16 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 // registerProxyRoutes 网页播放器代理端点（透传 Range），同样注册大小写与可选扩展名。
 func registerProxyRoutes(g *gin.RouterGroup, h gin.HandlerFunc) {
 	for _, base := range []string{"/Videos/:id/proxy", "/videos/:id/proxy"} {
+		g.GET(base, noStore, h)
+		g.HEAD(base, noStore, h)
+		g.GET(base+".:ext", noStore, h)
+		g.HEAD(base+".:ext", noStore, h)
+	}
+}
+
+// registerTrailerRoutes 详情页预告片代理端点，同样注册大小写与可选扩展名。
+func registerTrailerRoutes(g *gin.RouterGroup, h gin.HandlerFunc) {
+	for _, base := range []string{"/Videos/:id/trailer", "/videos/:id/trailer"} {
 		g.GET(base, noStore, h)
 		g.HEAD(base, noStore, h)
 		g.GET(base+".:ext", noStore, h)

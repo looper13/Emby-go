@@ -49,14 +49,15 @@ type storeState struct {
 }
 
 type Library struct {
-	ID         int64  `json:"Id"`
-	Name       string `json:"Name"`
-	Path       string `json:"Path"`
-	Type       string `json:"Type"`
-	Enabled    bool   `json:"Enabled"`
-	SourceType string `json:"SourceType"`
-	SystemKey  string `json:"SystemKey,omitempty"`
-	Revision   int64  `json:"Revision"`
+	ID           int64  `json:"Id"`
+	Name         string `json:"Name"`
+	Path         string `json:"Path"`
+	Type         string `json:"Type"`
+	Enabled      bool   `json:"Enabled"`
+	ProxyEnabled bool   `json:"ProxyEnabled"`
+	SourceType   string `json:"SourceType"`
+	SystemKey    string `json:"SystemKey,omitempty"`
+	Revision     int64  `json:"Revision"`
 }
 
 type Movie struct {
@@ -151,6 +152,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateAnime(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateLibraryProxy(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -389,6 +394,14 @@ func (s *Store) HasAPIKey(key string) (bool, error) {
 }
 
 func (s *Store) AddLibrary(name, path string, contentType ...string) (Library, error) {
+	proxyEnabled := false
+	if err := s.db.QueryRow("SELECT COALESCE(proxy_enabled,0) FROM libraries WHERE path=?", strings.TrimSpace(path)).Scan(&proxyEnabled); err != nil && err != sql.ErrNoRows {
+		return Library{}, err
+	}
+	return s.AddLibraryWithProxy(name, path, proxyEnabled, contentType...)
+}
+
+func (s *Store) AddLibraryWithProxy(name, path string, proxyEnabled bool, contentType ...string) (Library, error) {
 	name, path = strings.TrimSpace(name), strings.TrimSpace(path)
 	if name == "" || path == "" {
 		return Library{}, errors.New("媒体库名称和路径不能为空")
@@ -409,7 +422,7 @@ func (s *Store) AddLibrary(name, path string, contentType ...string) (Library, e
 		}
 	}
 	var id int64
-	err := s.db.QueryRow("INSERT INTO libraries(name,path,type) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,revision=libraries.revision+1 RETURNING id", name, path, typ).Scan(&id)
+	err := s.db.QueryRow("INSERT INTO libraries(name,path,type,proxy_enabled) VALUES(?,?,?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,proxy_enabled=excluded.proxy_enabled,revision=libraries.revision+1 RETURNING id", name, path, typ, proxyEnabled).Scan(&id)
 	if err != nil {
 		return Library{}, err
 	}

@@ -50,7 +50,7 @@ describe('management interaction ownership', () => {
     const w = page(LibrariesPage); await flushPromises(); await w.get('#lib-name').setValue('new'); await w.get('#lib-path').setValue('/media');
     await w.get('#lib-type').setValue('tvshows');
     await w.get('#library-form').trigger('submit'); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('new');
-    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Path:'/media',Type:'tvshows'});
+    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Path:'/media',Type:'tvshows',ProxyEnabled:false});
     await w.get('#library-form').trigger('submit'); await w.get('#library-form').trigger('submit'); expect(create).toHaveBeenCalledTimes(2);
     pending.resolve(libraries.items[0]!); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('');
     expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('movies');

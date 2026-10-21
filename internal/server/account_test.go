@@ -348,7 +348,7 @@ func TestAccountDeniedMediaAndCookie(t *testing.T) {
 	paths := []string{
 		"/Items/" + sid, imagePath, "/Items/" + sid + "/Images", "/Items/" + sid + "/ThumbnailSet",
 		"/Items/" + sid + "/Similar", "/Items/" + sid + "/PlaybackInfo", "/Videos/" + sid + "/AdditionalParts",
-		"/Videos/" + sid + "/stream", "/Videos/" + sid + "/stream.mp4", "/Videos/" + sid + "/proxy",
+		"/Videos/" + sid + "/stream", "/Videos/" + sid + "/stream.mp4", "/Videos/" + sid + "/proxy", "/Videos/" + sid + "/trailer",
 		"/Videos/" + sid + "/hls/oldsession/init.mp4", "/Videos/" + sid + "/mediasource_" + sid + "/Subtitles/0/Stream.vtt",
 		"/Items/" + externalLibraryID(lib.ID), "/Users/1/Items?ParentId=" + externalLibraryID(lib.ID),
 	}

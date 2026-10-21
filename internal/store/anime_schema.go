@@ -41,6 +41,7 @@ CREATE TABLE libraries_anime_v1 (
  type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type IN ('nfo_directory','anime_catalog')),
  system_key TEXT UNIQUE, revision INTEGER NOT NULL DEFAULT 1,
+ proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1)),
  CHECK((source_type='nfo_directory' AND path IS NOT NULL AND length(trim(path))>0) OR (source_type='anime_catalog' AND path IS NULL))
 );
 INSERT INTO libraries_anime_v1(id,name,path,type,enabled) SELECT id,name,path,COALESCE(type,'movies'),COALESCE(enabled,1) FROM libraries;
@@ -113,4 +114,53 @@ INSERT INTO schema_migrations(version) VALUES(1);
 		return fmt.Errorf("anime schema migration: integrity check failed: %s", integrity)
 	}
 	return tx.Commit()
+}
+
+// migrateLibraryProxy adds the per-library stream proxy switch to databases
+// created before the option existed. New databases already contain the column
+// in the version-1 schema above.
+func (s *Store) migrateLibraryProxy() error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var done int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=2`).Scan(&done); err != nil {
+		return err
+	}
+	if done != 0 {
+		return nil
+	}
+	rows, err := conn.QueryContext(ctx, `PRAGMA table_info(libraries)`)
+	if err != nil {
+		return err
+	}
+	hasColumn := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "proxy_enabled" {
+			hasColumn = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if !hasColumn {
+		if _, err := conn.ExecContext(ctx, `ALTER TABLE libraries ADD COLUMN proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1))`); err != nil {
+			return err
+		}
+	}
+	_, err = conn.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES(2)`)
+	return err
 }

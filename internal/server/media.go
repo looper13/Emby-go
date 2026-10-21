@@ -1106,6 +1106,10 @@ func (a *App) stream(c *gin.Context) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported source"})
 		return
 	}
+	if library, err := a.db.Library(movie.LibraryID); err == nil && library.ProxyEnabled {
+		a.proxyStream(c)
+		return
+	}
 	if c.Request.Method == http.MethodHead {
 		c.Header("Location", raw)
 		c.Status(http.StatusFound)
@@ -1117,9 +1121,29 @@ func (a *App) stream(c *gin.Context) {
 // streamClient 供网页播放器代理播放使用：不设超时（长连接），由请求 context 控制取消。
 var streamClient = &http.Client{}
 
-// proxyStream 为内置网页播放器代理真实媒体地址：透传 Range/状态码/关键响应头。
-// 解决 HTTPS 后台 + HTTP 源站的混合内容、跨域/防盗链导致的播放失败。
-// Emby 客户端仍走 /stream 的 302 直拉（服务端零带宽），此端点只服务网页播放器。
+// trailer 代理影片 NFO 中的预告片地址。预告片不依赖媒体库的 ProxyEnabled
+// 开关，详情页始终通过本服务请求，避免浏览器直接访问外部源。
+func (a *App) trailer(c *gin.Context) {
+	movieID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	movie, err := a.db.Movie(movieID)
+	if err != nil || !movie.IsVisible() || !a.db.CanAccessLibrary(movie.LibraryID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	raw := strings.TrimSpace(movie.TrailerURL)
+	if !scanner.ValidHTTP(raw) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "trailer not found"})
+		return
+	}
+	a.proxyRemote(c, raw)
+}
+
+// proxyStream 代理真实媒体地址：透传 Range/状态码/关键响应头。
+// 它既服务网页播放器的回退地址，也服务开启媒体库播放代理后的 /stream。
 func (a *App) proxyStream(c *gin.Context) {
 	if !a.prepareAnimePlayback(c) {
 		return
@@ -1138,6 +1162,11 @@ func (a *App) proxyStream(c *gin.Context) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported source"})
 		return
 	}
+	a.proxyRemote(c, raw)
+}
+
+// proxyRemote 将外部视频响应透传给客户端，保留 Range 播放所需的状态和响应头。
+func (a *App) proxyRemote(c *gin.Context, raw string) {
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, raw, nil)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -1150,6 +1179,18 @@ func (a *App) proxyStream(c *gin.Context) {
 	req.Header.Set("Accept-Encoding", "identity")
 	if ua := c.GetHeader("User-Agent"); ua != "" {
 		req.Header.Set("User-Agent", ua)
+	}
+	if accept := c.GetHeader("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if language := c.GetHeader("Accept-Language"); language != "" {
+		req.Header.Set("Accept-Language", language)
+	}
+	if parsed, parseErr := url.Parse(raw); parseErr == nil {
+		host := strings.ToLower(parsed.Hostname())
+		if strings.HasSuffix(host, ".dmm.co.jp") || host == "dmm.co.jp" || strings.HasSuffix(host, ".dmm.com") || host == "dmm.com" {
+			req.Header.Set("Referer", "https://www.dmm.co.jp/")
+		}
 	}
 	resp, err := streamClient.Do(req)
 	if err != nil {

@@ -75,7 +75,12 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 func (a *App) adminAddLibrary(c *gin.Context) {
 	a.configEditMu.Lock()
 	defer a.configEditMu.Unlock()
-	var req struct{ Name, Path, Type string }
+	var req struct {
+		Name         string
+		Path         string
+		Type         string
+		ProxyEnabled bool
+	}
 	if c.ShouldBindJSON(&req) != nil || req.Name == "" || req.Path == "" {
 		c.JSON(400, gin.H{"error": "name and path required"})
 		return
@@ -83,13 +88,45 @@ func (a *App) adminAddLibrary(c *gin.Context) {
 	if req.Type == "" {
 		req.Type = store.LibraryMovies
 	}
-	v, e := a.db.AddLibrary(req.Name, req.Path, req.Type)
+	v, e := a.db.AddLibraryWithProxy(req.Name, req.Path, req.ProxyEnabled, req.Type)
 	if e != nil {
 		c.JSON(400, gin.H{"error": e.Error()})
 		return
 	}
 	a.watchLibrary(v)
 	c.JSON(200, v)
+}
+
+func (a *App) adminUpdateLibrary(c *gin.Context) {
+	a.configEditMu.Lock()
+	defer a.configEditMu.Unlock()
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid library id"})
+		return
+	}
+	var req struct {
+		ProxyEnabled *bool `json:"ProxyEnabled"`
+		Revision     int64 `json:"Revision"`
+	}
+	if c.ShouldBindJSON(&req) != nil || req.ProxyEnabled == nil || req.Revision <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ProxyEnabled and Revision are required"})
+		return
+	}
+	v, err := a.db.UpdateLibraryProxy(id, *req.ProxyEnabled, req.Revision)
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "媒体库已被修改，请刷新后重试"})
+			return
+		}
+		if store.NotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, v)
 }
 
 func (a *App) startTask(kind string) int64 {

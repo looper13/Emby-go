@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -18,6 +19,7 @@ import (
 
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
+	"emby-go/internal/store"
 )
 
 func TestCoreAPI(t *testing.T) {
@@ -923,7 +925,7 @@ func TestProxyStreamRange(t *testing.T) {
 
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "a.strm"), []byte(upstream.URL+"/media.mp4\n"), 0644)
-	os.WriteFile(filepath.Join(root, "a.nfo"), []byte(`<movie><title>A</title></movie>`), 0644)
+	os.WriteFile(filepath.Join(root, "a.nfo"), []byte(fmt.Sprintf(`<movie><title>A</title><trailer>%s/trailer.mp4</trailer></movie>`, upstream.URL)), 0644)
 
 	a, err := newApp(config.Config{DBPath: filepath.Join(root, "test.db")}, cache.NewMemory(512))
 	if err != nil {
@@ -962,12 +964,35 @@ func TestProxyStreamRange(t *testing.T) {
 	if resp, _ := authed("POST", "/api/admin/libraries?x=1"); resp.StatusCode == http.StatusOK { // 无 body 的 POST 不应成功建库
 		t.Fatal("library without body should fail")
 	}
-	libReq, _ := http.NewRequest("POST", ts.URL+"/api/admin/libraries", strings.NewReader(`{"Name":"t","Path":"`+strings.ReplaceAll(root, `\`, `\\`)+`"}`))
+	libReq, _ := http.NewRequest("POST", ts.URL+"/api/admin/libraries", strings.NewReader(`{"Name":"t","Path":"`+strings.ReplaceAll(root, `\`, `\\`)+`","ProxyEnabled":false}`))
 	libReq.Header.Set("X-Emby-Token", token)
 	libReq.Header.Set("Content-Type", "application/json")
-	if resp, e := http.DefaultClient.Do(libReq); e != nil || resp.StatusCode != http.StatusOK {
+	libResp, e := http.DefaultClient.Do(libReq)
+	if e != nil || libResp.StatusCode != http.StatusOK {
+		if libResp != nil {
+			libResp.Body.Close()
+		}
 		t.Fatalf("add library: %v", e)
 	}
+	var library map[string]any
+	if err := json.NewDecoder(libResp.Body).Decode(&library); err != nil {
+		libResp.Body.Close()
+		t.Fatal(err)
+	}
+	libResp.Body.Close()
+	revision, _ := library["Revision"].(float64)
+	libraryID, _ := library["Id"].(float64)
+	updateReq, _ := http.NewRequest("PUT", ts.URL+"/api/admin/libraries/"+strconv.FormatInt(int64(libraryID), 10), strings.NewReader(fmt.Sprintf(`{"ProxyEnabled":true,"Revision":%d}`, int64(revision))))
+	updateReq.Header.Set("X-Emby-Token", token)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateResp, e := http.DefaultClient.Do(updateReq)
+	if e != nil || updateResp.StatusCode != http.StatusOK {
+		if updateResp != nil {
+			updateResp.Body.Close()
+		}
+		t.Fatalf("update library proxy: %v", e)
+	}
+	updateResp.Body.Close()
 	if resp, _ := authed("POST", "/api/admin/scan"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("scan: %d", resp.StatusCode)
 	}
@@ -997,6 +1022,41 @@ func TestProxyStreamRange(t *testing.T) {
 	}()
 	if resp.StatusCode != http.StatusOK || string(data) != string(body) {
 		t.Fatalf("full proxy: status=%d body=%q", resp.StatusCode, data)
+	}
+
+	// 媒体库开启代理后，Emby 客户端使用的 /stream 地址直接由本服务透传。
+	req, _ = http.NewRequest("GET", ts.URL+"/Videos/1/stream", nil)
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Range", "bytes=2-5")
+	resp, e = http.DefaultClient.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || string(data) != "2345" || resp.Header.Get("Content-Range") == "" {
+		t.Fatalf("library proxy stream: status=%d body=%q range=%q", resp.StatusCode, data, resp.Header.Get("Content-Range"))
+	}
+
+	// 详情页预告片始终走本服务代理，并透传 Range。
+	req, _ = http.NewRequest("GET", ts.URL+"/Videos/1/trailer", nil)
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Range", "bytes=1-3")
+	resp, e = http.DefaultClient.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || string(data) != "123" || resp.Header.Get("Content-Range") == "" {
+		t.Fatalf("trailer proxy: status=%d body=%q range=%q", resp.StatusCode, data, resp.Header.Get("Content-Range"))
+	}
+	missingID, err := a.db.UpsertMovie(store.Movie{LibraryID: int64(libraryID), SourcePath: filepath.Join(root, "missing.strm"), Title: "No trailer", Status: "success"}, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ = authed("GET", "/Videos/"+strconv.FormatInt(missingID, 10)+"/trailer"); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing trailer: %d", resp.StatusCode)
 	}
 }
 

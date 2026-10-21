@@ -80,7 +80,7 @@ describe('HLS playback', () => {
       store.media({ ...movie.movie, source_container: 'M3U8' });
       expect(store.current).toMatchObject({ type: 'm3u8', proxyURL: '/Videos/5/proxy' });
       store.trailer(movie.movie, 'https://cdn.test/trailer.m3u8?token=x');
-      expect(store.current?.type).toBe('m3u8');
+      expect(store.current).toMatchObject({ url: '/Videos/5/trailer', type: 'm3u8', itemId: '5' });
       store.media({ ...movie.movie, source_container: 'webm' });
       expect(store.current?.type).toBe('webm');
       store.close();
