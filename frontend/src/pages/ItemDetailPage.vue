@@ -91,3 +91,6 @@ watch(() => tasks.revision, () => { void enter(true); });
   </article>
   <section v-else class="panel"><p v-if="error" role="alert">{{ error }} <button class="btn" @click="enter()">重试</button></p><p v-else>加载中…</p><button class="btn" @click="back">← 返回媒体墙</button></section>
 </template>
+<style scoped>
+.item-sections { min-width: 0; max-width: none; }
+</style>
