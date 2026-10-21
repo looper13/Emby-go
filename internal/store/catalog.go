@@ -7,7 +7,7 @@ import "fmt"
 // or its metadata in the application. SQL identifiers only come from this switch.
 func (s *Store) CatalogNames(kind string, libraryID int64, collection string) ([]string, error) {
 	var expression, from, extra string
-	from = "movies m"
+	from = s.userMoviesSQL() + " m"
 	switch kind {
 	case "Tag", "Studio", "Genre":
 		column := "tags"
@@ -56,7 +56,7 @@ func (s *Store) CatalogNames(kind string, libraryID int64, collection string) ([
 }
 
 func (s *Store) EntityExists(kind, name string) (bool, error) {
-	from, predicate := "movies m", ""
+	from, predicate := s.userMoviesSQL()+" m", ""
 	switch kind {
 	case "Person":
 		predicate = "(TRIM(m.director)=? OR EXISTS(SELECT 1 FROM movie_actors a WHERE a.movie_id=m.id AND a.actor_name=?))"

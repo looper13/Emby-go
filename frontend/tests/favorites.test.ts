@@ -7,11 +7,14 @@ import FavoritesPage from '../src/pages/FavoritesPage.vue';
 import { favoriteDestination, favoriteEntityId, favoritesApi, parseFavoriteItem, type FavoriteItem } from '../src/api/favorites';
 import { apiClient } from '../src/api/client';
 import { useToastStore } from '../src/stores/toasts';
+import { useAuthStore } from '../src/stores/auth';
+import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
+import { parseUser } from '../src/api/contracts';
 
 let pinia: Pinia;
 const wrappers: VueWrapper[] = [];
 const item: FavoriteItem = { Id: '5', Name: 'Movie', Type: 'Movie', ImageTags: {}, UserData: { IsFavorite: true }, ParentId: '', SeriesId: '' };
-beforeEach(() => { pinia = createPinia(); setActivePinia(pinia); });
+beforeEach(() => { pinia = createPinia(); setActivePinia(pinia); useAuthStore(pinia).user = parseUser({ ...authFixture.User, Id: '2' }); });
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); disposePinia(pinia); vi.restoreAllMocks(); });
 function button() {
   const w = mount(FavoriteButton, { props: { itemId: '5', favorite: false, label: 'Movie' }, global: { plugins: [pinia] } });
@@ -28,7 +31,7 @@ describe('favorite controls and API', () => {
   it('uses the Emby mutation contract and validates returned identities', async () => {
     const request = vi.spyOn(apiClient, 'request').mockResolvedValue({ ItemId: 'person:a/b', IsFavorite: true });
     expect(await favoritesApi.set('person:a/b', true)).toBe(true);
-    expect(request).toHaveBeenLastCalledWith('/Users/1/FavoriteItems/person%3Aa%2Fb', { auth: 'required', method: 'POST' });
+    expect(request).toHaveBeenLastCalledWith('/Users/2/FavoriteItems/person%3Aa%2Fb', { auth: 'required', method: 'POST' });
     request.mockResolvedValueOnce({ ItemId: 'person:a/b', IsFavorite: false });
     expect(await favoritesApi.set('person:a/b', false)).toBe(false);
     expect(request.mock.lastCall?.[1]?.method).toBe('DELETE');
@@ -40,7 +43,7 @@ describe('favorite controls and API', () => {
     const request = vi.spyOn(apiClient, 'request').mockResolvedValue({ Items: [item], TotalRecordCount: 49 });
     expect(await favoritesApi.list('Movie,Episode', 'test', 48)).toEqual({ items: [item], total: 49 });
     const query = new URL(request.mock.lastCall![0], 'http://localhost').searchParams;
-    expect(Object.fromEntries(query)).toMatchObject({ UserId: '1', Filters: 'IsFavorite', IncludeItemTypes: 'Movie,Episode', StartIndex: '48', Limit: '48', SearchTerm: 'test' });
+    expect(Object.fromEntries(query)).toMatchObject({ Filters: 'IsFavorite', IncludeItemTypes: 'Movie,Episode', StartIndex: '48', Limit: '48', SearchTerm: 'test' });
   });
   it('guards duplicate clicks and emits the server state only after success', async () => {
     let finish!: (value: boolean) => void;
@@ -82,7 +85,7 @@ describe('favorite controls and API', () => {
     ], TotalRecordCount: 2 }).mockResolvedValueOnce({ ...item, Id: 'anime-series:10', Type: 'Series', ProviderIds: { Bangumi: '101' } });
     const result = await favoritesApi.list('Episode', '', 0);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.lastCall?.[0]).toBe('/Users/1/Items/anime-series%3A10');
+    expect(request.mock.lastCall?.[0]).toBe('/Items/anime-series%3A10');
     for (const episode of result.items) expect(favoriteDestination(episode)).toEqual({ path: '/anime/subjects/101' });
     const film = parseFavoriteItem({ ...item, Id: 'anime-movie:11', ProviderIds: { Bangumi: '102' } });
     expect(favoriteDestination(film)).toEqual({ path: '/anime/subjects/102' });

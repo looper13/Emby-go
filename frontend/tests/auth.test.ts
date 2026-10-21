@@ -33,6 +33,8 @@ function installServer(handler?: Handler) {
       case '/api/auth/initialize': return new Response(null, { status: 204 });
       case '/Users/AuthenticateByName': return json(authFixture);
       case '/Users/Me': return json(authFixture.User);
+      case '/Sessions/Logout': return new Response(null, { status: 204 });
+      case '/api/browse/libraries':
       case '/api/admin/libraries': return json(librariesFixture);
       case '/api/admin/status': return json(statusFixture);
       case '/api/admin/scan/progress': return json(scanFixture);
@@ -84,6 +86,51 @@ afterEach(() => {
 });
 
 describe('authentication store', () => {
+  it('revokes the current session before clearing local credentials', async () => {
+    localStorage.setItem(TOKEN_KEY, 'stored-token');
+    const fetcher = installServer();
+    const auth = useAuthStore(newStore());
+    await auth.checkSession();
+    await auth.logout();
+    const call = fetcher.mock.calls.find(([path]) => path === '/Sessions/Logout');
+    expect(call?.[1]?.method).toBe('POST');
+    expect(new Headers(call?.[1]?.headers).get('X-Emby-Token')).toBe('stored-token');
+    expect(auth.authenticated).toBe(false);
+    expect(auth.user).toBeNull();
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('keeps a session after a failed logout and permits a retry', async () => {
+    localStorage.setItem(TOKEN_KEY, 'stored-token');
+    let fail = true;
+    installServer(path => path === '/Sessions/Logout' && fail ? json({ error: 'offline' }, 503) : undefined);
+    const auth = useAuthStore(newStore());
+    await auth.checkSession();
+    await expect(auth.logout()).rejects.toMatchObject({ status: 503 });
+    expect(auth.authenticated).toBe(true);
+    expect(auth.submitting).toBe(false);
+    fail = false;
+    await auth.logout();
+    expect(auth.token).toBeNull();
+  });
+
+  it('does not erase a newer login in another tab during logout', async () => {
+    localStorage.setItem(TOKEN_KEY, 'stored-token');
+    const pending = deferred<Response>();
+    installServer(path => path === '/Sessions/Logout' ? pending.promise : undefined);
+    const auth = useAuthStore(newStore());
+    await auth.checkSession();
+    const logout = auth.logout();
+    localStorage.setItem(TOKEN_KEY, 'new-token');
+    window.dispatchEvent(new StorageEvent('storage', { key: TOKEN_KEY, newValue: 'new-token' }));
+    await flushPromises();
+    pending.resolve(new Response(null, { status: 204 }));
+    await logout;
+    expect(auth.token).toBe('new-token');
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('new-token');
+    expect(auth.authenticated).toBe(true);
+  });
+
   it('shares an in-flight session check and caches the verified session', async () => {
     localStorage.setItem(TOKEN_KEY, 'stored-token');
     const response = deferred<Response>();
@@ -184,6 +231,66 @@ describe('authentication store', () => {
 });
 
 describe('login and minimal application', () => {
+  const viewer = { ...authFixture.User, Id: '7', Name: 'viewer', Policy: {
+    ...authFixture.User.Policy, IsAdministrator: false, IsDisabled: false, EnableAllFolders: false, EnabledFolders: [],
+  } };
+  function viewerServer() {
+    return installServer(path => {
+      if (path === '/Users/Me') return json(viewer);
+      if (path === '/Users/AuthenticateByName') return json({ ...authFixture, User: viewer, AccessToken: 'viewer-token' });
+      if (path === '/api/admin/account') return json({ User: viewer, Libraries: [] });
+      if (path.startsWith('/api/admin/items?')) return json({ ...itemsFixture, items: [], total: 0 });
+      return undefined;
+    });
+  }
+
+  it('lands viewers on the media wall with no maintenance controls or polling', async () => {
+    const fetcher = viewerServer();
+    const { wrapper, router } = await openApp();
+    await fillLogin(wrapper);
+    await wrapper.get('#auth-form').trigger('submit'); await flushPromises();
+    expect(router.currentRoute.value.path).toBe('/items');
+    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['anime', 'favorites', 'items', 'account']);
+    expect(wrapper.find('#scan').exists()).toBe(false);
+    expect(wrapper.find('[data-scrape]').exists()).toBe(false);
+    expect(fetcher.mock.calls.some(([path]) => path === '/api/browse/libraries')).toBe(true);
+    expect(fetcher.mock.calls.some(([path]) => /^\/api\/admin\/(?:status|scan|libraries|tasks|users)/.test(String(path)))).toBe(false);
+  });
+
+  it('rejects viewer maintenance routes and makes personal library permissions read-only', async () => {
+    viewerServer(); localStorage.setItem(TOKEN_KEY, 'viewer-token');
+    const { wrapper, router } = await openApp('/users');
+    for (const path of ['/users', '/overview', '/settings', '/libraries', '/apikeys', '/tasks', '/probe', '/anime/settings']) {
+      await router.push(path); await flushPromises();
+      expect(router.currentRoute.value.path).toBe('/items');
+    }
+    await router.push('/account'); await flushPromises();
+    expect(wrapper.text()).toContain('未授权任何媒体库');
+    expect(wrapper.find('fieldset').exists()).toBe(false);
+    expect(wrapper.find('input[type=checkbox]').exists()).toBe(false);
+    expect(wrapper.find('#account-current').exists()).toBe(true);
+  });
+
+  it('remounts account-local drafts when another tab changes the signed-in identity', async () => {
+    let secondUser = false;
+    installServer(path => {
+      if (path === '/Users/Me') return json(secondUser ? viewer : authFixture.User);
+      if (path === '/api/admin/account') return json({ User: secondUser ? viewer : {
+        ...authFixture.User, Policy: { ...authFixture.User.Policy, EnableAllFolders: true, EnabledFolders: [] },
+      }, Libraries: [] });
+      return undefined;
+    });
+    localStorage.setItem(TOKEN_KEY, 'admin-token');
+    const { wrapper, auth } = await openApp('/account');
+    await wrapper.get('#account-name').setValue('unsaved-admin-name');
+    secondUser = true; localStorage.setItem(TOKEN_KEY, 'viewer-token');
+    window.dispatchEvent(new StorageEvent('storage', { key: TOKEN_KEY, oldValue: 'admin-token', newValue: 'viewer-token' }));
+    await flushPromises();
+    expect(auth.user?.Id).toBe('7');
+    expect(wrapper.get<HTMLInputElement>('#account-name').element.value).toBe('viewer');
+    expect(wrapper.find('fieldset').exists()).toBe(false);
+  });
+
   it.each(['/admin-vue', '/admin'])('keeps a successful credential login inside %s', async (entry) => {
     const fetcher = installServer();
     const { wrapper, router } = await openApp('/login', entry);
@@ -199,7 +306,7 @@ describe('login and minimal application', () => {
     expect(new Headers(call?.[1]?.headers).has('X-Emby-Token')).toBe(false);
     expect(wrapper.find('#content > .cards').exists()).toBe(true);
     expect(wrapper.find('a[href="/admin"]').exists()).toBe(false);
-    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['overview', 'libraries', 'anime', 'favorites', 'items', 'actors', 'manual', 'settings', 'apikeys', 'scrape', 'scheduled', 'tasks', 'probe']);
+    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['overview', 'libraries', 'anime', 'favorites', 'items', 'actors', 'manual', 'settings', 'apikeys', 'account', 'users', 'scrape', 'scheduled', 'tasks', 'probe']);
     expect(wrapper.find('#scan').exists()).toBe(true);
     expect(wrapper.find('#reindex').exists()).toBe(true);
   });

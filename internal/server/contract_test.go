@@ -352,7 +352,7 @@ func TestContractImageURLs(t *testing.T) {
 	if !regexp.MustCompile(`^[0-9a-z]+$`).MatchString(primary) {
 		t.Errorf("PrimaryImageTag 形状不对: %q", primary)
 	}
-	resp, body := embyRaw(t, ts, "GET", "/Items/1/Images/Primary?maxWidth=300&tag="+primary, "", "")
+	resp, body := embyRaw(t, ts, "GET", "/Items/1/Images/Primary?maxWidth=300&tag="+primary, token, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("取图: %d", resp.StatusCode)
 	}

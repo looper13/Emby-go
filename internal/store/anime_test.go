@@ -66,7 +66,7 @@ INSERT INTO libraries(id,name,path) VALUES(17,'legacy','/media'),(50,'deleted','
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := &Store{db: db}
+	legacy := &Store{storeState: &storeState{db: db}}
 	if err = legacy.init(); err != nil {
 		t.Fatal(err)
 	}

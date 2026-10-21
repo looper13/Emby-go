@@ -21,7 +21,7 @@ func (a *App) prepareAnimePlayback(c *gin.Context) bool {
 	if !strings.HasPrefix(c.Param("id"), "anime-") {
 		return true
 	}
-	if (c.Param("uid") != "" && c.Param("uid") != "1") || (c.Query("UserId") != "" && c.Query("UserId") != "1") {
+	if (c.Param("uid") != "" && !a.validUser(c)) || !a.validQueryUser(c) {
 		c.JSON(404, gin.H{"error": "user not found"})
 		return false
 	}
@@ -35,7 +35,7 @@ func (a *App) prepareAnimePlayback(c *gin.Context) bool {
 func (a *App) animeMedia(rawID string) (store.Movie, anime.Binding, string, error) {
 	var m store.Movie
 	l, err := a.db.AnimeLibrary()
-	if err != nil || !l.Enabled {
+	if err != nil || !l.Enabled || !a.db.CanAccessLibrary(l.ID) {
 		return m, anime.Binding{}, "", sql.ErrNoRows
 	}
 	_, _, b, err := a.db.AnimeTarget(rawID)
@@ -43,7 +43,7 @@ func (a *App) animeMedia(rawID string) (store.Movie, anime.Binding, string, erro
 		return m, b, "", sql.ErrNoRows
 	}
 	m, err = a.db.Movie(b.MovieID)
-	if err != nil || !m.IsVisible() || len(m.AdditionalParts) != 0 || !strings.EqualFold(filepath.Ext(m.SourcePath), ".strm") {
+	if err != nil || !a.db.CanAccessLibrary(m.LibraryID) || !m.IsVisible() || len(m.AdditionalParts) != 0 || !strings.EqualFold(filepath.Ext(m.SourcePath), ".strm") {
 		return m, b, "", sql.ErrNoRows
 	}
 	if err = a.db.RequireDirectory(m.LibraryID); err != nil {

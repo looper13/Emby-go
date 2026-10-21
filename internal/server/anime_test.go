@@ -29,6 +29,9 @@ func TestAnimeMixedLibraryPlaybackContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
+	if err = a.db.InitializeAdministrator("admin", "password-1234"); err != nil {
+		t.Fatal(err)
+	}
 	var discoveries atomic.Int32
 	a.discoverSubtitles = func(path string) []subtitle.File { discoveries.Add(1); return subtitle.Discover(path) }
 	if err = a.db.SaveAccessToken("anime-test"); err != nil {
@@ -251,6 +254,9 @@ func BenchmarkAnimeWarmCatalog(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer a.Close()
+	if err = a.db.InitializeAdministrator("admin", "password-1234"); err != nil {
+		b.Fatal(err)
+	}
 	entries := make([]anime.Entry, 2000)
 	for i := range entries {
 		entries[i] = anime.Entry{ID: int64(i + 1), Name: "Catalog " + strconv.Itoa(i), Year: 2026, Season: 4, Weekday: i % 9}

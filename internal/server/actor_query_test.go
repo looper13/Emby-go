@@ -27,7 +27,7 @@ func actorQueryFixture(t testing.TB, count int) *App {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	app := &App{cfg: cfg, db: db, rootCtx: context.Background(), imgMeta: cache.NewMemory(imageMetaCacheSize), cache: cache.NewManaged(cache.NewMemory(64))}
+	app := &App{db: db, appState: &appState{cfg: cfg, rootCtx: context.Background(), imgMeta: cache.NewMemory(imageMetaCacheSize), cache: cache.NewManaged(cache.NewMemory(64))}}
 	if err := os.MkdirAll(cfg.ActorsDir, 0700); err != nil {
 		t.Fatal(err)
 	}

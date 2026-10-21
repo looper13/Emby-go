@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { createPinia, disposePinia, setActivePinia } from 'pinia';
 import { createRouter, createMemoryHistory } from 'vue-router';
+import { useAuthStore } from '../src/stores/auth';
+import { parseUser } from '../src/api/contracts';
+import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
 import { titleCarriesNumber, numberUnlessInTitle, entityIdOf } from '../src/lib/media';
 import { managePlayer, playbackErrorMessage, loadPlayerFactory, type PlayerHandle, type PlayerFactory } from '../src/lib/player';
 import * as playerLibrary from '../src/lib/player';
@@ -48,13 +51,18 @@ describe('media controls', () => {
     expect(w.find('dd').text()).toBe('Tag-A Rare series'); await w.findAll('button')[1]!.trigger('click'); expect(w.emitted('entity')).toEqual([['tag', 'Rare series']]);
   });
   it('does not navigate for nested buttons and renders progress, played/favorite/multipart badges', async () => {
-    const w = mount(MediaCard, { props: { movie: { ...detail.movie, AdditionalParts: ['cd2'] }, userdata: { played: true, favorite: true, position_ticks: detail.movie.RuntimeSeconds * 5000000 } } }); cleanups.push(() => w.unmount());
+    const w = mount(MediaCard, { props: { canManage: true, movie: { ...detail.movie, AdditionalParts: ['cd2'] }, userdata: { played: true, favorite: true, position_ticks: detail.movie.RuntimeSeconds * 5000000 } } }); cleanups.push(() => w.unmount());
     await w.find('[data-reread]').trigger('keydown', { key: 'Enter' }); await w.find('[data-reread]').trigger('click'); await w.find('[data-quickplay]').trigger('click');
     expect(w.emitted('open')).toBeUndefined(); expect(w.emitted('reread')).toEqual([[5]]); expect(w.emitted('quickplay')).toEqual([[5]]);
     expect(w.find('.wall-progress i').attributes('style')).toContain('50%'); expect(w.text()).toContain('已看'); expect(w.text()).toContain('CD×2'); expect(w.text()).toContain('♥');
+    await w.setProps({ canManage: false, movie: { ...detail.movie, Title: '', PosterPath: '', LandscapePath: '', Status: 'pending' } });
+    expect(w.find('[data-reread]').exists()).toBe(false);
+    expect(w.find('.wall-badge.pending').exists()).toBe(false);
+    expect(w.html()).not.toContain(detail.movie.source_path);
+    expect(w.find('.wall-meta strong').text()).toBe('#5');
   });
   it('uses select for nine libraries, emits toggle scrape and entity clear, keeps draft search controlled', async () => {
-    const w = mount(WallFilters, { props: { query: { genre: '剧情', scrape: 'failed' }, search: 'draft', libraries: Array.from({ length: 9 }, (_, i) => ({ Id: i + 1, Name: `L${i}`, Path: '' })) } }); cleanups.push(() => w.unmount());
+    const w = mount(WallFilters, { props: { canManage: true, query: { genre: '剧情', scrape: 'failed' }, search: 'draft', libraries: Array.from({ length: 9 }, (_, i) => ({ Id: i + 1, Name: `L${i}`, Path: '' })) } }); cleanups.push(() => w.unmount());
     expect(w.find('#item-lib').exists()).toBe(true); expect(w.find('[data-lib]').exists()).toBe(false);
     await w.find('[data-scrape=failed]').trigger('click'); expect(w.emitted('filter')).toEqual([['scrape', 'failed', true]]);
     await w.find('#entity-clear').trigger('click'); expect(w.emitted('clearEntity')).toHaveLength(1); await w.find('input').setValue('new'); expect(w.emitted('search')).toEqual([['new']]);
@@ -81,6 +89,22 @@ describe('media controls', () => {
   });
 });
 describe('player lifetime', () => {
+  it('records completion for the playing user and never reports old playback under a new token', async () => {
+    const pinia = createPinia(), auth = useAuthStore(pinia);
+    auth.user = { ...parseUser(authFixture.User), Id: '7' }; auth.token = 'viewer-token'; auth.phase = 'authenticated';
+    const callbacks = new Map<string, () => void>(), video = document.createElement('video');
+    video.currentTime = 42;
+    const player: PlayerHandle = { url: '/media', muted: false, video, on: (name, callback) => { callbacks.set(name, callback); }, play: vi.fn(), destroy: vi.fn() };
+    vi.spyOn(playerLibrary, 'loadPlayerFactory').mockResolvedValue(() => player);
+    const request = vi.spyOn(apiClient, 'request').mockResolvedValue({});
+    const wrapper = mount(PlayerDialog, { props: { options: { title: 'movie', url: '/media', type: 'mp4', itemId: '5' } }, global: { plugins: [pinia] } });
+    await flushPromises();
+    callbacks.get('video:playing')!(); callbacks.get('video:ended')!(); await flushPromises();
+    expect(request).toHaveBeenCalledWith('/Users/7/PlayedItems/5', { auth: 'required', method: 'POST' });
+    request.mockClear(); auth.token = 'other-token';
+    callbacks.get('video:ended')!(); wrapper.unmount(); await flushPromises();
+    expect(request).not.toHaveBeenCalled(); disposePinia(pinia);
+  });
   it('loads the Vite default export without requiring a vendor global', async () => {
     const factory = await loadPlayerFactory(); const player = factory(document.createElement('div'), { title: 'module', url: '/default-export', type: 'mp4' }); expect(player.url).toBe('/default-export');
   });
@@ -108,7 +132,7 @@ describe('player lifetime', () => {
   });
 });
 async function detailPage() {
-  const pinia = createPinia(); setActivePinia(pinia); const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/item/:id', name: 'item', component: ItemDetailPage }, { path: '/items', component: { template: '<p>wall</p>' } }] });
+  const pinia = createPinia(); setActivePinia(pinia); useAuthStore(pinia).user = parseUser(authFixture.User); const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/item/:id', name: 'item', component: ItemDetailPage }, { path: '/items', component: { template: '<p>wall</p>' } }] });
   const backFromItem = vi.fn();
   await router.push('/item/5?library_id=1'); const w = mount(ItemDetailPage, { global: { plugins: [pinia, router], provide: { [viewHistoryKey as symbol]: { target: () => null, backFromItem } } } });
   cleanups.push(() => { w.unmount(); disposePinia(pinia); }); await flushPromises(); return { w, router, backFromItem };

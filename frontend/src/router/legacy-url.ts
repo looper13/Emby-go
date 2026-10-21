@@ -1,5 +1,5 @@
 const pages = new Set([
-  'overview', 'libraries', 'items', 'manual', 'settings', 'apikeys',
+  'overview', 'libraries', 'items', 'manual', 'settings', 'apikeys', 'account', 'users',
   'actors', 'favorites', 'scrape', 'scheduled', 'tasks', 'probe', 'anime', 'anime/settings', 'anime/mikan',
 ]);
 const filterKeys = new Set([

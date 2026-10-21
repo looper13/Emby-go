@@ -195,7 +195,7 @@ func (a *App) televisionItems(c *gin.Context) bool {
 		c.JSON(404, gin.H{"error": "not found"})
 		return true
 	}
-	if c.Query("UserId") != "" && c.Query("UserId") != "1" {
+	if !a.validQueryUser(c) {
 		c.JSON(404, gin.H{"error": "user not found"})
 		return true
 	}

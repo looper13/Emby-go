@@ -10,6 +10,7 @@ import ItemHero from '../components/media/ItemHero.vue';
 import DetailPlaybackControls from '../components/media/DetailPlaybackControls.vue';
 import type { TrackSelection } from '../lib/player-tracks';
 import { useTasksStore } from '../stores/tasks';
+import { useAuthStore } from '../stores/auth';
 import { useToastStore } from '../stores/toasts';
 import { usePlayerStore } from '../stores/player';
 import { useMediaActions } from '../composables/useMediaActions';
@@ -28,6 +29,7 @@ const emit = defineEmits<{ title: [value: string] }>();
 const route = useRoute(); const router = useRouter(); const history = inject(viewHistoryKey)!;
 const scope = usePageRequest(); const data = shallowRef<DetailDto | null>(null); const error = ref('');
 const tasks = useTasksStore(); const toasts = useToastStore();
+const auth = useAuthStore();
 const player = usePlayerStore(); const actions = useMediaActions(() => enter(true), () => route.fullPath);
 const playbackSelection = shallowRef<TrackSelection>();
 const scrapePreview = useScrapePreviewStore(); let mounted = true; onScopeDispose(() => { mounted = false; });
@@ -73,7 +75,7 @@ watch(() => tasks.revision, () => { void enter(true); });
 </script>
 <template>
   <article v-if="data" class="item-page" style="grid-template-columns:minmax(0,1fr)">
-    <ItemHero :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie, playbackSelection)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity">
+    <ItemHero :can-manage="auth.isAdministrator" :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie, playbackSelection)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity">
       <template #playback><DetailPlaybackControls v-if="data.playable" :key="data.movie.id" :item-id="data.movie.id" :refresh-key="data" @selection="playbackSelection = $event" /></template>
     </ItemHero>
     <div class="item-sections" style="grid-template-columns:minmax(0,1fr)">
@@ -82,9 +84,9 @@ watch(() => tasks.revision, () => { void enter(true); });
       <ArtworkGallery :id="data.movie.id" :images="backdrops" />
       <ActorList :actors="data.actors ?? []" @entity="entity" />
       <SimilarItems :items="similar" @open="openSimilar" />
-      <FileDetails :files="data.files ?? []" />
+      <FileDetails v-if="auth.isAdministrator" :files="data.files ?? []" />
       <MetadataList :movie="data.movie" :library-name="data.library_name" @entity="entity" />
-      <FileTimeline :movie="data.movie" :modified-at="data.modified_at" :expanded="filesExpanded" @expanded="filesExpanded = $event" />
+      <FileTimeline v-if="auth.isAdministrator" :movie="data.movie" :modified-at="data.modified_at" :expanded="filesExpanded" @expanded="filesExpanded = $event" />
     </div>
   </article>
   <section v-else class="panel"><p v-if="error" role="alert">{{ error }} <button class="btn" @click="enter()">重试</button></p><p v-else>加载中…</p><button class="btn" @click="back">← 返回媒体墙</button></section>

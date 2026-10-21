@@ -28,8 +28,14 @@ watch(() => route.fullPath, () => scrapePreview.close());
 watch(() => auth.authenticated, (authenticated) => { if (!authenticated) { scrapePreview.close(); scheduled.editingId = null; } });
 watch(() => route.fullPath, () => player.close());
 watch(() => auth.authenticated, (authenticated) => { if (!authenticated) player.close(); });
-watch(() => auth.authenticated, (authenticated) => { if (authenticated) void tasks.restoreAll(); else tasks.reset(); }, { immediate: true });
-watch(() => auth.token, () => wall.clear());
+watch(() => [auth.token, auth.authenticated && auth.isAdministrator], () => {
+  tasks.reset();
+  if (auth.authenticated && auth.isAdministrator) void tasks.restoreAll();
+}, { immediate: true });
+watch(() => [auth.authenticated, auth.isAdministrator], () => {
+  if (auth.authenticated && !auth.isAdministrator && route.meta.adminOnly) void router.replace('/items');
+});
+watch(() => auth.token, () => { wall.clear(); player.close(); scrapePreview.close(); scheduled.editingId = null; });
 watch(() => tasks.revision, () => { wall.dirty = true; });
 onScopeDispose(() => { scrapePreview.close(); player.close(); tasks.reset(); toasts.clear(); viewHistories.get(router)?.dispose(); });
 
@@ -50,10 +56,10 @@ watch(() => auth.expiration, () => {
 </script>
 
 <template>
-  <RouterView />
-  <TaskProgress v-if="auth.authenticated" />
+  <RouterView :key="auth.user?.Id" />
+  <TaskProgress v-if="auth.authenticated && auth.isAdministrator" />
   <PlayerDialog v-if="auth.authenticated && player.current" :key="player.current.id" :options="player.current" @close="player.close" />
-  <ScrapePreviewDialog v-if="auth.authenticated && scrapePreview.current" />
+  <ScrapePreviewDialog v-if="auth.authenticated && auth.isAdministrator && scrapePreview.current" />
   <div id="toasts" class="toasts" aria-live="assertive">
     <div v-for="toast in toasts.items" :key="toast.id" class="toast" :class="[toast.kind, { out: toast.out }]" role="status">{{ toast.message }}</div>
     <div v-if="updateAvailable" class="toast error" role="alert">

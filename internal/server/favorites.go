@@ -49,7 +49,10 @@ func validFavoriteQuery(c *gin.Context) bool {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "IsFavorite must be true or false"})
 		return false
 	}
-	if uid := c.Query("UserId"); uid != "" && uid != "1" {
+	if uid := c.Query("UserId"); uid != "" && func() bool {
+		value, ok := c.Get("accountUser")
+		return !ok || uid != strconv.FormatInt(value.(store.User).ID, 10)
+	}() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return false
 	}

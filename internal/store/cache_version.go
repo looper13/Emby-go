@@ -47,10 +47,10 @@ func (s *Store) Version(key string) string {
 // A fresh process epoch prevents reuse after restart or database replacement.
 func (s *Store) MovieVersion(id int64) string {
 	var userVersion uint64
-	if v, ok := s.userDataVersions.Load(id); ok {
+	if v, ok := s.userDataVersions.Load(s.userKey() + ":" + strconv.FormatInt(id, 10)); ok {
 		userVersion = v.(*atomic.Uint64).Load()
 	}
-	return s.MovieMetadataVersion(id) + ":" + strconv.FormatUint(userVersion, 10)
+	return s.MovieMetadataVersion(id) + ":user:" + s.userKey() + ":" + strconv.FormatUint(userVersion, 10)
 }
 
 // MovieMetadataVersion excludes playback and other user state. Image paths and
@@ -77,7 +77,7 @@ func (s *Store) MovieMetadataVersion(id int64) string {
 }
 func (s *Store) ActorVersion() string { return strconv.FormatUint(s.actorVersion.Load(), 10) }
 func (s *Store) touchUserData(id int64) {
-	v, _ := s.userDataVersions.LoadOrStore(id, &atomic.Uint64{})
+	v, _ := s.userDataVersions.LoadOrStore(s.userKey()+":"+strconv.FormatInt(id, 10), &atomic.Uint64{})
 	v.(*atomic.Uint64).Add(1)
 }
 func (s *Store) TouchMovie(id int64) {

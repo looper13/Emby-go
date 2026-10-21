@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import type { LibraryDto } from '../../api/contracts';
 import { entityParams } from '../../lib/media';
-const props = defineProps<{ query: Record<string, unknown>; libraries: LibraryDto[]; search: string }>();
+const props = defineProps<{ query: Record<string, unknown>; libraries: LibraryDto[]; search: string; canManage?: boolean }>();
 const emit = defineEmits<{ filter: [key: string, value: string, toggle?: boolean]; search: [value: string]; clearEntity: []; shuffle: [] }>();
 const value = (key: string) => typeof props.query[key] === 'string' ? props.query[key] : '';
 const entity = computed(() => entityParams.map(([key, label]) => [key, label, value(key)]).find(row => row[2]));
@@ -17,8 +17,8 @@ const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '�
   </div>
   <div v-if="entity" class="filters"><span class="filter-chip">{{ entity[1] }}：{{ entity[2] }}<button id="entity-clear" class="chip-x" title="清除该筛选" @click="emit('clearEntity')">✕</button></span><slot name="entity-action" /></div>
   <div class="filters">
-    <button v-for="[v, label] in pills" :key="v" class="pill" :class="{ 'is-active': value('status') === v }" :data-status="v" @click="emit('filter', 'status', v!)">{{ label }}</button>
-    <button v-for="[v, label] in [['failed', '刮削失败'], ['confirm', '待人工确认']]" :key="v" class="pill" :class="{ 'is-active': value('scrape') === v }" :data-scrape="v" @click="emit('filter', 'scrape', v!, true)">{{ label }}</button>
+    <template v-if="canManage"><button v-for="[v, label] in pills" :key="v" class="pill" :class="{ 'is-active': value('status') === v }" :data-status="v" @click="emit('filter', 'status', v!)">{{ label }}</button>
+    <button v-for="[v, label] in [['failed', '刮削失败'], ['confirm', '待人工确认']]" :key="v" class="pill" :class="{ 'is-active': value('scrape') === v }" :data-scrape="v" @click="emit('filter', 'scrape', v!, true)">{{ label }}</button></template>
     <input id="item-search" :value="search" placeholder="搜索标题 / 番号 / 原名" aria-label="搜索标题 / 番号 / 原名" style="min-width:200px" @input="emit('search', ($event.target as HTMLInputElement).value)">
     <select id="item-sort" aria-label="排序" :value="value('sort') || 'datecreated'" @change="emit('filter', 'sort', ($event.target as HTMLSelectElement).value)"><option v-for="[v, label] in sorts" :key="v" :value="v">{{ label }}</option></select>
     <label class="favorite-filter"><input type="checkbox" :checked="value('favorite') === 'true'" @change="emit('filter','favorite',($event.target as HTMLInputElement).checked ? 'true' : '')">仅收藏</label>

@@ -104,7 +104,7 @@ func writeAnimeCover(c *gin.Context, cover animeCover) bool {
 	if len(cover.data) == 0 {
 		return false
 	}
-	c.Header("Cache-Control", "public, max-age=3600")
+	setPrivateImageCache(c)
 	c.Header("X-Content-Type-Options", "nosniff")
 	tag := `"` + anime.SourceVersion(string(cover.data)) + `"`
 	c.Header("ETag", tag)

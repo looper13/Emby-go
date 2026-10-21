@@ -30,6 +30,9 @@ func animeFixtureApp(t *testing.T) (*App, *atomic.Int64, *atomic.Bool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.Close)
+	if err = a.db.InitializeAdministrator("admin", "password-1234"); err != nil {
+		t.Fatal(err)
+	}
 	count := &atomic.Int64{}
 	fail := &atomic.Bool{}
 	client := anime.NewClient(anime.DefaultMikanURL)

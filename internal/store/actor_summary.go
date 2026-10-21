@@ -14,7 +14,7 @@ func (s *Store) ActorSummaries(ctx context.Context, libraryID int64) ([]ActorSum
 	// The movie_actors primary key already makes each movie unique per actor.
 	query := `SELECT a.name, COUNT(*), COALESCE(a.avatar_tag,'') FROM actors a
 		JOIN movie_actors ma ON ma.actor_name=a.name
-		JOIN movies m ON m.id=ma.movie_id
+		JOIN ` + s.userMoviesSQL() + ` m ON m.id=ma.movie_id
 		WHERE m.status IN ('success','manual')`
 	args := []any{}
 	if libraryID > 0 {

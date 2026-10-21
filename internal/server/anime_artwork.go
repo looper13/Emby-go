@@ -62,11 +62,11 @@ func (a *App) serveBangumiArtwork(c *gin.Context, k artwork.Key) {
 }
 func (a *App) serveArtwork(c *gin.Context, asset artwork.Asset) {
 	lib, err := a.db.AnimeLibrary()
-	if err != nil || !lib.Enabled {
+	if err != nil || !lib.Enabled || !a.db.CanAccessLibrary(lib.ID) {
 		c.Status(404)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=3600")
+	setPrivateImageCache(c)
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Type", asset.MIME)
 	tag := `"` + asset.Hash + `"`

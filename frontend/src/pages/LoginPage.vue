@@ -88,12 +88,9 @@ onMounted(() => { void boot(); });
     <section class="auth-card">
       <p class="eyebrow">Emby-go · Archive Console</p>
       <h1>{{ initializing ? '建立管理员账户' : '欢迎回来' }}</h1>
-      <p class="auth-copy">{{ initializing
-        ? '首次运行需要创建唯一管理员账户。账户信息仅保存在本机 SQLite 数据库中，不外传、不可恢复。'
-        : '使用管理员账户进入媒体库控制台。浏览海报墙请使用 Yamby / iPlay 等 Emby 客户端。' }}</p>
       <form id="auth-form" class="auth-form" @submit.prevent="submit">
         <div class="field">
-          <label for="auth-user">管理员账号</label>
+          <label for="auth-user">{{ initializing ? '管理员账号' : '用户名' }}</label>
           <input
             id="auth-user" ref="usernameInput" v-model="username" name="Username" autocomplete="username"
             minlength="3" required :disabled="busy" autofocus placeholder="至少 3 个字符"
@@ -116,13 +113,12 @@ onMounted(() => { void boot(); });
         </div>
         <p class="auth-error" role="alert">{{ message }}</p>
         <button class="btn btn-accent" type="submit" :disabled="busy || needsRetry">
-          {{ busy ? '请稍候…' : (initializing ? '完成初始化' : '登录管理后台') }}
+          {{ busy ? '请稍候…' : (initializing ? '完成初始化' : '登录') }}
         </button>
         <button v-if="needsRetry" class="btn" type="button" :disabled="busy" @click="boot(true)">
           <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" /><span>重试</span>
         </button>
       </form>
-      <p class="auth-note">NFO 为元数据真源 · 仅 http/https .strm 进入 Emby</p>
     </section>
   </AuthLayout>
 </template>

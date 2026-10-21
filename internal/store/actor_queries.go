@@ -52,7 +52,7 @@ func (s *Store) PersonPosters(ctx context.Context, names []string) (map[string]s
 		}
 		rows, err := s.db.QueryContext(ctx, `WITH latest AS (
 			SELECT ma.actor_name, MAX(ma.movie_id) AS movie_id FROM movie_actors ma
-			JOIN movies m ON m.id=ma.movie_id
+			JOIN `+s.userMoviesSQL()+` m ON m.id=ma.movie_id
 			WHERE ma.actor_name IN (`+strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`)
 			AND m.status IN ('success','manual') GROUP BY ma.actor_name
 		) SELECT latest.actor_name, COALESCE(NULLIF(m.poster_path,''),m.source_path)

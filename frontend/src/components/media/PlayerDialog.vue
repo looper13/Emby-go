@@ -7,6 +7,8 @@ import {
 } from '../../lib/player';
 import { useToastStore } from '../../stores/toasts';
 import { apiClient } from '../../api/client';
+import { currentUserPath } from '../../api/user-context';
+import { useAuthStore } from '../../stores/auth';
 import { offsetVtt, parsePlaybackSource, resolveTrackSelection, selectionMatches, subtitleTrackOptions, supportsNativeAudio, subtitlePath, trackLabel, type PlaybackSource, type TrackEngine } from '../../lib/player-tracks';
 import { playbackType } from '../../lib/player';
 const props = defineProps<{ options: PlayerOptions }>();
@@ -15,6 +17,7 @@ const shell = ref<HTMLElement>();
 const stage = ref<HTMLElement>();
 const closeButton = ref<HTMLButtonElement>();
 const toasts = useToastStore();
+const auth = useAuthStore(), playbackToken = auth.token;
 const source = shallowRef<PlaybackSource>();
 const engine = shallowRef<TrackEngine>();
 const trackHost = shallowRef<HTMLElement>();
@@ -41,6 +44,7 @@ let progressTimer: ReturnType<typeof setInterval> | undefined;
 let began = false,
   resumed = false;
 function reportProgress(stopped = false) {
+  if (auth.token !== playbackToken) return;
   if (!stopped && remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'PATCH', readOnly: true }).catch(() => {});
   const video = session?.player.video;
   if (
@@ -61,6 +65,12 @@ function reportProgress(stopped = false) {
       },
     })
     .catch(() => {});
+}
+async function markPlayed() {
+  if (!active || auth.token !== playbackToken || !props.options.itemId) return;
+  try {
+    await apiClient.request(currentUserPath(`PlayedItems/${encodeURIComponent(props.options.itemId)}`), { auth: 'required', method: 'POST' });
+  } catch { /* Progress reporting must not interrupt playback. */ }
 }
 function keyboard(event: KeyboardEvent) {
   if (document.getElementById('scrape-overlay')) return;
@@ -180,7 +190,7 @@ async function mountPlayback(options: PlayerOptions, state?: ReturnType<typeof p
   session.player.on('video:timeupdate', () => { if (serial === generation) position.value = offset.value + (session?.player.video?.currentTime ?? 0); });
   session.player.on('video:playing', () => { began = true; });
   session.player.on('video:ended', () => {
-    if (props.options.itemId && serial === generation) void apiClient.request(`/Users/1/PlayedItems/${encodeURIComponent(props.options.itemId)}`, { auth: 'required', method: 'POST' }).catch(() => {});
+    if (serial === generation) void markPlayed();
   });
 }
 async function chooseAudio(value: string, seek?: number) {
@@ -240,7 +250,7 @@ onMounted(async () => {
 onScopeDispose(() => {
   active = false;
   generation++; controller.abort(); subtitleRequest?.abort(); clearSubtitle();
-  if (remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'DELETE', readOnly: true }).catch(() => {});
+  if (auth.token === playbackToken && remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'DELETE', readOnly: true }).catch(() => {});
   clearInterval(progressTimer);
   reportProgress(true);
   session?.destroy();

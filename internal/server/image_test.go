@@ -97,7 +97,7 @@ func TestImageHeadersThumbnailAnd304(t *testing.T) {
 	imagePath := "/Items/" + strconv.FormatInt(id, 10) + "/Images/Primary"
 
 	// —— 原图：内容与磁盘一致，带 ETag 与 Cache-Control ——
-	resp, body := call("GET", imagePath, "", "")
+	resp, body := call("GET", imagePath, auth.AccessToken, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("取原图: %d", resp.StatusCode)
 	}
@@ -112,12 +112,13 @@ func TestImageHeadersThumbnailAnd304(t *testing.T) {
 	if etag == "" || !strings.HasPrefix(etag, `"`) {
 		t.Fatalf("缺少合规 ETag: %q", etag)
 	}
-	if cacheControl := resp.Header.Get("Cache-Control"); !strings.Contains(cacheControl, "max-age=") {
-		t.Errorf("缺少 Cache-Control max-age: %q", cacheControl)
+	if cacheControl := resp.Header.Get("Cache-Control"); cacheControl != "private, no-cache" {
+		t.Errorf("图片须私有缓存且重新验证权限: %q", cacheControl)
 	}
 
 	// —— 条件请求：命中 ETag 直接 304，且不再回图 ——
 	req, _ := http.NewRequest("GET", ts.URL+imagePath, nil)
+	req.Header.Set("X-Emby-Token", auth.AccessToken)
 	req.Header.Set("If-None-Match", etag)
 	notModified, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -132,7 +133,7 @@ func TestImageHeadersThumbnailAnd304(t *testing.T) {
 	}
 
 	// —— 缩略图：maxWidth=50 时应返回按比例缩小的 webp ——
-	resp, body = call("GET", imagePath+"?maxWidth=50", "", "")
+	resp, body = call("GET", imagePath+"?maxWidth=50", auth.AccessToken, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("取缩略图: %d", resp.StatusCode)
 	}
@@ -151,7 +152,7 @@ func TestImageHeadersThumbnailAnd304(t *testing.T) {
 	}
 
 	// —— 不存在的 id 仍是 404 ——
-	if resp, _ := call("GET", "/Items/999999/Images/Primary", "", ""); resp.StatusCode != http.StatusNotFound {
+	if resp, _ := call("GET", "/Items/999999/Images/Primary", auth.AccessToken, ""); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("不存在影片应 404，实际 %d", resp.StatusCode)
 	}
 }

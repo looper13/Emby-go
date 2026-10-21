@@ -20,6 +20,11 @@ import (
 // Store 的 gversion 是 kv 中 'g:version' 的进程内镜像：列表/详情缓存键都含该值，
 // 每个请求都要读一次，走内存可免去单连接 SQLite 的串行查询。
 type Store struct {
+	*storeState
+	userID int64
+}
+
+type storeState struct {
 	db                   *sql.DB
 	gversion             atomic.Int64
 	movieVersions        sync.Map
@@ -30,6 +35,7 @@ type Store struct {
 	scrapeVersion        atomic.Uint64
 	movieEpoch           string
 	actorVersion         atomic.Uint64
+	accessRevision       atomic.Uint64
 	versionMu            sync.RWMutex
 	libraryVersions      map[string]int64
 	itemFavoritesMu      sync.RWMutex
@@ -139,12 +145,8 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{db: db, movieEpoch: hex.EncodeToString(cacheID[:]), libraryVersions: make(map[string]int64)}
+	s := &Store{storeState: &storeState{db: db, movieEpoch: hex.EncodeToString(cacheID[:]), libraryVersions: make(map[string]int64)}, userID: 1}
 	if err := s.init(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.loadItemFavorites(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -164,10 +166,22 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.migrateAccount(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN last_stopped_ticks INTEGER DEFAULT -1")
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN likes INTEGER NOT NULL DEFAULT 0")
 	_, _ = db.Exec("ALTER TABLE userdata ADD COLUMN hide_from_resume INTEGER NOT NULL DEFAULT 0")
+	if err := s.migrateUsers(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.loadItemFavorites(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN landscape_path TEXT")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN backdrop_paths TEXT NOT NULL DEFAULT '[]'")
 	_, _ = db.Exec("ALTER TABLE movies ADD COLUMN trailer_url TEXT")
@@ -272,7 +286,7 @@ func passwordHash(password string) (string, error) {
 
 func (s *Store) HasAdministrator() (bool, error) {
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM administrators WHERE id=1").Scan(&count); err != nil {
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE id=1 AND is_administrator=1").Scan(&count); err != nil {
 		return false, err
 	}
 	return count == 1, nil
@@ -283,13 +297,13 @@ func (s *Store) InitializeAdministrator(username, password string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec("INSERT INTO administrators(id,username,password_hash,created_at) VALUES(1,?,?,?)", username, hash, time.Now().UTC().Format(time.RFC3339))
+	_, err = s.db.Exec("INSERT INTO users(id,username,password_hash,is_administrator,created_at) VALUES(1,?,?,1,?)", username, hash, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
 func (s *Store) AuthenticateAdministrator(username, password string) (bool, error) {
 	var stored string
-	if err := s.db.QueryRow("SELECT password_hash FROM administrators WHERE id=1 AND username=?", username).Scan(&stored); err != nil {
+	if err := s.db.QueryRow("SELECT password_hash FROM users WHERE id=1 AND username=? AND is_disabled=0", username).Scan(&stored); err != nil {
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
@@ -300,7 +314,7 @@ func (s *Store) AuthenticateAdministrator(username, password string) (bool, erro
 
 func (s *Store) AdministratorName() (string, error) {
 	var username string
-	err := s.db.QueryRow("SELECT username FROM administrators WHERE id=1").Scan(&username)
+	err := s.db.QueryRow("SELECT username FROM users WHERE id=1").Scan(&username)
 	return username, err
 }
 
@@ -311,7 +325,7 @@ func (s *Store) SaveAccessToken(token string) error {
 
 func (s *Store) HasAccessToken(token string) (bool, error) {
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM access_tokens WHERE token=?", token).Scan(&count); err != nil {
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM access_tokens t JOIN users u ON u.id=t.user_id WHERE t.token=? AND u.is_disabled=0", token).Scan(&count); err != nil {
 		return false, err
 	}
 	return count == 1, nil
@@ -739,7 +753,7 @@ func (s *Store) SimilarCandidates(src Movie, limit int) ([]ScoredMovie, error) {
 	args = append(args, limit)
 	query := `SELECT f.movie_id, SUM(f.weight) AS score
 		FROM movie_features f
-		JOIN movies m ON m.id=f.movie_id AND m.status IN ('success','manual')
+		JOIN ` + s.userMoviesSQL() + ` m ON m.id=f.movie_id AND m.status IN ('success','manual')
 		WHERE f.movie_id<>? AND (f.kind,f.value) IN (VALUES ` + placeholders + `)
 		GROUP BY f.movie_id ORDER BY score DESC, f.movie_id LIMIT ?`
 	rows, err := s.db.Query(query, args...)
@@ -1083,7 +1097,7 @@ type movieOrder struct {
 }
 
 func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed bool, favorite *bool, order movieOrder, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
-	where := []string{}
+	where := []string{"library_id IN (SELECT id FROM " + s.userLibrariesSQL() + ")"}
 	args := []any{}
 	if len(order.itemTypes) > 0 {
 		movie, episode := false, false
@@ -1192,10 +1206,10 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		}
 	}
 	if unplayed {
-		where = append(where, "NOT EXISTS (SELECT 1 FROM userdata WHERE userdata.movie_id=movies.id AND userdata.played=1)")
+		where = append(where, "NOT EXISTS (SELECT 1 FROM userdata WHERE userdata.user_id="+s.userKey()+" AND userdata.movie_id=movies.id AND userdata.played=1)")
 	}
 	if favorite != nil {
-		predicate := "EXISTS (SELECT 1 FROM userdata WHERE userdata.movie_id=movies.id AND userdata.is_favorite=1)"
+		predicate := "EXISTS (SELECT 1 FROM userdata WHERE userdata.user_id=" + s.userKey() + " AND userdata.movie_id=movies.id AND userdata.is_favorite=1)"
 		if !*favorite {
 			predicate = "NOT " + predicate
 		}
@@ -1257,7 +1271,7 @@ func (s *Store) Data(id int64) (UserData, error) {
 	var d UserData
 	var played, favorite, likes, hidden int
 	err := s.db.QueryRow(`SELECT position_ticks,play_count,played,COALESCE(last_played_at,''),COALESCE(last_stopped_ticks,-1),
-		COALESCE(is_favorite,0),COALESCE(likes,0),COALESCE(hide_from_resume,0) FROM userdata WHERE movie_id=?`, id).Scan(&d.PositionTicks, &d.PlayCount, &played, &d.LastPlayedAt, &d.StoppedTicks, &favorite, &likes, &hidden)
+		COALESCE(is_favorite,0),COALESCE(likes,0),COALESCE(hide_from_resume,0) FROM userdata WHERE user_id=? AND movie_id=?`, s.UserID(), id).Scan(&d.PositionTicks, &d.PlayCount, &played, &d.LastPlayedAt, &d.StoppedTicks, &favorite, &likes, &hidden)
 	d.Played = played != 0
 	d.IsFavorite = favorite != 0
 	d.Likes = likes
@@ -1280,7 +1294,7 @@ func (s *Store) DataFor(ids []int64) (map[int64]UserData, error) {
 		args[i] = id
 	}
 	rows, err := s.db.Query(`SELECT movie_id,position_ticks,play_count,played,COALESCE(last_played_at,''),COALESCE(last_stopped_ticks,-1),
-		COALESCE(is_favorite,0),COALESCE(likes,0),COALESCE(hide_from_resume,0) FROM userdata WHERE movie_id IN (`+placeholders+`)`, args...)
+		COALESCE(is_favorite,0),COALESCE(likes,0),COALESCE(hide_from_resume,0) FROM userdata WHERE user_id=`+s.userKey()+` AND movie_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1381,11 +1395,11 @@ func b2i(v bool) int {
 // SavePlayback 只写播放相关列。播放上报与各 setter 各写各的列，
 // 避免「读整行→改一列→写回整行」时用旧值覆盖并发的收藏/评分变更。
 func (s *Store) SavePlayback(id int64, positionTicks, playCount int64, lastPlayedAt string, stoppedTicks int64) error {
-	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,position_ticks,play_count,last_played_at,last_stopped_ticks)
-		VALUES(?,?,?,?,?)
-		ON CONFLICT(movie_id) DO UPDATE SET position_ticks=excluded.position_ticks,play_count=excluded.play_count,
+	_, err := s.db.Exec(`INSERT INTO userdata(user_id,movie_id,position_ticks,play_count,last_played_at,last_stopped_ticks)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(user_id,movie_id) DO UPDATE SET position_ticks=excluded.position_ticks,play_count=excluded.play_count,
 		last_played_at=excluded.last_played_at,last_stopped_ticks=excluded.last_stopped_ticks`,
-		id, positionTicks, playCount, lastPlayedAt, stoppedTicks)
+		s.UserID(), id, positionTicks, playCount, lastPlayedAt, stoppedTicks)
 	if err == nil {
 		s.touchUserData(id)
 	}
@@ -1394,8 +1408,8 @@ func (s *Store) SavePlayback(id int64, positionTicks, playCount int64, lastPlaye
 
 // SetPlayed 只更新已播标记。
 func (s *Store) SetPlayed(id int64, played bool) error {
-	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,played) VALUES(?,?)
-		ON CONFLICT(movie_id) DO UPDATE SET played=excluded.played`, id, b2i(played))
+	_, err := s.db.Exec(`INSERT INTO userdata(user_id,movie_id,played) VALUES(?,?,?)
+		ON CONFLICT(user_id,movie_id) DO UPDATE SET played=excluded.played`, s.UserID(), id, b2i(played))
 	if err == nil {
 		s.touchUserData(id)
 	}
@@ -1404,8 +1418,8 @@ func (s *Store) SetPlayed(id int64, played bool) error {
 
 // SetFavorite 收藏/取消收藏。
 func (s *Store) SetFavorite(id int64, favorite bool) error {
-	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,is_favorite) VALUES(?,?)
-		ON CONFLICT(movie_id) DO UPDATE SET is_favorite=excluded.is_favorite`, id, b2i(favorite))
+	_, err := s.db.Exec(`INSERT INTO userdata(user_id,movie_id,is_favorite) VALUES(?,?,?)
+		ON CONFLICT(user_id,movie_id) DO UPDATE SET is_favorite=excluded.is_favorite`, s.UserID(), id, b2i(favorite))
 	if err == nil {
 		s.touchUserData(id)
 	}
@@ -1414,8 +1428,8 @@ func (s *Store) SetFavorite(id int64, favorite bool) error {
 
 // SetLikes 个人评分：1 赞 / -1 踩 / 0 清除。
 func (s *Store) SetLikes(id int64, likes int) error {
-	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,likes) VALUES(?,?)
-		ON CONFLICT(movie_id) DO UPDATE SET likes=excluded.likes`, id, likes)
+	_, err := s.db.Exec(`INSERT INTO userdata(user_id,movie_id,likes) VALUES(?,?,?)
+		ON CONFLICT(user_id,movie_id) DO UPDATE SET likes=excluded.likes`, s.UserID(), id, likes)
 	if err == nil {
 		s.touchUserData(id)
 	}
@@ -1424,8 +1438,8 @@ func (s *Store) SetLikes(id int64, likes int) error {
 
 // SetHideFromResume 隐藏/恢复续播。
 func (s *Store) SetHideFromResume(id int64, hidden bool) error {
-	_, err := s.db.Exec(`INSERT INTO userdata(movie_id,hide_from_resume) VALUES(?,?)
-		ON CONFLICT(movie_id) DO UPDATE SET hide_from_resume=excluded.hide_from_resume`, id, b2i(hidden))
+	_, err := s.db.Exec(`INSERT INTO userdata(user_id,movie_id,hide_from_resume) VALUES(?,?,?)
+		ON CONFLICT(user_id,movie_id) DO UPDATE SET hide_from_resume=excluded.hide_from_resume`, s.UserID(), id, b2i(hidden))
 	if err == nil {
 		s.touchUserData(id)
 	}
@@ -1520,7 +1534,7 @@ func (s *Store) Actors(movieID int64) ([]ActorRef, error) {
 
 // Latest 返回库内最近入库的可见影片（按入库倒序）。
 func (s *Store) Latest(libraryID int64, limit, offset int, itemTypes ...string) ([]Movie, error) {
-	query := "SELECT " + movieCols + " FROM movies WHERE status IN ('success','manual')"
+	query := "SELECT " + movieCols + " FROM " + s.userMoviesSQL() + " movies WHERE status IN ('success','manual')"
 	query += mediaTypeClause(itemTypes)
 	args := []any{}
 	if libraryID > 0 {
@@ -1551,7 +1565,7 @@ func (s *Store) Resumed(limit, offset int) ([]Movie, int, error) {
 	return s.ResumedScoped(0, nil, limit, offset)
 }
 func (s *Store) ResumedScoped(libraryID int64, itemTypes []string, limit, offset int) ([]Movie, int, error) {
-	cond := ` FROM movies JOIN userdata u ON u.movie_id=movies.id
+	cond := ` FROM ` + s.userMoviesSQL() + ` movies JOIN ` + s.userDataSQL() + ` u ON u.movie_id=movies.id
 		WHERE movies.status IN ('success','manual') AND u.position_ticks>0 AND COALESCE(u.played,0)=0 AND COALESCE(u.hide_from_resume,0)=0`
 	cond += mediaTypeClause(itemTypes)
 	args := []any{}
@@ -1622,7 +1636,7 @@ func splitTerms(value string) []string {
 // distinctStrings 对可见影片某 JSON 列（genres/tags/studios）做去重。
 // collection："" 不限；"*" 限定“属于任一合集”；其它值限定具体合集。
 func (s *Store) distinctStrings(libraryID int64, collection, column string) ([]string, error) {
-	query := "SELECT " + column + " FROM movies WHERE status IN ('success','manual')"
+	query := "SELECT " + column + " FROM " + s.userMoviesSQL() + " movies WHERE status IN ('success','manual')"
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -1682,7 +1696,7 @@ func (s *Store) Persons(libraryID int64, collection string) ([]string, error) {
 		SELECT movie_id, actor_name AS name FROM movie_actors
 		UNION SELECT id, TRIM(director) FROM movies WHERE TRIM(COALESCE(director,''))<>''
 	) SELECT DISTINCT people.name FROM people
-		JOIN movies ON movies.id=people.movie_id
+		JOIN ` + s.userMoviesSQL() + ` movies ON movies.id=people.movie_id
 		WHERE movies.status IN ('success','manual')`
 	args := []any{}
 	if libraryID > 0 {
@@ -1719,7 +1733,7 @@ func (s *Store) Collections(minMovies int) ([]string, error) {
 	if minMovies < 1 {
 		minMovies = 1
 	}
-	rows, err := s.db.Query(`SELECT collection FROM movies
+	rows, err := s.db.Query(`SELECT collection FROM `+s.userMoviesSQL()+`
 		WHERE status IN ('success','manual') AND COALESCE(collection,'') <> ''
 		GROUP BY collection HAVING COUNT(*) >= ?
 		ORDER BY collection`, minMovies)
@@ -1748,9 +1762,9 @@ var entityColumns = map[string]string{
 // EntityPoster returns a representative stored poster or source reference for
 // request-time artwork discovery. collection limits the scope (""/"*"/name).
 func (s *Store) EntityPoster(kind, name string, libraryID int64, collection string) (string, error) {
-	from := "movies"
+	from := s.userMoviesSQL() + " movies"
 	if kind == "Person" {
-		from = "movie_actors ma JOIN movies ON movies.id=ma.movie_id"
+		from = "movie_actors ma JOIN " + s.userMoviesSQL() + " movies ON movies.id=ma.movie_id"
 	}
 	query := `SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM ` + from + `
 		WHERE movies.status IN ('success','manual')`
@@ -1813,7 +1827,7 @@ func (s *Store) RepresentativeArt(libraryID int64) (string, error) {
 // CollectionPoster returns a stored poster or source reference for lazy artwork.
 func (s *Store) CollectionPoster(collection string) (string, error) {
 	var path string
-	err := s.db.QueryRow(`SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM movies
+	err := s.db.QueryRow(`SELECT COALESCE(NULLIF(poster_path,''),source_path) FROM `+s.userMoviesSQL()+`
 		WHERE collection=? AND status IN ('success','manual')
 		ORDER BY id DESC LIMIT 1`, collection).Scan(&path)
 	if err == sql.ErrNoRows {
@@ -1837,10 +1851,10 @@ func (s *Store) CollectionStats(minMovies int) (map[string]CollectionStat, error
 		minMovies = 1
 	}
 	rows, err := s.db.Query(`SELECT m1.collection, COUNT(*),
-		COALESCE((SELECT COALESCE(NULLIF(m2.poster_path,''),m2.source_path) FROM movies m2
+		COALESCE((SELECT COALESCE(NULLIF(m2.poster_path,''),m2.source_path) FROM `+s.userMoviesSQL()+` m2
 			WHERE m2.collection=m1.collection AND m2.status IN ('success','manual')
 			ORDER BY m2.id DESC LIMIT 1),'')
-		FROM movies m1
+		FROM `+s.userMoviesSQL()+` m1
 		WHERE m1.status IN ('success','manual') AND COALESCE(m1.collection,'')<>''
 		GROUP BY m1.collection HAVING COUNT(*) >= ?`, minMovies)
 	if err != nil {
@@ -1860,7 +1874,7 @@ func (s *Store) CollectionStats(minMovies int) (map[string]CollectionStat, error
 		return nil, err
 	}
 	// 流派存在每行的 JSON 列里，单独取两列后在内存聚合去重。
-	rows2, err := s.db.Query(`SELECT collection, genres FROM movies
+	rows2, err := s.db.Query(`SELECT collection, genres FROM ` + s.userMoviesSQL() + `
 		WHERE status IN ('success','manual') AND COALESCE(collection,'')<>''`)
 	if err != nil {
 		return nil, err
@@ -1901,11 +1915,11 @@ func (s *Store) CollectionStats(minMovies int) (map[string]CollectionStat, error
 
 // CollectionSummary 返回合集内可见影片数与该合集聚合出的流派（去重）。
 func (s *Store) CollectionSummary(collection string) (count int, genres []string, err error) {
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM movies
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM `+s.userMoviesSQL()+`
 		WHERE collection=? AND status IN ('success','manual')`, collection).Scan(&count); err != nil {
 		return 0, nil, err
 	}
-	rows, err := s.db.Query(`SELECT genres FROM movies
+	rows, err := s.db.Query(`SELECT genres FROM `+s.userMoviesSQL()+`
 		WHERE collection=? AND status IN ('success','manual')`, collection)
 	if err != nil {
 		return count, nil, err
@@ -1936,7 +1950,7 @@ func (s *Store) CollectionSummary(collection string) (count int, genres []string
 func (s *Store) UnplayedInLibrary(libraryID int64) (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM movies WHERE library_id=? AND status IN ('success','manual')
-		AND NOT EXISTS (SELECT 1 FROM userdata u WHERE u.movie_id=movies.id AND u.played=1)`, libraryID).Scan(&count)
+		AND NOT EXISTS (SELECT 1 FROM userdata u WHERE u.user_id=`+s.userKey()+` AND u.movie_id=movies.id AND u.played=1)`, libraryID).Scan(&count)
 	return count, err
 }
 

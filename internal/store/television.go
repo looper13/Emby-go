@@ -108,7 +108,7 @@ func ParseTVID(id string) (kind string, libraryID int64, path string, season int
 }
 
 func (s *Store) TVEpisodes(libraryID int64, seriesPath string) ([]Movie, error) {
-	where := `status IN ('success','manual') AND television <> 'null' AND library_id IN (SELECT id FROM libraries WHERE enabled=1 AND source_type='nfo_directory')`
+	where := `status IN ('success','manual') AND television <> 'null' AND library_id IN (SELECT id FROM ` + s.userLibrariesSQL() + ` WHERE source_type='nfo_directory')`
 	args := []any{}
 	if libraryID > 0 {
 		where += " AND library_id=?"

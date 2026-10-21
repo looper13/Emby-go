@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import { boolean, count, record, string } from './admin';
 import { entityIdOf } from '../lib/media';
+import { currentUserPath } from './user-context';
 
 export interface FavoriteItem {
   Id: string; Name: string; Type: string; ImageTags: Record<string, string>;
@@ -18,15 +19,15 @@ export function parseFavoriteItem(value: unknown): FavoriteItem {
 }
 export const favoritesApi = {
   async set(id: string, favorite: boolean) {
-    const data = record(await apiClient.request(`/Users/1/FavoriteItems/${encodeURIComponent(id)}`, { auth: 'required', method: favorite ? 'POST' : 'DELETE' }));
+    const data = record(await apiClient.request(currentUserPath(`FavoriteItems/${encodeURIComponent(id)}`), { auth: 'required', method: favorite ? 'POST' : 'DELETE' }));
     if (data.ItemId !== id) throw new Error('收藏响应条目不一致');
     return boolean(data.IsFavorite);
   },
   async item(id: string, signal?: AbortSignal) {
-    return parseFavoriteItem(await apiClient.request(`/Users/1/Items/${encodeURIComponent(id)}`, { auth: 'required', signal }));
+    return parseFavoriteItem(await apiClient.request(`/Items/${encodeURIComponent(id)}`, { auth: 'required', signal }));
   },
   async list(type: string, search: string, offset: number, signal?: AbortSignal) {
-    const query = new URLSearchParams({ UserId: '1', Recursive: 'true', IncludeItemTypes: type, Filters: 'IsFavorite', SearchTerm: search, SortBy: 'SortName', SortOrder: 'Ascending', StartIndex: String(offset), Limit: '48' });
+    const query = new URLSearchParams({ Recursive: 'true', IncludeItemTypes: type, Filters: 'IsFavorite', SearchTerm: search, SortBy: 'SortName', SortOrder: 'Ascending', StartIndex: String(offset), Limit: '48' });
     const data = record(await apiClient.request(`/Items?${query}`, { auth: 'required', signal }));
     if (!Array.isArray(data.Items)) throw new Error('服务响应格式不正确');
     const items = data.Items.map(parseFavoriteItem);

@@ -973,6 +973,7 @@ func TestProxyStreamRange(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("GET", ts.URL+"/Videos/1/proxy", nil)
+	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("Range", "bytes=2-5")
 	resp, e := http.DefaultClient.Do(req)
 	if e != nil {
@@ -986,7 +987,7 @@ func TestProxyStreamRange(t *testing.T) {
 
 	// 无 Range 时返回完整内容。
 	resp, data = func() (*http.Response, []byte) {
-		r, e := http.Get(ts.URL + "/Videos/1/proxy")
+		r, e := http.Get(ts.URL + "/Videos/1/proxy?api_key=" + token)
 		if e != nil {
 			t.Fatal(e)
 		}

@@ -25,6 +25,7 @@ import (
 )
 
 type audioSession struct {
+	userID        int64
 	item, dir     string
 	clientSession string
 	cancel        context.CancelFunc
@@ -202,7 +203,7 @@ func (a *App) startAudioPlayback(c *gin.Context) {
 		var previous string
 		a.mediaMu.Lock()
 		for key, session := range a.mediaSessions {
-			if session.item == id && session.clientSession == request.PlaySessionId {
+			if session.userID == a.db.UserID() && session.item == id && session.clientSession == request.PlaySessionId {
 				previous = key
 				break
 			}
@@ -225,7 +226,7 @@ func (a *App) startAudioPlayback(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(a.rootCtx, 4*time.Hour)
 	sessionID := randomSessionID()
-	session := &audioSession{item: id, dir: dir, cancel: cancel, done: make(chan struct{})}
+	session := &audioSession{userID: a.db.UserID(), item: id, dir: dir, cancel: cancel, done: make(chan struct{})}
 	session.clientSession = request.PlaySessionId
 	session.touched.Store(time.Now().UnixNano())
 	seekTime := strconv.FormatFloat(float64(request.StartTimeTicks)/1e7, 'f', 3, 64)
@@ -379,13 +380,20 @@ func (a *App) stopMediaSession(item, id string) {
 	a.mediaMu.Lock()
 	session := a.mediaSessions[id]
 	a.mediaMu.Unlock()
-	if session != nil && session.item == item {
+	if session != nil && session.item == item && session.userID == a.db.UserID() {
 		session.cancel()
 		<-session.done
 	}
 }
 
 func (a *App) stopAudioPlayback(c *gin.Context) {
+	a.mediaMu.Lock()
+	session := a.mediaSessions[c.Param("session")]
+	a.mediaMu.Unlock()
+	if session == nil || session.userID != a.db.UserID() {
+		c.Status(404)
+		return
+	}
 	a.stopMediaSession(c.Param("id"), c.Param("session"))
 	c.Status(204)
 }
@@ -394,7 +402,7 @@ func (a *App) touchAudioPlayback(c *gin.Context) {
 	a.mediaMu.Lock()
 	session := a.mediaSessions[c.Param("session")]
 	a.mediaMu.Unlock()
-	if session == nil || session.item != c.Param("id") {
+	if session == nil || session.item != c.Param("id") || session.userID != a.db.UserID() {
 		c.Status(404)
 		return
 	}
@@ -415,6 +423,16 @@ func (a *App) hlsResource(c *gin.Context) {
 	session := a.mediaSessions[c.Param("session")]
 	a.mediaMu.Unlock()
 	if session == nil || session.item != c.Param("id") {
+		c.Status(404)
+		return
+	}
+	user, err := a.db.User(session.userID)
+	if err != nil || user.Disabled {
+		c.Status(404)
+		return
+	}
+	a = &App{appState: a.appState, db: a.db.ForUser(user.ID)}
+	if !a.canAccessItem(session.item) {
 		c.Status(404)
 		return
 	}

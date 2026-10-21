@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { Archive, RefreshCw } from '@lucide/vue';
 import { catalogApi } from '../api/catalog';
+import { adminApi } from '../api/admin';
 import { isAbortError } from '../api/client';
 import { usePageRequest } from '../composables/usePageRequest';
 import type { LibrariesDto, StatusDto } from '../api/contracts';
@@ -33,7 +34,7 @@ async function load() {
   error.value = '';
   try {
     const [libraries, successTotal, status] = await Promise.all([
-      catalogApi.libraries(request.signal), catalogApi.successTotal(request.signal), catalogApi.status(request.signal),
+      adminApi.libraries(request.signal), catalogApi.successTotal(request.signal), catalogApi.status(request.signal),
     ]);
     if (request.isCurrent()) data.value = { libraries, successTotal, status };
   } catch (cause) {

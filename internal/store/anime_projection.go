@@ -45,8 +45,8 @@ func (p AnimeProjection) ItemID() string {
 }
 func (s *Store) AnimeProjection() ([]AnimeProjection, error) {
 	rows, err := s.db.Query(`SELECT b.subject_id,COALESCE(b.episode_id,0),b.movie_id,COALESCE(e.season,1),COALESCE(e.emby_index,1),COALESCE(u.played,0),COALESCE(u.position_ticks,0),COALESCE(u.play_count,0),COALESCE(u.hide_from_resume,0),s.name FROM anime_media_bindings b
-JOIN anime_subjects s ON s.id=b.subject_id JOIN movies m ON m.id=b.movie_id JOIN libraries l ON l.id=m.library_id
-LEFT JOIN anime_episodes e ON e.id=b.episode_id LEFT JOIN userdata u ON u.movie_id=m.id
+JOIN anime_subjects s ON s.id=b.subject_id JOIN ` + s.userMoviesSQL() + ` m ON m.id=b.movie_id JOIN libraries l ON l.id=m.library_id
+LEFT JOIN anime_episodes e ON e.id=b.episode_id LEFT JOIN ` + s.userDataSQL() + ` u ON u.movie_id=m.id
 WHERE m.status IN ('success','manual') AND l.enabled=1 AND l.source_type='nfo_directory'
 ORDER BY s.name,b.subject_id,COALESCE(e.season,1) DESC,COALESCE(CAST(e.sort AS REAL),1),e.id`)
 	if err != nil {

@@ -15,6 +15,7 @@ export const useAuthStore = defineStore('auth', () => {
   const submitting = ref(false);
   const expiration = ref(0);
   const authenticated = computed(() => Boolean(token.value && user.value && phase.value === 'authenticated'));
+  const isAdministrator = computed(() => user.value?.Policy.IsAdministrator === true);
   let generation = 0;
   let check: { token: string; promise: Promise<boolean> } | undefined;
   let statusRequest: Promise<boolean> | undefined;
@@ -106,8 +107,43 @@ export const useAuthStore = defineStore('auth', () => {
     } finally { submitting.value = false; }
   }
 
+  function clearSession(expectedToken = token.value) {
+    if (token.value !== expectedToken) return;
+    generation += 1;
+    if (localStorage.getItem(TOKEN_KEY) === expectedToken) localStorage.removeItem(TOKEN_KEY);
+    token.value = localStorage.getItem(TOKEN_KEY);
+    user.value = null;
+    phase.value = token.value ? 'idle' : 'anonymous';
+    error.value = '';
+  }
+
+  async function logout() {
+    if (submitting.value) return;
+    const sentToken = token.value;
+    submitting.value = true;
+    try {
+      await authApi.logout();
+      clearSession(sentToken);
+    } catch (cause) {
+      if (!(cause instanceof ApiError && cause.status === 401)) throw cause;
+      clearSession(sentToken);
+    } finally { submitting.value = false; }
+  }
+
+  function storageChanged(event: StorageEvent) {
+    if (event.key !== TOKEN_KEY) return;
+    generation += 1;
+    token.value = event.newValue;
+    user.value = null;
+    phase.value = event.newValue ? 'idle' : 'anonymous';
+    if (!event.newValue) expiration.value += 1;
+    else void checkSession().catch(() => {});
+  }
+  window.addEventListener('storage', storageChanged);
+  onScopeDispose(() => window.removeEventListener('storage', storageChanged));
+
   return {
-    token, user, initialized, phase, error, submitting, expiration, authenticated,
-    checkSession, loadStatus, initialize, login,
+    token, user, initialized, phase, error, submitting, expiration, authenticated, isAdministrator,
+    checkSession, loadStatus, initialize, login, logout, clearSession,
   };
 });

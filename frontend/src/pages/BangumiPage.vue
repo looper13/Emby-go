@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router';
 import { ChevronLeft, ChevronRight, Search, Settings } from '@lucide/vue';
 import { animeApi } from '../api/anime';
 import { useAdminRead } from '../composables/useAdminRead';
+import { useAuthStore } from '../stores/auth';
 import ReadState from '../components/common/ReadState.vue';
 import MediaImage from '../components/media/MediaImage.vue';
 import ArtworkJob from '../components/anime/ArtworkJob.vue';
 import ArchiveSync from '../components/anime/ArchiveSync.vue';
 const route = useRoute(), router = useRouter();
+const auth = useAuthStore();
 const year = ref(String(route.query.year ?? '0')), season = ref(String(route.query.season ?? '0')), search = ref(String(route.query.search ?? ''));
 const offset = computed(() => Math.max(0, Number(route.query.offset) || 0));
 const years = Array.from({ length: new Date().getFullYear() - 1899 }, (_, i) => new Date().getFullYear() + 1 - i);
@@ -24,9 +26,9 @@ async function page(delta: number) { await router.replace({ query: { ...route.qu
   <section class="panel">
     <div class="panel-head"><h2>动漫</h2><div class="row-actions">
       <RouterLink class="btn" to="/anime/mikan">蜜柑发布</RouterLink>
-      <RouterLink class="btn" to="/anime/settings"><Settings :size="16" />来源与设置</RouterLink>
+      <RouterLink v-if="auth.isAdministrator" class="btn" to="/anime/settings"><Settings :size="16" />来源与设置</RouterLink>
     </div></div>
-    <ArchiveSync @updated="catalog.load" />
+    <ArchiveSync v-if="auth.isAdministrator" @updated="catalog.load" />
     <form class="anime-filters" @submit.prevent="filter">
       <label>首播年份<select v-model="year"><option value="0">全部年份</option><option v-for="y in years" :key="y" :value="String(y)">{{ y }}</option></select></label>
       <label>首播季度<select v-model="season"><option value="0">全部季度</option><option value="1">冬季</option><option value="2">春季</option><option value="3">夏季</option><option value="4">秋季</option></select></label>
@@ -35,7 +37,7 @@ async function page(delta: number) { await router.replace({ query: { ...route.qu
     </form>
   </section>
   <ReadState :error="catalog.error.value" :loading="catalog.loading.value" :empty="!catalog.data.value" @retry="catalog.load" />
-  <ArtworkJob :subjects="catalog.data.value?.items.map(item => item.bangumi_id) ?? []" @updated="imageVersion++" />
+  <ArtworkJob v-if="auth.isAdministrator" :subjects="catalog.data.value?.items.map(item => item.bangumi_id) ?? []" @updated="imageVersion++" />
   <p v-if="catalog.data.value && !catalog.data.value.items.length" class="empty-state">暂无匹配的动画</p>
   <div v-else class="anime-grid">
     <RouterLink v-for="item in catalog.data.value?.items" :key="item.bangumi_id" class="anime-card" :to="{ path: `/anime/subjects/${item.bangumi_id}`, query: route.query }">

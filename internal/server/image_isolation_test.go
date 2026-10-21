@@ -78,7 +78,7 @@ func TestImageUploadPreservesSiblingAndRescan(t *testing.T) {
 		if err != nil || movie.PosterPath != item.path {
 			t.Fatalf("wrong indexed image: %+v, %v", movie, err)
 		}
-		resp, err := http.Get(server.URL + "/Items/" + strconv.FormatInt(item.id, 10) + "/Images/Primary")
+		resp, err := http.Get(server.URL + "/Items/" + strconv.FormatInt(item.id, 10) + "/Images/Primary?api_key=" + token)
 		if err != nil {
 			t.Fatal(err)
 		}

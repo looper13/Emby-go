@@ -27,11 +27,11 @@ const read = async (path: string, signal: AbortSignal) => parseTelevision(await 
 export const televisionApi = {
   list: (library: number, search: string, offset: number, signal: AbortSignal) => read(`/api/admin/shows?${new URLSearchParams({library_id:String(library),search,offset:String(offset),limit:'48'})}`, signal),
   series: async (id: string, signal: AbortSignal) => {
-    const item = await apiClient.request(`/Items/${encodeURIComponent(id)}?UserId=1`, { auth: 'required', signal });
+    const item = await apiClient.request(`/Items/${encodeURIComponent(id)}`, { auth: 'required', signal });
     const parsed = parseTelevision({ Items: [item], TotalRecordCount: 1 }).items[0]!;
     if (parsed.Type !== 'Series' || parsed.Id !== id) throw new Error('服务响应格式不正确');
     return parsed;
   },
-  seasons: (series: string, signal: AbortSignal) => read(`/Shows/${encodeURIComponent(series)}/Seasons?UserId=1&Limit=1000`, signal),
-  episodes: (series: string, season: string, offset: number, signal: AbortSignal) => read(`/Shows/${encodeURIComponent(series)}/Episodes?${new URLSearchParams({UserId:'1',SeasonId:season,StartIndex:String(offset),Limit:'100'})}`, signal),
+  seasons: (series: string, signal: AbortSignal) => read(`/Shows/${encodeURIComponent(series)}/Seasons?Limit=1000`, signal),
+  episodes: (series: string, season: string, offset: number, signal: AbortSignal) => read(`/Shows/${encodeURIComponent(series)}/Episodes?${new URLSearchParams({SeasonId:season,StartIndex:String(offset),Limit:'100'})}`, signal),
 };

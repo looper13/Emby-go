@@ -362,10 +362,10 @@ func (a *App) collectionMinMovies() int {
 	return minMovies
 }
 
-// cachedCollections 合集名清单（Views 与合集列表共用，按全局版本号缓存）。
+// cachedCollections shares the media and access versions used by browsing.
 func (a *App) cachedCollections() []string {
 	minMovies := a.collectionMinMovies()
-	key := "collections:" + a.db.Version("g:version") + ":" + strconv.Itoa(minMovies)
+	key := "collections:" + a.cacheScope(0) + ":" + strconv.Itoa(minMovies)
 	if raw, ok := a.imgMeta.Get(key); ok {
 		var names []string
 		if json.Unmarshal(raw, &names) == nil {
@@ -563,7 +563,7 @@ func (a *App) resume(c *gin.Context) {
 
 // nextUp returns the next playable main episode from a started series.
 func (a *App) nextUp(c *gin.Context) {
-	if userID := c.Query("UserId"); userID != "" && userID != "1" {
+	if !a.validQueryUser(c) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
@@ -711,7 +711,7 @@ func (a *App) views(c *gin.Context) {
 	if !a.validUser(c) {
 		return
 	}
-	libs, e := a.db.Libraries()
+	libs, e := a.db.UserLibraries()
 	if e != nil {
 		c.JSON(500, gin.H{"error": e.Error()})
 		return
@@ -893,7 +893,7 @@ func normalizeDate(raw string) string {
 }
 
 func (a *App) rootItems(c *gin.Context) {
-	if userID := c.Query("UserId"); userID != "" && userID != "1" {
+	if !a.validQueryUser(c) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
@@ -907,7 +907,7 @@ func (a *App) items(c *gin.Context) {
 	a.itemsQuery(c)
 }
 
-// publicUsers 登录页探测：本服务单用户，不公开列出。
+// Login uses names instead of publicly enumerating account identities.
 func (a *App) publicUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, []gin.H{})
 }

@@ -194,13 +194,13 @@ func (a *App) currentPlaybackStreams(movie store.Movie, path, raw string) []gin.
 
 func (a *App) subtitleSignature(id, source, index, revision, expires string) []byte {
 	hash := hmac.New(sha256.New, a.subtitleSigningKey[:])
-	fmt.Fprintf(hash, "%s\n%s\n%s\n%s\n%s", id, source, index, revision, expires)
+	fmt.Fprintf(hash, "%d\n%s\n%s\n%s\n%s\n%s", a.db.UserID(), id, source, index, revision, expires)
 	return hash.Sum(nil)
 }
 
 func (a *App) subtitleURL(id, source string, index int, format, revision string) string {
 	expires := strconv.FormatInt(time.Now().Add(4*time.Hour).Unix(), 10)
-	query := url.Values{"revision": {revision}, "expires": {expires}, "SubtitleToken": {hex.EncodeToString(a.subtitleSignature(id, source, strconv.Itoa(index), revision, expires))}}
+	query := url.Values{"SubtitleUserId": {strconv.FormatInt(a.db.UserID(), 10)}, "revision": {revision}, "expires": {expires}, "SubtitleToken": {hex.EncodeToString(a.subtitleSignature(id, source, strconv.Itoa(index), revision, expires))}}
 	return "/Videos/" + url.PathEscape(id) + "/" + url.PathEscape(source) + "/Subtitles/" + strconv.Itoa(index) + "/Stream." + format + "?" + query.Encode()
 }
 
@@ -215,8 +215,23 @@ func (a *App) validSubtitleSignature(c *gin.Context) bool {
 
 func (a *App) subtitleStream(c *gin.Context) {
 	authenticated := a.authOK(c)
+	if authenticated {
+		a = a.forRequest(c)
+	} else {
+		id, err := strconv.ParseInt(c.Query("SubtitleUserId"), 10, 64)
+		user, e := a.db.User(id)
+		if err != nil || e != nil || user.Disabled {
+			c.Status(401)
+			return
+		}
+		a = &App{appState: a.appState, db: a.db.ForUser(id)}
+	}
 	if !authenticated && !a.validSubtitleSignature(c) {
 		c.AbortWithStatusJSON(401, gin.H{"error": "unauthorized"})
+		return
+	}
+	if !a.validQueryUser(c) || !a.canAccessItem(c.Param("id")) {
+		c.Status(404)
 		return
 	}
 	if ticks := c.Param("ticks"); ticks != "" {

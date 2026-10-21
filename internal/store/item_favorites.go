@@ -1,11 +1,14 @@
 package store
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // Playable media keep their existing userdata rows. Named entities and virtual
 // folders use stable item IDs and never inherit a child's favorite state.
 func (s *Store) loadItemFavorites() error {
-	rows, err := s.db.Query("SELECT item_id FROM item_favorites")
+	rows, err := s.db.Query("SELECT user_id,item_id FROM item_favorites")
 	if err != nil {
 		return err
 	}
@@ -13,10 +16,11 @@ func (s *Store) loadItemFavorites() error {
 	s.itemFavorites = map[string]bool{}
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var uid int64
+		if err := rows.Scan(&uid, &id); err != nil {
 			return err
 		}
-		s.itemFavorites[id] = true
+		s.itemFavorites[strconv.FormatInt(uid, 10)+":"+id] = true
 	}
 	return rows.Err()
 }
@@ -24,7 +28,7 @@ func (s *Store) loadItemFavorites() error {
 func (s *Store) ItemFavorite(id string) bool {
 	s.itemFavoritesMu.RLock()
 	defer s.itemFavoritesMu.RUnlock()
-	return s.itemFavorites[id]
+	return s.itemFavorites[s.userKey()+":"+id]
 }
 
 func (s *Store) ItemFavoriteIDs() []string {
@@ -32,13 +36,15 @@ func (s *Store) ItemFavoriteIDs() []string {
 	defer s.itemFavoritesMu.RUnlock()
 	ids := make([]string, 0, len(s.itemFavorites))
 	for id := range s.itemFavorites {
-		ids = append(ids, id)
+		if value, ok := strings.CutPrefix(id, s.userKey()+":"); ok {
+			ids = append(ids, value)
+		}
 	}
 	return ids
 }
 
 func (s *Store) ItemFavoriteVersion() string {
-	return s.movieEpoch + ":" + strconv.FormatUint(s.itemFavoriteVersion.Load(), 10)
+	return s.movieEpoch + ":user:" + s.userKey() + ":" + strconv.FormatUint(s.itemFavoriteVersion.Load(), 10)
 }
 
 func (s *Store) SetItemFavorite(id string, favorite bool) error {
@@ -46,17 +52,17 @@ func (s *Store) SetItemFavorite(id string, favorite bool) error {
 	defer s.itemFavoritesMu.Unlock()
 	var err error
 	if favorite {
-		_, err = s.db.Exec("INSERT INTO item_favorites(item_id) VALUES(?) ON CONFLICT DO NOTHING", id)
+		_, err = s.db.Exec("INSERT INTO item_favorites(user_id,item_id) VALUES(?,?) ON CONFLICT DO NOTHING", s.UserID(), id)
 	} else {
-		_, err = s.db.Exec("DELETE FROM item_favorites WHERE item_id=?", id)
+		_, err = s.db.Exec("DELETE FROM item_favorites WHERE user_id=? AND item_id=?", s.UserID(), id)
 	}
 	if err != nil {
 		return err
 	}
 	if favorite {
-		s.itemFavorites[id] = true
+		s.itemFavorites[s.userKey()+":"+id] = true
 	} else {
-		delete(s.itemFavorites, id)
+		delete(s.itemFavorites, s.userKey()+":"+id)
 	}
 	s.itemFavoriteVersion.Add(1)
 	return nil

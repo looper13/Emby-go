@@ -16,7 +16,13 @@ import (
 func (a *App) users(c *gin.Context) {
 	users := []gin.H{}
 	if !strings.EqualFold(c.Query("IsHidden"), "true") && !strings.EqualFold(c.Query("IsDisabled"), "true") && !strings.EqualFold(c.Query("IsGuest"), "true") {
-		users = append(users, a.userDto())
+		all, _ := a.db.Users()
+		current, _ := a.db.User(a.db.UserID())
+		for _, user := range all {
+			if !user.Disabled && (current.Administrator || current.ID == user.ID) {
+				users = append(users, (&App{appState: a.appState, db: a.db.ForUser(user.ID)}).userDto())
+			}
+		}
 	}
 	c.JSON(http.StatusOK, users)
 }
@@ -51,7 +57,7 @@ func (a *App) virtualFoldersQuery(c *gin.Context) {
 }
 
 func (a *App) virtualFolderItems() ([]gin.H, error) {
-	libraries, err := a.db.Libraries()
+	libraries, err := a.db.UserLibraries()
 	if err != nil {
 		return nil, err
 	}

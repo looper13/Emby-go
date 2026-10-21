@@ -18,6 +18,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func setPrivateImageCache(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-cache")
+	c.Header("Vary", "Cookie, X-Emby-Token, X-MediaBrowser-Token, Authorization, X-Emby-Authorization")
+}
+
 func (a *App) cacheScope(libraryID int64) string {
 	version := a.db.Version("g:version")
 	if libraryID > 0 {
@@ -29,13 +34,14 @@ func (a *App) cacheScope(libraryID int64) string {
 	} else if v, ok := a.scopeVersions.Load(libraryID); ok {
 		epoch = v.(*atomic.Uint64).Load()
 	}
-	return strconv.FormatInt(libraryID, 10) + ":" + version + ":" + a.db.ActorVersion() + ":" + strconv.FormatUint(epoch, 10)
+	return strconv.FormatInt(libraryID, 10) + ":" + version + ":" + a.db.ActorVersion() + ":" + strconv.FormatUint(epoch, 10) + ":" + a.db.AccessVersion()
 }
 func responseKey(kind string, values ...any) string {
 	data, _ := json.Marshal(values)
 	return kind + ":" + string(data)
 }
 func (a *App) cachedResponse(c *gin.Context, key string, ttl time.Duration, load func() ([]byte, error)) {
+	key += ":access:" + a.db.AccessVersion()
 	body, err := a.cache.Load(c.Request.Context(), key, ttl, load)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

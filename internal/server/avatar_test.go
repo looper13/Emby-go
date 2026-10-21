@@ -119,7 +119,7 @@ func TestActorAvatarChain(t *testing.T) {
 
 	// 4) 图片端点：有头像回本地副本；无头像回退参演影片海报（此处无海报 → 404，不破图）。
 	personID := entityId("Person", "有头像")
-	resp, err := http.Get(ts.URL + "/Items/" + personID + "/Images/Primary")
+	resp, err := http.Get(ts.URL + "/Items/" + personID + "/Images/Primary?api_key=" + token)
 	if err != nil {
 		t.Fatal(err)
 	}

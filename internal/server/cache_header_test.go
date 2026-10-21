@@ -9,7 +9,7 @@ import (
 )
 
 // TestCachePolicyHeaders 锁定各链路的缓存策略，防回归：
-// 图片保 public+ETag；其余 API JSON 与外壳 HTML 一律 no-store；
+// 图片使用 private/no-cache+ETag；其余 API JSON 与外壳 HTML 一律 no-store；
 // 前端静态资源 no-cache+ETag 且命中即 304；视频流（含扩展名变体）no-store。
 //
 // 这些头曾经只由 nginx 的 add_header 兜底，与 Go 自己发的头冲突（同一响应
@@ -62,13 +62,13 @@ func TestCachePolicyHeaders(t *testing.T) {
 	}
 	itemID := strconv.FormatInt(id, 10)
 
-	// —— 图片：保留 public 缓存，不能被 no-store 打掉 ——
-	image := get("/Items/"+itemID+"/Images/Primary", "")
+	// 图片可复用字节，但每次必须重新验证登录和媒体库权限。
+	image := get("/Items/"+itemID+"/Images/Primary", token)
 	if image.StatusCode != http.StatusOK {
 		t.Fatalf("取图: %d", image.StatusCode)
 	}
-	if cc := image.Header.Get("Cache-Control"); !strings.Contains(cc, "max-age=") || strings.Contains(cc, "no-store") {
-		t.Errorf("图片 Cache-Control = %q，应保留 public max-age 且不含 no-store", cc)
+	if cc := image.Header.Get("Cache-Control"); cc != "private, no-cache" {
+		t.Errorf("图片 Cache-Control = %q，应为 private, no-cache", cc)
 	}
 	if image.Header.Get("ETag") == "" {
 		t.Error("图片响应应带 ETag")

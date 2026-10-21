@@ -16,4 +16,7 @@ export const authApi = {
   async me() {
     return parseUser(await apiClient.request('/Users/Me', { auth: 'required' }));
   },
+  logout() {
+    return apiClient.request('/Sessions/Logout', { auth: 'required', method: 'POST' });
+  },
 };

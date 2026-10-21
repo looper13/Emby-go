@@ -5,10 +5,12 @@ import { animeApi } from "../api/anime";
 import { useAdminRead } from "../composables/useAdminRead";
 import ReadState from "../components/common/ReadState.vue";
 import { useToastStore } from "../stores/toasts";
+import { useAuthStore } from "../stores/auth";
 import AnimeReleases from "../components/anime/AnimeReleases.vue";
 const route = useRoute(),
   router = useRouter(),
   toasts = useToastStore();
+const auth = useAuthStore();
 const now = new Date();
 const year = ref(Number(route.query.year) || now.getFullYear()),
   season = ref(
@@ -156,7 +158,7 @@ async function resourcePage(delta: number) {
   <section class="panel">
     <div class="panel-head">
       <h2>动漫</h2>
-      <div class="row-actions">
+      <div v-if="auth.isAdministrator" class="row-actions">
         <RouterLink class="btn" to="/anime/settings">来源与设置</RouterLink
         ><button
           class="btn btn-accent"
@@ -231,6 +233,7 @@ async function resourcePage(delta: number) {
         type="button"
         class="btn"
         :disabled="!search.trim() || searching"
+          v-if="auth.isAdministrator"
         @click="findResources"
       >
         搜索蜜柑发布

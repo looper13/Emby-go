@@ -30,6 +30,11 @@ import (
 )
 
 type App struct {
+	*appState
+	db *store.Store
+}
+
+type appState struct {
 	archive         *catalog.Catalog
 	archiveClient   *http.Client
 	archiveJob      *archiveJob
@@ -40,13 +45,13 @@ type App struct {
 	configEditMu    sync.Mutex // serializes file updates and monitor reconfiguration
 	configWarnings  []string   // guarded by configEditMu; retained until monitor reconfiguration
 	cfg             config.Config
-	db              *store.Store
 	router          *gin.Engine
 	cache           *cache.Managed
 	scopeVersions   sync.Map
 	allScopeVersion atomic.Uint64
 	adminMu         sync.RWMutex // 保护 adminName：初始化/登录写，其它 handler 并发读
 	adminName       string
+	credentialMu    sync.Mutex
 	serverID        string
 	taskMu          sync.Mutex
 	tasks           []task
@@ -190,12 +195,12 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		db.Close()
 		return nil, err
 	}
-	a := &App{
-		cfg: cfg, db: db, cache: cache.NewManaged(cacheStore),
+	a := &App{db: db, appState: &appState{
+		cfg: cfg, cache: cache.NewManaged(cacheStore),
 		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
 		imgMeta: cache.NewMemory(imageMetaCacheSize), imgThumb: cache.NewMemory(imageThumbCacheSize),
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
-	}
+	}}
 	if _, err := rand.Read(a.subtitleSigningKey[:]); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("生成字幕签名密钥失败: %w", err)
@@ -335,82 +340,86 @@ func (a *App) routes() {
 	r := a.router
 
 	// Web 管理前端与内部初始化端点（无 /emby 前缀）
-	r.GET("/favicon.ico", a.favicon)
-	r.HEAD("/favicon.ico", a.favicon)
-	r.GET("/web/login.js", a.webAsset)
-	r.GET("/web/app.js", a.webAsset)
-	r.GET("/web/style.css", a.webAsset)
-	r.GET("/web/vendor/artplayer.min.js", a.webAsset)
+	r.GET("/favicon.ico", a.bind((*App).favicon))
+	r.HEAD("/favicon.ico", a.bind((*App).favicon))
+	r.GET("/web/login.js", a.bind((*App).webAsset))
+	r.GET("/web/app.js", a.bind((*App).webAsset))
+	r.GET("/web/style.css", a.bind((*App).webAsset))
+	r.GET("/web/vendor/artplayer.min.js", a.bind((*App).webAsset))
 	registerWebUIRoutes(r, webUIFiles)
-	r.GET("/api/auth/status", noStore, a.authStatus)
-	r.POST("/api/auth/initialize", noStore, a.initialize)
-	// 刮削预览用的图片代理刻意不挂鉴权：它要能直接放进 <img src>，而浏览器不会给
-	// 图片请求带自定义头（X-Emby-Token），挂鉴权只会让缩略图全部 401。
-	// 上游 MetaTube 的图片端点本身也是公开的（Jellyfin 插件同样直接引用），
-	// 这里只做「限定 kind + 限定目标服务 + 限时限量」的转发，不放大暴露面。
-	r.GET("/api/admin/scrape/image", a.adminScrapeImage)
-	r.GET("/api/anime/images/:id", a.animeEntryImage)
-	r.GET("/api/anime/subjects/:id/image", a.animeSubjectImage)
-	r.GET("/api/anime/people/:kind/:id/image", a.animePersonImage)
-	r.GET("/api/anime/episodes/:id/stills/:revision/:index", a.animeEpisodeStill)
+	r.GET("/api/auth/status", noStore, a.bind((*App).authStatus))
+	r.POST("/api/auth/initialize", noStore, a.bind((*App).initialize))
+	r.GET("/api/browse/libraries", a.requireAuth, noStore, a.bind((*App).browseLibraries))
+	// Browser image requests use the read-only session cookie.
+	r.GET("/api/admin/scrape/image", a.requireAuth, a.requireAdministrator, a.bind((*App).adminScrapeImage))
+	r.GET("/api/anime/images/:id", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animeEntryImage))
+	r.GET("/api/anime/subjects/:id/image", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animeSubjectImage))
+	r.GET("/api/anime/people/:kind/:id/image", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animePersonImage))
+	r.GET("/api/anime/episodes/:id/stills/:revision/:index", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animeEpisodeStill))
 
-	admin := r.Group("/api/admin", a.requireAuth, noStore)
+	admin := r.Group("/api/admin", a.requireAuth, a.adminBoundary, noStore)
+	admin.GET("/account", a.bind((*App).account))
+	admin.PUT("/account", a.bind((*App).updateAccount))
+	admin.GET("/users", a.bind((*App).adminUsers))
+	admin.POST("/users", a.bind((*App).createUser))
+	admin.PUT("/users/:uid", a.bind((*App).editUser))
+	admin.DELETE("/users/:uid", a.bind((*App).deleteUser))
 	a.registerAnime(admin)
-	admin.GET("/libraries", a.adminLibraries)
-	admin.POST("/libraries", a.adminAddLibrary)
-	admin.GET("/shows", a.adminTelevision)
-	admin.DELETE("/libraries/:id", a.adminDeleteLibrary)
-	admin.POST("/scan", a.adminScan)
-	admin.POST("/tasks/scan", a.adminScan)
-	admin.GET("/scan/progress", a.adminScanProgress)
+	admin.GET("/libraries", a.bind((*App).adminLibraries))
+	admin.POST("/libraries", a.bind((*App).adminAddLibrary))
+	admin.GET("/shows", a.bind((*App).adminTelevision))
+	admin.DELETE("/libraries/:id", a.bind((*App).adminDeleteLibrary))
+	admin.POST("/scan", a.bind((*App).adminScan))
+	admin.POST("/tasks/scan", a.bind((*App).adminScan))
+	admin.GET("/scan/progress", a.bind((*App).adminScanProgress))
 	// 媒体信息探测（与扫库相互独立）。路径用 probe/media 以区别于已有的
 	// /probe——后者记录客户端调用过的未实现端点，语义完全不同。
-	admin.POST("/probe/media", a.adminProbeMedia)
-	admin.GET("/probe/media/progress", a.adminProbeMediaProgress)
-	admin.POST("/probe/media/cancel", a.adminProbeMediaCancel)
-	admin.POST("/reindex", a.adminReindex)
-	admin.GET("/items", a.adminItems)
-	admin.GET("/items/:id/detail", a.adminItemDetail)
-	admin.DELETE("/items/:id", a.adminDelete)
-	admin.GET("/probe", a.adminProbe)
-	admin.DELETE("/probe", a.adminClearProbes)
-	admin.GET("/apikeys", a.adminAPIKeys)
-	admin.POST("/apikeys", a.adminCreateAPIKey)
-	admin.DELETE("/apikeys/:key", a.adminDeleteAPIKey)
-	admin.GET("/status", a.adminStatus)
-	admin.GET("/settings", a.adminSettings)
-	admin.GET("/config", a.adminConfig)
-	admin.PUT("/config", a.adminSaveConfig)
-	admin.GET("/tasks", a.adminTasks)
+	admin.POST("/probe/media", a.bind((*App).adminProbeMedia))
+	admin.GET("/probe/media/progress", a.bind((*App).adminProbeMediaProgress))
+	admin.POST("/probe/media/cancel", a.bind((*App).adminProbeMediaCancel))
+	admin.POST("/reindex", a.bind((*App).adminReindex))
+	admin.GET("/items", a.bind((*App).adminItems))
+	admin.GET("/items/:id/detail", a.requireLibraryAccess, a.bind((*App).adminItemDetail))
+	admin.DELETE("/items/:id", a.bind((*App).adminDelete))
+	admin.GET("/probe", a.bind((*App).adminProbe))
+	admin.DELETE("/probe", a.bind((*App).adminClearProbes))
+	admin.GET("/apikeys", a.bind((*App).adminAPIKeys))
+	admin.POST("/apikeys", a.bind((*App).adminCreateAPIKey))
+	admin.DELETE("/apikeys/:key", a.bind((*App).adminDeleteAPIKey))
+	admin.GET("/status", a.bind((*App).adminStatus))
+	admin.GET("/settings", a.bind((*App).adminSettings))
+	admin.GET("/config", a.bind((*App).adminConfig))
+	admin.PUT("/config", a.bind((*App).adminSaveConfig))
+	admin.GET("/tasks", a.bind((*App).adminTasks))
 	// 刮削（R4）：配置 + 批量/头像任务 + 单条预览确认 + 图片代理。
-	admin.GET("/scrape/settings", a.adminScrapeSettings)
-	admin.PUT("/scrape/settings", a.adminSaveScrapeSettings)
-	admin.POST("/scrape/test", a.adminScrapeTest)
-	admin.GET("/actors", a.adminActors)
-	admin.POST("/actors/import/preview", a.adminActorImportPreview)
-	admin.POST("/actors/import", a.adminActorImport)
-	admin.GET("/scrape/candidates", a.adminScrapeCandidates)
-	admin.POST("/scrape/run", a.adminScrapeRun)
-	admin.POST("/scrape/avatars", a.adminScrapeAvatars)
-	admin.GET("/scrape/progress", a.adminScrapeProgress)
-	admin.POST("/scrape/cancel", a.adminScrapeCancel)
+	admin.GET("/scrape/settings", a.bind((*App).adminScrapeSettings))
+	admin.PUT("/scrape/settings", a.bind((*App).adminSaveScrapeSettings))
+	admin.POST("/scrape/test", a.bind((*App).adminScrapeTest))
+	admin.GET("/actors", a.bind((*App).adminActors))
+	admin.POST("/actors/import/preview", a.bind((*App).adminActorImportPreview))
+	admin.POST("/actors/import", a.bind((*App).adminActorImport))
+	admin.GET("/scrape/candidates", a.bind((*App).adminScrapeCandidates))
+	admin.POST("/scrape/run", a.bind((*App).adminScrapeRun))
+	admin.POST("/scrape/avatars", a.bind((*App).adminScrapeAvatars))
+	admin.GET("/scrape/progress", a.bind((*App).adminScrapeProgress))
+	admin.POST("/scrape/cancel", a.bind((*App).adminScrapeCancel))
 	// 计划任务（cron）：保存/启停后调度器即时重建，无需重启。
-	admin.GET("/scheduled", a.adminScheduledTasks)
-	admin.POST("/scheduled", a.adminCreateScheduledTask)
-	admin.POST("/scheduled/validate", a.adminValidateCron)
-	admin.PUT("/scheduled/:id", a.adminUpdateScheduledTask)
-	admin.DELETE("/scheduled/:id", a.adminDeleteScheduledTask)
-	admin.POST("/scheduled/:id/toggle", a.adminToggleScheduledTask)
-	admin.POST("/scheduled/:id/run", a.adminRunScheduledTask)
-	admin.POST("/items/manual", a.adminManual)
-	admin.PUT("/items/:id", a.adminEdit)
-	admin.POST("/items/:id/reread", a.adminReread)
-	admin.POST("/items/:id/probe", a.adminProbeMediaItem)
+	admin.GET("/scheduled", a.bind((*App).adminScheduledTasks))
+	admin.POST("/scheduled", a.bind((*App).adminCreateScheduledTask))
+	admin.POST("/scheduled/validate", a.bind((*App).adminValidateCron))
+	admin.PUT("/scheduled/:id", a.bind((*App).adminUpdateScheduledTask))
+	admin.DELETE("/scheduled/:id", a.bind((*App).adminDeleteScheduledTask))
+	admin.POST("/scheduled/:id/toggle", a.bind((*App).adminToggleScheduledTask))
+	admin.POST("/scheduled/:id/run", a.bind((*App).adminRunScheduledTask))
+	admin.POST("/items/manual", a.bind((*App).adminManual))
+	admin.PUT("/items/:id", a.bind((*App).adminEdit))
+	admin.POST("/items/:id/reread", a.bind((*App).adminReread))
+	admin.POST("/items/:id/probe", a.bind((*App).adminProbeMediaItem))
 	// 单条手动刮削：预览 → 看 diff → 确认写入（无状态，取消零副作用）。
-	admin.GET("/items/:id/scrape/preview", a.adminScrapePreview)
-	admin.POST("/items/:id/scrape/inspect", a.adminScrapeInspect)
-	admin.POST("/items/:id/scrape", a.adminScrapeConfirm)
-	admin.POST("/items/:id/images/:kind", a.adminImage)
+	admin.GET("/items/:id/scrape/preview", a.bind((*App).adminScrapePreview))
+	admin.POST("/items/:id/scrape/inspect", a.bind((*App).adminScrapeInspect))
+	admin.POST("/items/:id/scrape", a.bind((*App).adminScrapeConfirm))
+	admin.POST("/items/:id/images/:kind", a.bind((*App).adminImage))
 
 	// Emby 兼容 API：裸前缀与 /emby 前缀共用同一注册表。
 	// 部分客户端以 /emby 为 base（如 https://host/emby），也有直连根路径的。
@@ -450,7 +459,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"POST", "/Sessions/Playing/Ping", true, a.noContent},
 		{"POST", "/Sessions/Capabilities", true, a.noContent},
 		{"POST", "/Sessions/Capabilities/Full", true, a.noContent},
-		{"POST", "/Sessions/Logout", true, a.noContent},
+		{"POST", "/Sessions/Logout", true, a.logout},
+		{"POST", "/Users/:uid/Policy", true, a.updateUserPolicy},
 		{"GET", "/DisplayPreferences/:pref", true, a.displayPreferences},
 		{"POST", "/DisplayPreferences/:pref", true, a.displayPreferences},
 		{"GET", "/System/Ext/ServerDomains", true, a.serverDomains},
@@ -476,8 +486,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Items", true, a.rootItems},
 		{"GET", "/Users/:uid/Items/:id", true, a.item},
 		{"GET", "/Items/:id", true, a.item},
-		{"GET", "/Items/:id/Images/:kind", false, a.image},
-		{"GET", "/Items/:id/Images/:kind/:index", false, a.image},
+		{"GET", "/Items/:id/Images/:kind", true, a.image},
+		{"GET", "/Items/:id/Images/:kind/:index", true, a.image},
 		{"GET", "/Items/:id/Images", true, a.imageInfo},
 		{"GET", "/Items/:id/ThumbnailSet", true, a.thumbnailSet},
 		{"GET", "/Items/:id/Similar", true, a.similar},
@@ -523,7 +533,7 @@ func noStore(c *gin.Context) {
 
 // registerEmby 注册全部 Emby 兼容路由，每条同时挂 PascalCase 与全小写变体。
 func (a *App) registerEmby(g *gin.RouterGroup) {
-	for _, route := range a.embyRoutes() {
+	for index, route := range a.embyRoutes() {
 		handlers := []gin.HandlerFunc{normalizeEmbyQuery}
 		// 图片端点除外：serveImage 自己带 public/max-age 与 ETag，挂 noStore 会把
 		// 海报墙的缓存打掉（每张图全量重下）；其余 API 一律禁止缓存。
@@ -534,16 +544,20 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 		if route.auth {
 			handlers = append(handlers, a.requireAuth)
 		}
-		handlers = append(handlers, route.handler)
+		if !strings.Contains(route.path, "/Authenticate") && !strings.Contains(route.path, "/Subtitles/") && route.path != "/Users/:uid/Policy" && route.path != "/Users/:uid" {
+			handlers = append(handlers, a.requireLibraryAccess)
+		}
+		handlers = append(handlers, func(c *gin.Context) { a.forRequest(c).embyRoutes()[index].handler(c) })
 		g.Handle(route.method, route.path, handlers...)
 		if lower := strings.ToLower(route.path); lower != route.path {
 			g.Handle(route.method, lower, handlers...)
 		}
 	}
-	registerStreamRoutes(g, a.stream)
-	registerProxyRoutes(g, a.proxyStream)
+	streams := g.Group("", a.requireAuth, a.requireLibraryAccess)
+	registerStreamRoutes(streams, a.bind((*App).stream))
+	registerProxyRoutes(streams, a.bind((*App).proxyStream))
 	for _, base := range []string{"/Videos/:id/hls/:session/:file", "/videos/:id/hls/:session/:file"} {
-		g.GET(base, noStore, a.hlsResource)
+		g.GET(base, noStore, a.bind((*App).hlsResource))
 	}
 }
 

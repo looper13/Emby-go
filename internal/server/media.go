@@ -179,7 +179,7 @@ func (a *App) cachedMovie(id int64) (store.Movie, bool) {
 func (a *App) serveImage(c *gin.Context, path string) {
 	tag := a.posterTag(path)
 	c.Header("ETag", `"`+tag+`"`)
-	c.Header("Cache-Control", "public, max-age="+strconv.Itoa(int(imageMaxAge.Seconds()))+", must-revalidate")
+	setPrivateImageCache(c)
 	if ifNoneMatchHit(c.GetHeader("If-None-Match"), tag) {
 		c.Status(http.StatusNotModified)
 		return
@@ -506,7 +506,7 @@ func (a *App) resolvePlaybackTarget(rawID string) (store.Movie, string, string, 
 	}
 	if movieID, part, ok := parseVirtualPartID(rawID); ok {
 		movie, err := a.db.Movie(movieID)
-		if err != nil || part-2 >= len(movie.AdditionalParts) {
+		if err != nil || !a.db.CanAccessLibrary(movie.LibraryID) || part-2 >= len(movie.AdditionalParts) {
 			return store.Movie{}, "", "", false
 		}
 		return movie, movie.AdditionalParts[part-2], rawID, true
@@ -516,7 +516,7 @@ func (a *App) resolvePlaybackTarget(rawID string) (store.Movie, string, string, 
 		return store.Movie{}, "", "", false
 	}
 	movie, err := a.db.Movie(movieID)
-	if err != nil {
+	if err != nil || !a.db.CanAccessLibrary(movie.LibraryID) {
 		return store.Movie{}, "", "", false
 	}
 	return movie, movie.SourcePath, rawID, true

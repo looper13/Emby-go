@@ -9,6 +9,7 @@ import {
 } from "../api/anime";
 import { useAdminRead } from "../composables/useAdminRead";
 import { useToastStore } from "../stores/toasts";
+import { useAuthStore } from "../stores/auth";
 import { usePlayerStore } from "../stores/player";
 import { playbackType } from "../lib/player";
 import { apiClient } from "../api/client";
@@ -21,6 +22,7 @@ const route = useRoute(),
   router = useRouter(),
   toasts = useToastStore(),
   player = usePlayerStore();
+const auth = useAuthStore();
 const id = computed(() => String(route.params.id));
 const { data, error, loading, load } = useAdminRead((signal) =>
   animeApi.detail(id.value, signal),
@@ -73,7 +75,7 @@ async function action(key: string, fn: () => Promise<unknown>) {
 }
 async function poll() {
   const p = await animeApi.progress();
-  if (!active) return;
+  if (!active || !auth.isAdministrator) return;
   if (!p.running) {
     clearInterval(timer);
     if (p.error) toasts.show(p.error, "error");
@@ -199,6 +201,7 @@ function releasePage(delta: number) {
     ><button
       class="btn"
       :disabled="!!busy || data?.state.status === 'running'"
+      v-if="auth.isAdministrator"
       @click="refresh"
     >
       刷新资料与资源
@@ -254,13 +257,13 @@ function releasePage(delta: number) {
             target="_blank"
             rel="noopener noreferrer"
             >Bangumi ↗</a
-          ><button class="btn btn-sm" @click="openMapping">
+          ><button v-if="auth.isAdministrator" class="btn btn-sm" @click="openMapping">
             {{ data.subject ? "纠正资料映射" : "匹配 Bangumi 资料" }}
           </button>
         </div>
       </div>
     </section>
-    <section v-if="mapping" class="panel">
+    <section v-if="auth.isAdministrator && mapping" class="panel">
       <h2>确认 Bangumi 资料</h2>
       <form class="anime-filters" @submit.prevent="searchMapping">
         <label class="anime-search"
@@ -322,13 +325,14 @@ function releasePage(delta: number) {
         <div class="row-actions">
           <button
             class="btn"
+            v-if="auth.isAdministrator"
             @click="
               bindingDialog = { target: filmID, title, binding: data.binding }
             "
           >
             关联媒体</button
           ><button
-            v-if="data.binding.movie_id"
+            v-if="auth.isAdministrator && data.binding.movie_id"
             class="btn"
             :disabled="!!busy"
             @click="check(filmID)"
@@ -376,6 +380,7 @@ function releasePage(delta: number) {
         <div class="row-actions">
           <button
             class="btn btn-sm"
+            v-if="auth.isAdministrator"
             @click="
               bindingDialog = {
                 target: item.item_id,
@@ -386,7 +391,7 @@ function releasePage(delta: number) {
           >
             关联媒体</button
           ><button
-            v-if="item.binding.movie_id"
+            v-if="auth.isAdministrator && item.binding.movie_id"
             class="btn btn-sm"
             :disabled="!!busy"
             @click="check(item.item_id)"
@@ -469,7 +474,7 @@ function releasePage(delta: number) {
     </section>
   </template>
   <AnimeBindingDialog
-    v-if="bindingDialog"
+    v-if="auth.isAdministrator && bindingDialog"
     v-bind="bindingDialog"
     @close="bindingDialog = null"
     @saved="reload"

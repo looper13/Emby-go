@@ -102,7 +102,7 @@ func TestScopedResponsesPreserveOtherLibrariesAndAuthentication(t *testing.T) {
 	if after["items"].Loads != before["items"].Loads+2 || after["adminitems"].Loads != before["adminitems"].Loads+1 {
 		t.Fatalf("changed scopes did not reload: %+v", after)
 	}
-	if _, ok := app.cache.Get("token:" + token); !ok {
+	if ok, err := app.db.HasAccessToken(token); err != nil || !ok {
 		t.Fatal("token invalidated")
 	}
 	if _, ok := app.imgThumb.Get("t:" + filepath.Join(otherRoot, "poster.jpg") + ":v0:old:10x10:q80"); !ok {

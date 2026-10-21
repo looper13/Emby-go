@@ -22,7 +22,7 @@ func (a *App) animeDTO(raw string, c *gin.Context) gin.H {
 		return nil
 	}
 	l, err := a.db.AnimeLibrary()
-	if err != nil || !l.Enabled {
+	if err != nil || !l.Enabled || !a.db.CanAccessLibrary(l.ID) {
 		return nil
 	}
 	if kind == "movie" || kind == "episode" {
@@ -332,7 +332,7 @@ func (a *App) animeSeasons(c *gin.Context) {
 		return
 	}
 	q := c.Request.URL.Query()
-	if q.Get("UserId") != "" && q.Get("UserId") != "1" {
+	if !a.validQueryUser(c) {
 		c.JSON(404, gin.H{"error": "user not found"})
 		return
 	}
@@ -349,7 +349,7 @@ func (a *App) animeEpisodes(c *gin.Context) {
 		return
 	}
 	q := c.Request.URL.Query()
-	if q.Get("UserId") != "" && q.Get("UserId") != "1" {
+	if !a.validQueryUser(c) {
 		c.JSON(404, gin.H{"error": "user not found"})
 		return
 	}
@@ -395,7 +395,7 @@ func (a *App) animeRequestedItems(c *gin.Context) bool {
 	out := []gin.H{}
 	seen := map[string]bool{}
 	for _, id := range ids {
-		if seen[id] {
+		if seen[id] || !a.canAccessItem(id) {
 			continue
 		}
 		seen[id] = true

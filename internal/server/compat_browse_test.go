@@ -152,7 +152,7 @@ func TestEmbyPersonsAndVirtualFoldersQuery(t *testing.T) {
 	if len(result.Items[0].ImageTags) != 0 {
 		t.Fatalf("images disabled: %+v", result.Items[0])
 	}
-	resp, raw := embyRaw(t, ts, "GET", "/Items/"+entityId("Person", "Alpha")+"/Images/Primary", "", "")
+	resp, raw := embyRaw(t, ts, "GET", "/Items/"+entityId("Person", "Alpha")+"/Images/Primary", token, "")
 	if resp.StatusCode != http.StatusOK || string(raw) != string(image) {
 		t.Fatalf("person image: %d %s", resp.StatusCode, raw)
 	}

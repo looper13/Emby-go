@@ -7,6 +7,7 @@ import { usePageRequest } from '../composables/usePageRequest';
 import { useMediaWallStore, WALL_PAGE_SIZE } from '../stores/media-wall';
 import { viewHistoryKey, saveViewPosition, type ViewPosition } from '../router/view-history';
 import { useTasksStore } from '../stores/tasks';
+import { useAuthStore } from '../stores/auth';
 import BackgroundTaskProgress from '../components/tasks/BackgroundTaskProgress.vue';
 import MediaGrid from '../components/media/MediaGrid.vue';
 import WallFilters from '../components/media/WallFilters.vue';
@@ -23,6 +24,7 @@ const route = useRoute(); const router = useRouter();
 const history = inject(viewHistoryKey)!;
 const wall = useMediaWallStore(); const scope = usePageRequest();
 const tasks = useTasksStore();
+const auth = useAuthStore();
 const player = usePlayerStore();
 const libraries = ref<LibraryDto[]>([]); const pageError = ref('');
 const search = ref(''); const ready = ref(false); const more = ref<HTMLElement | null>(null);
@@ -139,19 +141,18 @@ watch(() => tasks.revision, () => {
 </script>
 <template>
   <section class="panel">
-    <div class="panel-head wall-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
+    <div class="panel-head wall-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button v-if="auth.isAdministrator" id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
     <p v-if="pageError" role="alert">{{ pageError }} <button class="btn" @click="enter()">重试</button></p>
-    <BackgroundTaskProgress kind="probe" :progress="tasks.probe.progress" :visible="tasks.probe.visible" :busy="tasks.probe.busy" :unavailable="tasks.probe.unavailable" :cancelling="tasks.probe.cancelling" @cancel="tasks.probe.cancel()" />
-    <WallFilters :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle"><template #entity-action><FavoriteButton v-if="entityItem" :item-id="entityItem.Id" :favorite="entityItem.UserData.IsFavorite" :label="entityItem.Name" /></template></WallFilters>
+    <BackgroundTaskProgress v-if="auth.isAdministrator" kind="probe" :progress="tasks.probe.progress" :visible="tasks.probe.visible" :busy="tasks.probe.busy" :unavailable="tasks.probe.unavailable" :cancelling="tasks.probe.cancelling" @cancel="tasks.probe.cancel()" />
+    <WallFilters :can-manage="auth.isAdministrator" :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle"><template #entity-action><FavoriteButton v-if="entityItem" :item-id="entityItem.Id" :favorite="entityItem.UserData.IsFavorite" :label="entityItem.Name" /></template></WallFilters>
     <div v-if="televisionLibrary && !value('status') && !entity" class="television-views" role="tablist" aria-label="媒体视图"><button class="btn btn-sm" role="tab" :aria-selected="browseTelevision" @click="filter('view','')">{{ library?.Type === 'mixed' ? '影片与电视节目' : '电视节目' }}</button><button class="btn btn-sm" role="tab" :aria-selected="!browseTelevision" @click="filter('view','index')">全部媒体索引</button></div>
     <TelevisionBrowser v-if="browseTelevision && library" :key="library.Id" :library="library.Id" :search="value('search')" :revision="tasks.revision" :series="value('tv_series')" :season="value('tv_season')" @browse="browseSeries" @open="open" />
     <h3 v-if="browseTelevision && library?.Type === 'mixed'">影片</h3>
-    <MediaGrid v-if="showWall" :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
-    <div id="wall-empty"><EmptyState v-if="showWall && ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : '开始扫描或手动补录后再来看看。'" /></div>
+    <MediaGrid :can-manage="auth.isAdministrator" v-if="showWall" :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
+    <div id="wall-empty"><EmptyState v-if="showWall && ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : auth.isAdministrator ? '开始扫描或手动补录后再来看看。' : ''" /></div>
     <div v-show="showWall" id="wall-more" ref="more" class="wall-more">
       <WallLoadState :error="wall.error" :loading="wall.loading" :ready="ready" :done="wall.done" :total="wall.total" @retry="load(true).then(maybeLoad)" />
     </div>
-    <p class="hint">点击卡片进入详情页（可播放、刮削、探测媒体信息、重读源）；海报中央的播放按钮为快捷播放。播放时检查当前 .strm 地址；替换为 http(s) 后即可重试。</p>
   </section>
 </template>
 <style scoped>

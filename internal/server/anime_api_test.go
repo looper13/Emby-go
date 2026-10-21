@@ -17,6 +17,9 @@ func TestAnimeAdminAuthValidationAndSettingsConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
+	if err = a.db.InitializeAdministrator("admin", "password-1234"); err != nil {
+		t.Fatal(err)
+	}
 	if err = a.db.SaveAccessToken("anime-api-test"); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +62,6 @@ func TestAnimeAdminAuthValidationAndSettingsConflict(t *testing.T) {
 	}
 	request("PUT", "/settings", string(body), "anime-api-test", 200)
 	request("PUT", "/settings", string(body), "anime-api-test", 409)
-	request("GET", "/catalog", "", "anime-api-test", 409)
+	request("GET", "/catalog", "", "anime-api-test", 404)
 	request("GET", "/settings", "", "anime-api-test", 200)
 }

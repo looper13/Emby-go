@@ -591,7 +591,7 @@ func (a *App) adminScrapeImage(c *gin.Context) {
 	// 图片 URL 是内容寻址的（provider/id/kind 决定内容），浏览器端也可以短缓存：
 	// 切换候选来回对比时不必重复下载。失败响应不加，免得 5 分钟内的 400/502 被缓存。
 	serveThumb := func(raw []byte) {
-		c.Header("Cache-Control", "public, max-age=300, must-revalidate")
+		setPrivateImageCache(c)
 		c.Data(http.StatusOK, "image/jpeg", raw)
 	}
 	if raw, ok := a.imgThumb.Get(cacheKey); ok {

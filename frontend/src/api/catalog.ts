@@ -9,7 +9,7 @@ export const catalogApi = {
     return parseDetail(await apiClient.request(`/api/admin/items/${encodeURIComponent(id)}/detail`, { auth: 'required', signal }));
   },
   async libraries(signal?: AbortSignal) {
-    return parseLibraries(await apiClient.request('/api/admin/libraries', { auth: 'required', signal }));
+    return parseLibraries(await apiClient.request('/api/browse/libraries', { auth: 'required', signal }));
   },
   async status(signal?: AbortSignal) {
     return parseStatus(await apiClient.request('/api/admin/status', { auth: 'required', signal }));

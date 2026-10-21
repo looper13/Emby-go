@@ -38,7 +38,7 @@ func TestLocalArtworkScanAndIndexedAPI(t *testing.T) {
 	base := "/Items/" + strconv.FormatInt(id, 10)
 	imageWidth := func(path string, want int) {
 		t.Helper()
-		resp, err := http.Get(server.URL + base + "/Images/" + path)
+		resp, err := http.Get(server.URL + base + "/Images/" + path + "?api_key=" + token)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,7 +54,7 @@ func TestLocalArtworkScanAndIndexedAPI(t *testing.T) {
 		imageWidth("Backdrop/"+strconv.Itoa(i), 80+i)
 	}
 	for _, index := range []string{"-1", "11", "invalid"} {
-		resp, err := http.Get(server.URL + base + "/Images/Backdrop/" + index)
+		resp, err := http.Get(server.URL + base + "/Images/Backdrop/" + index + "?api_key=" + token)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -13,7 +13,7 @@ import (
 
 func (a *App) animeProjection() []store.AnimeProjection {
 	l, err := a.db.AnimeLibrary()
-	if err != nil || !l.Enabled {
+	if err != nil || !l.Enabled || !a.db.CanAccessLibrary(l.ID) {
 		return nil
 	}
 	rows, err := a.db.AnimeProjection()
