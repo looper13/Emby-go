@@ -1,0 +1,146 @@
+package store
+
+import (
+	"context"
+	"fmt"
+)
+
+// migrateRemoveOnlineCatalog 在后台读取启动前清理停用的在线动漫资料库。
+// 原始媒体和观看数据继续按 movie_id 保存，删除虚拟映射不会删除媒体。
+func (s *Store) migrateRemoveOnlineCatalog() error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var done bool
+	if err = conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=5)`).Scan(&done); err != nil || done {
+		return err
+	}
+	// 重建被引用的 libraries 表时，仅关闭这条连接的外键并在提交前验证。
+	if _, err = conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	columns := map[string]bool{}
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(libraries)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	readErr := rows.Err()
+	rows.Close()
+	if readErr != nil {
+		return readErr
+	}
+	// 动漫功能加入前的数据库也需要普通媒体库的修订号和代理开关。
+	for _, column := range []struct{ name, definition string }{
+		{"source_type", "TEXT NOT NULL DEFAULT 'nfo_directory'"},
+		{"revision", "INTEGER NOT NULL DEFAULT 1"},
+		{"proxy_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1))"},
+	} {
+		if !columns[column.name] {
+			if _, err = tx.ExecContext(ctx, "ALTER TABLE libraries ADD COLUMN "+column.name+" "+column.definition); err != nil {
+				return err
+			}
+		}
+	}
+	for _, table := range []string{
+		"anime_tmdb_episodes", "anime_tmdb_series", "anime_tmdb_config", "anime_subject_sources",
+		"anime_release_episodes", "anime_releases", "anime_catalog_entries", "anime_mikan_entries",
+		"anime_media_bindings", "anime_episodes", "anime_subjects", "anime_sync_state",
+	} {
+		if _, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM settings WHERE key GLOB 'anime.*';
+DELETE FROM scheduled_tasks WHERE type IN ('anime_archive','anime_sync');
+DELETE FROM item_favorites WHERE item_id GLOB 'anime-*';`); err != nil {
+		return err
+	}
+	if columns["system_key"] {
+		// 如果库里意外存在原始媒体，整笔事务回滚，由管理员检查后再迁移。
+		var mediaCount int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM movies WHERE library_id IN (SELECT id FROM libraries WHERE source_type='anime_catalog' OR system_key='builtin:anime')`).Scan(&mediaCount); err != nil {
+			return err
+		}
+		if mediaCount != 0 {
+			return fmt.Errorf("在线动漫库包含 %d 条原始媒体，已取消清理以保留数据", mediaCount)
+		}
+		for _, table := range []string{"account_libraries", "user_library_grants"} {
+			var exists bool
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)`, table).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				if _, err = tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE library_id IN (SELECT id FROM libraries WHERE source_type='anime_catalog' OR system_key='builtin:anime')`); err != nil {
+					return err
+				}
+			}
+		}
+		var sequence int64
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='libraries'),0)`).Scan(&sequence); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM kv WHERE key IN (SELECT 'lib:'||id||':version' FROM libraries WHERE source_type='anime_catalog' OR system_key='builtin:anime');
+DELETE FROM libraries WHERE source_type='anime_catalog' OR system_key='builtin:anime';
+DROP VIEW IF EXISTS user_movies;
+DROP VIEW IF EXISTS user_libraries;
+CREATE TABLE libraries_directory_v5 (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+ path TEXT NOT NULL UNIQUE CHECK(length(trim(path))>0),
+ type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type='nfo_directory'),
+ revision INTEGER NOT NULL DEFAULT 1, proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1))
+);
+INSERT INTO libraries_directory_v5(id,name,path,type,enabled,source_type,revision,proxy_enabled)
+ SELECT id,name,path,COALESCE(type,'movies'),COALESCE(enabled,1),source_type,revision,proxy_enabled FROM libraries;
+DROP TABLE libraries;
+ALTER TABLE libraries_directory_v5 RENAME TO libraries;`); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='libraries'`, sequence); err != nil {
+			return err
+		}
+	}
+	rows, err = tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	bad := rows.Next()
+	readErr = rows.Err()
+	rows.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if bad {
+		return fmt.Errorf("在线动漫库清理后外键校验失败，已回滚")
+	}
+	var integrity string
+	if err = tx.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil {
+		return err
+	}
+	if integrity != "ok" {
+		return fmt.Errorf("在线动漫库清理后完整性校验失败：%s", integrity)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES(5)`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

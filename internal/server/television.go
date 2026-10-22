@@ -150,8 +150,7 @@ func (a *App) televisionImage(c *gin.Context) {
 }
 
 // Intercept local hierarchy scopes before the movie-only compatibility path.
-// Root results merge movies, local television and the independent anime view
-// before pagination; a source projected into anime is not listed twice.
+// 电影和本地电视条目在分页前统一排序。
 func (a *App) televisionItems(c *gin.Context) bool {
 	parent := c.Query("ParentId")
 	kind, lib, path, season, folder := store.ParseTVID(parent)
@@ -227,20 +226,7 @@ func (a *App) televisionItems(c *gin.Context) bool {
 		return false
 	}
 	out := []gin.H{}
-	animeIDs := map[int64]bool{}
-	if parent == "" {
-		for _, p := range a.animeProjection() {
-			animeIDs[p.MovieID] = true
-		}
-		out = append(out, a.animeBrowseCandidates(c, "", 0, 0)...)
-	}
-	local := make([]store.Movie, 0, len(eps))
-	for _, ep := range eps {
-		if !animeIDs[ep.ID] {
-			local = append(local, ep)
-		}
-	}
-	for _, group := range groupTelevision(local) {
+	for _, group := range groupTelevision(eps) {
 		if !folder && wants("Series") {
 			if item := a.televisionFolderDTO(group.ID, group.Episodes, c); item != nil && televisionItemMatches(c, item) {
 				out = append(out, item)
@@ -275,13 +261,9 @@ func (a *App) televisionItems(c *gin.Context) bool {
 	}
 	total := len(out)
 	if !folder && wants("Movie") {
-		start, limit := animePageWindow(c)
+		start, limit := mediaPageWindow(c)
 		filters := strings.ToLower(c.Query("Filters"))
-		exclude := make([]int64, 0, len(animeIDs))
-		for id := range animeIDs {
-			exclude = append(exclude, id)
-		}
-		ms, count, err := a.db.SearchMediaExcluding(exclude, []string{"Movie"}, lib, c.Query("SearchTerm"), c.Query("Years"), joinEntityNames(c, "Genres", "Genre", "GenreIds"), joinEntityNames(c, "Tags", "Tag", "TagIds"), joinEntityNames(c, "Studios", "Studio", "StudioIds"), joinEntityNames(c, "Person", "Person", "PersonIds"), strings.Contains(filters, "isunplayed"), favoriteFilter(c), firstSortKey(c.DefaultQuery("SortBy", "SortName")), strings.EqualFold(c.Query("SortOrder"), "Descending"), start+limit, 0, c.Query("OfficialRatings"))
+		ms, count, err := a.db.SearchMediaExcluding(nil, []string{"Movie"}, lib, c.Query("SearchTerm"), c.Query("Years"), joinEntityNames(c, "Genres", "Genre", "GenreIds"), joinEntityNames(c, "Tags", "Tag", "TagIds"), joinEntityNames(c, "Studios", "Studio", "StudioIds"), joinEntityNames(c, "Person", "Person", "PersonIds"), strings.Contains(filters, "isunplayed"), favoriteFilter(c), firstSortKey(c.DefaultQuery("SortBy", "SortName")), strings.EqualFold(c.Query("SortOrder"), "Descending"), start+limit, 0, c.Query("OfficialRatings"))
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return true
@@ -292,8 +274,8 @@ func (a *App) televisionItems(c *gin.Context) bool {
 			out = append(out, a.embyItemDetail(m, d, c))
 		}
 	}
-	sortAnimeItems(c, out)
-	writeAnimeItems(c, out, total)
+	sortMediaItems(c, out)
+	writeMediaItems(c, out, total)
 	return true
 }
 
@@ -479,11 +461,9 @@ func (a *App) televisionNextUp(c *gin.Context) bool {
 		if err != nil || (l.Type != store.LibraryTVShows && l.Type != store.LibraryMixed) {
 			return false
 		}
-	} else {
-		return false
 	}
 	out := a.televisionNextUpCandidates(c, lib, path)
-	sortAnimeItems(c, out)
-	writeAnimeItems(c, out, len(out))
+	sortMediaItems(c, out)
+	writeMediaItems(c, out, len(out))
 	return true
 }

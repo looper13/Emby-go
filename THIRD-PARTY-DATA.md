@@ -11,11 +11,3 @@ GFriends 来源：[gfriends/gfriends](https://github.com/gfriends/gfriends)。�
 MetaTube 和 NFO 中原有图片地址各自保留原来源条件。导入 `legacy_local` 仅表示来自本地旧文件；缺失的来源或授权信息不补造。
 
 上游事实核对基线：2026-10-12，提交 `7c34e9681382789a84e980c228023e716509d350`。运行时上游可能更新，使用和再分发前应以其当前说明为准。
-
-## 动漫资料
-
-动漫目录、字幕组发布和公开 RSS 来自配置的蜜柑站点，默认地址为用户提供的公共镜像 `https://mikan.tangbai.cc`；该地址不标记为已确认的官方域名。规范标题、简介、评分、媒介与章节来自 [Bangumi 公共 API](https://bangumi.github.io/api/)。无需蜜柑 Cookie、个人 RSS token 或 Bangumi OAuth。
-
-第三方资料和封面仍适用原来源的权利条件，不因本项目的 MIT 代码许可证获得额外授权。程序按需读取并限制请求频率、响应大小及封面缓存容量；不内置完整站点数据、自动下载器或自动订阅。种子和磁力仅供查看与复制，不作为播放器的媒体地址。
-
-设计参考 [Ani-Go](https://github.com/xiaoyueRX/Ani-Go)（`db71ee1`）与 [AnimeX](https://github.com/YinBuLiao/AnimeX)（`d737832`），本次未复制其实现代码。解析测试使用裁剪和脱敏的上游样本，来源与维护方式见 [夹具说明](internal/anime/testdata/README.md)。成功分页测试使用明确标注的合成分页信封，保留真实样本的原始总数。

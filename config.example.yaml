@@ -36,11 +36,6 @@ redis_addr: "127.0.0.1:6379"
 redis_password: ""
 redis_db: 0
 
-# 新建动漫配置的 TMDB API Key 初始值。管理员页面保存的值优先，清除后不会重新填回。
-# 留空时可从本配置同级 anime-tmdb.local.yaml 或环境变量 TMDB_API_KEY 读取。
-# 本示例不包含私人密钥。
-tmdb_api_key: ""
-
 # 前端“服务器域名切换”候选列表（供 Web 客户端在多个入口间切换；可选）
 # server_domains:
 #   - name: "内网"

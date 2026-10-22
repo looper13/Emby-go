@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"emby-go/internal/anime"
 	"emby-go/internal/store"
 	"github.com/gin-gonic/gin"
 )
@@ -136,12 +135,6 @@ func (a *App) favoriteTarget(c *gin.Context, raw string) (string, *store.Movie, 
 		item = a.boxsetItemDTO(name)
 	} else if _, _, _, _, ok := store.ParseTVID(raw); ok {
 		item = a.televisionFolder(raw, c)
-	} else if kind, id, season, ok := anime.ParseID(raw); ok && (kind == "series" || kind == "season") {
-		canonical := anime.ID("series", id)
-		if kind == "season" {
-			canonical = anime.SeasonID(id, season)
-		}
-		item = a.animeDTO(canonical, c)
 	} else {
 		movie, err := a.resolveUserMedia(raw)
 		if err != nil {
@@ -155,8 +148,7 @@ func (a *App) favoriteTarget(c *gin.Context, raw string) (string, *store.Movie, 
 	return item["Id"].(string), nil, item, nil
 }
 
-// Emby clients request mixed favorite types in a single query. Merge their
-// identities before sorting/paging, and project bound media only once.
+// 收藏查询合并电影、电视和其他实体，再统一排序和分页。
 func (a *App) favoriteRootItems(c *gin.Context) bool {
 	filter := favoriteFilter(c)
 	if filter == nil || !*filter || (c.Query("ParentId") != "" && c.Query("ParentId") != "0") {
@@ -185,11 +177,8 @@ func (a *App) favoriteRootItems(c *gin.Context) bool {
 		}
 	}
 	for _, movie := range movies {
-		item := a.projectAnimeMovie(c, movie.ID)
-		if item == nil {
-			item = a.embyItem(movie, data[movie.ID])
-			a.applyItemFields(item, movie, requestedFields(c), c)
-		}
+		item := a.embyItem(movie, data[movie.ID])
+		a.applyItemFields(item, movie, requestedFields(c), c)
 		if strings.EqualFold(firstSortKey(c.Query("SortBy")), "DateCreated") {
 			item["DateCreated"] = embyTime(movie.CreatedAt)
 		}
@@ -208,7 +197,7 @@ func (a *App) favoriteRootItems(c *gin.Context) bool {
 		}
 	}
 	sortFavoriteItems(c, items)
-	writeAnimeItems(c, items, len(items))
+	writeMediaItems(c, items, len(items))
 	return true
 }
 
@@ -225,7 +214,7 @@ func sortFavoriteItems(c *gin.Context, items []gin.H) {
 		switch key {
 		case "productionyear", "communityrating", "runtime", "indexnumber":
 			field := map[string]string{"productionyear": "ProductionYear", "communityrating": "CommunityRating", "runtime": "RunTimeTicks", "indexnumber": "IndexNumber"}[key]
-			comparison = cmp.Compare(animeNumber(left[field]), animeNumber(right[field]))
+			comparison = cmp.Compare(mediaNumber(left[field]), mediaNumber(right[field]))
 		case "datecreated", "premieredate":
 			field := "DateCreated"
 			if key == "premieredate" {

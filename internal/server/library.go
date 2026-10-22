@@ -407,21 +407,6 @@ func (a *App) collectionFolderDTO(l store.Library) gin.H {
 	if l.CollectionType() == "" {
 		delete(item, "CollectionType")
 	}
-	if l.SourceType == store.SourceAnime {
-		delete(item, "CollectionType")
-		rows := a.animeProjection()
-		parents := map[int64]bool{}
-		unplayed = 0
-		for _, p := range rows {
-			parents[p.SubjectID] = true
-			if !p.Played {
-				unplayed++
-			}
-		}
-		item["ChildCount"], item["RecursiveItemCount"] = len(parents), len(rows)
-		item["UserData"].(gin.H)["UnplayedItemCount"] = unplayed
-		return item
-	}
 	if cover := a.libraryCoverPath(l); cover != "" {
 		item["ImageTags"] = gin.H{"Primary": a.posterTag(cover)}
 		item["PrimaryImageAspectRatio"] = a.cachedCoverRatio(cover)
@@ -491,15 +476,8 @@ func (a *App) counts(c *gin.Context) {
 		return
 	}
 	collections := a.cachedCollections()
-	projection := a.animeProjection()
 	series := map[string]bool{}
 	episodeIDs := map[int64]bool{}
-	for _, p := range projection {
-		if p.EpisodeID > 0 {
-			episodeIDs[p.MovieID] = true
-			series["anime:"+strconv.FormatInt(p.SubjectID, 10)] = true
-		}
-	}
 	localEpisodes, err := a.db.TVEpisodes(0, "")
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
@@ -529,9 +507,6 @@ func (a *App) resume(c *gin.Context) {
 	if !a.validUser(c) {
 		return
 	}
-	if a.animePlaylist(c, true) {
-		return
-	}
 	start, _ := strconv.Atoi(c.DefaultQuery("StartIndex", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "30"))
 	if start < 0 {
@@ -551,11 +526,6 @@ func (a *App) resume(c *gin.Context) {
 	items := make([]gin.H, 0, len(movies))
 	for _, movie := range movies {
 		item := a.embyItemActors(movie, dataMap[movie.ID], actorMap[movie.ID], true)
-		if c.Query("ParentId") == "" {
-			if projected := a.projectAnimeMovie(c, movie.ID); projected != nil {
-				item = projected
-			}
-		}
 		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"Items": items, "TotalRecordCount": total, "StartIndex": start})
@@ -570,7 +540,7 @@ func (a *App) nextUp(c *gin.Context) {
 	if a.televisionNextUp(c) {
 		return
 	}
-	a.animeNextUp(c)
+	a.emptyItems(c)
 }
 
 // similar 返回与当前影片共享 流派/标签/制片商 的近似影片。
@@ -923,9 +893,6 @@ func (a *App) latest(c *gin.Context) {
 	if !a.validUser(c) {
 		return
 	}
-	if a.animePlaylist(c, false) {
-		return
-	}
 	// ParentId 可能是媒体库外部 id（libraryIDBase+内部 id）或旧内部 id，统一换算。
 	libraryID, _ := parseParentScope(c.Query("ParentId"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "20"))
@@ -945,11 +912,6 @@ func (a *App) latest(c *gin.Context) {
 	for _, m := range movies {
 		item := a.embyItemActors(m, dataMap[m.ID], actorMap[m.ID], true)
 		a.applyItemFields(item, m, fields, c)
-		if libraryID == 0 {
-			if projected := a.projectAnimeMovie(c, m.ID); projected != nil {
-				item = projected
-			}
-		}
 		out = append(out, item)
 	}
 	c.JSON(http.StatusOK, out)
@@ -985,7 +947,7 @@ func (a *App) itemsQuery(c *gin.Context) {
 	if !validFavoriteQuery(c) {
 		return
 	}
-	if a.favoriteRootItems(c) || a.animeRequestedItems(c) || a.animeItems(c) || a.televisionItems(c) || a.animeRootItems(c) {
+	if a.favoriteRootItems(c) || a.televisionItems(c) {
 		return
 	}
 	parentRaw := c.Query("ParentId")
@@ -1306,14 +1268,6 @@ func (a *App) item(c *gin.Context) {
 	}
 	if strings.HasPrefix(rawID, "tv-") {
 		if item := a.televisionFolder(rawID, c); item != nil {
-			c.JSON(200, item)
-		} else {
-			c.JSON(404, gin.H{"error": "not found"})
-		}
-		return
-	}
-	if strings.HasPrefix(rawID, "anime-") {
-		if item := a.animeDTO(rawID, c); item != nil {
 			c.JSON(200, item)
 		} else {
 			c.JSON(404, gin.H{"error": "not found"})

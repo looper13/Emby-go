@@ -90,7 +90,7 @@ it('only opens HTTP media and preserves escaped signed query strings', () => {
 
 it('loads episode playback options only when expanded and preserves selection on collapse', async () => {
   const request = vi.spyOn(apiClient, 'request').mockResolvedValue({ MediaSources: [source] });
-  const wrapper = mount(DetailPlayButton, { props: { itemId: 'anime-episode:7' } });
+  const wrapper = mount(DetailPlayButton, { props: { itemId: '7' } });
   cleanups.push(() => wrapper.unmount());
   await wrapper.get('.btn-accent').trigger('click');
   expect(wrapper.emitted('play')).toEqual([[undefined]]);

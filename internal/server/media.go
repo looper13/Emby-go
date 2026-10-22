@@ -48,10 +48,6 @@ func (a *App) image(c *gin.Context) {
 		a.televisionImage(c)
 		return
 	}
-	if strings.HasPrefix(c.Param("id"), "anime-") {
-		a.animeImage(c)
-		return
-	}
 	rawID := c.Param("id")
 	kind := c.Param("kind")
 	index := 0
@@ -313,21 +309,6 @@ func (a *App) imageInfo(c *gin.Context) {
 		c.JSON(200, a.movieImageInfo(m))
 		return
 	}
-	if strings.HasPrefix(c.Param("id"), "anime-") {
-		item := a.animeDTO(c.Param("id"), c)
-		if item == nil {
-			c.Status(404)
-			return
-		}
-		images := []gin.H{}
-		if tags, ok := item["ImageTags"].(gin.H); ok {
-			for kind, tag := range tags {
-				images = append(images, gin.H{"ImageType": kind, "ImageIndex": 0, "ImageTag": tag})
-			}
-		}
-		c.JSON(200, images)
-		return
-	}
 	rawID := c.Param("id")
 	if id, err := strconv.ParseInt(rawID, 10, 64); err == nil {
 		if libID, ok := parseLibraryExternal(id); ok {
@@ -416,9 +397,6 @@ func currentMovieSource(movie store.Movie, sourcePath string) (store.Movie, bool
 }
 
 func (a *App) playback(c *gin.Context) {
-	if !a.prepareAnimePlayback(c) {
-		return
-	}
 	movie, sourcePath, id, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -500,10 +478,6 @@ func (a *App) playback(c *gin.Context) {
 }
 
 func (a *App) resolvePlaybackTarget(rawID string) (store.Movie, string, string, bool) {
-	if strings.HasPrefix(rawID, "anime-") {
-		m, ok := a.animePlayable(rawID)
-		return m, m.SourcePath, rawID, ok
-	}
 	if movieID, part, ok := parseVirtualPartID(rawID); ok {
 		movie, err := a.db.Movie(movieID)
 		if err != nil || !a.db.CanAccessLibrary(movie.LibraryID) || part-2 >= len(movie.AdditionalParts) {
@@ -1089,9 +1063,6 @@ func randomSessionID() string {
 }
 
 func (a *App) stream(c *gin.Context) {
-	if !a.prepareAnimePlayback(c) {
-		return
-	}
 	movie, sourcePath, _, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -1145,9 +1116,6 @@ func (a *App) trailer(c *gin.Context) {
 // proxyStream 代理真实媒体地址：透传 Range/状态码/关键响应头。
 // 它既服务网页播放器的回退地址，也服务开启媒体库播放代理后的 /stream。
 func (a *App) proxyStream(c *gin.Context) {
-	if !a.prepareAnimePlayback(c) {
-		return
-	}
 	movie, sourcePath, _, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -1320,14 +1288,6 @@ func (a *App) played(c *gin.Context) { a.setPlayed(c, true) }
 func (a *App) unplayed(c *gin.Context) { a.setPlayed(c, false) }
 
 func (a *App) additionalParts(c *gin.Context) {
-	if strings.HasPrefix(c.Param("id"), "anime-") {
-		if _, err := a.resolveUserMedia(c.Param("id")); err != nil {
-			c.Status(404)
-			return
-		}
-		a.emptyItems(c)
-		return
-	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

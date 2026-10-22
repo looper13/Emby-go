@@ -14,7 +14,6 @@ import (
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
 	"emby-go/internal/store"
-	"github.com/gin-gonic/gin"
 )
 
 func accountRequest(a *App, method, path, token, body string) *httptest.ResponseRecorder {
@@ -127,29 +126,6 @@ func TestAccountPolicyValidationAndRestore(t *testing.T) {
 	w := accountRequest(a, "GET", "/Users/Me", token, "")
 	if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil || !me.Policy.EnableAllFolders || me.Policy.EnabledFolders == nil {
 		t.Fatal(err, w.Body)
-	}
-}
-
-func TestAccountPrivateCoverCacheHeaders(t *testing.T) {
-	for _, conditional := range []bool{false, true} {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest("GET", "/api/anime/images/1", nil)
-		cover := animeCover{data: []byte("image bytes"), mime: "image/jpeg"}
-		if conditional {
-			first := httptest.NewRecorder()
-			initial, _ := gin.CreateTestContext(first)
-			initial.Request = httptest.NewRequest("GET", "/api/anime/images/1", nil)
-			writeAnimeCover(initial, cover)
-			c.Request.Header.Set("If-None-Match", first.Header().Get("ETag"))
-		}
-		if !writeAnimeCover(c, cover) || w.Header().Get("Cache-Control") != "private, no-cache" || !strings.Contains(w.Header().Get("Vary"), "Cookie") {
-			t.Fatal(w.Code, w.Header())
-		}
-		c.Writer.WriteHeaderNow()
-		if conditional && w.Code != 304 {
-			t.Fatal(w.Code)
-		}
 	}
 }
 
@@ -369,11 +345,6 @@ func TestAccountDeniedMediaAndCookie(t *testing.T) {
 	for _, path := range []string{"/Sessions/Playing", "/Sessions/Playing/Progress", "/Sessions/Playing/Stopped"} {
 		if w := accountRequest(a, "POST", path, token, `{"ItemId":"`+sid+`","PositionTicks":10000000}`); w.Code != 404 {
 			t.Fatal(path, w.Code)
-		}
-	}
-	for _, path := range []string{"/api/admin/anime/catalog", "/api/admin/anime/bangumi", "/api/admin/anime/entries/1", "/api/anime/images/1", "/api/anime/subjects/1/image", "/api/anime/people/person/1/image"} {
-		if w := accountRequest(a, "GET", path, token, ""); w.Code != 404 {
-			t.Fatal(path, w.Code, w.Body)
 		}
 	}
 	r = httptest.NewRequest("GET", imagePath, nil)

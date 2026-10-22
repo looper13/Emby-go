@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,8 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"emby-go/internal/anime/artwork"
-	"emby-go/internal/anime/catalog"
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
 	"emby-go/internal/librarywatch"
@@ -35,12 +32,6 @@ type App struct {
 }
 
 type appState struct {
-	archive         *catalog.Catalog
-	archiveClient   *http.Client
-	archiveJob      *archiveJob
-	artwork         *artwork.Store
-	artworkJob      *artworkJob
-	anime           animeRuntime
 	cfgMu           sync.RWMutex
 	configEditMu    sync.Mutex // serializes file updates and monitor reconfiguration
 	configWarnings  []string   // guarded by configEditMu; retained until monitor reconfiguration
@@ -183,18 +174,6 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.EnsureAnimeLibrary(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := db.RecoverAnimeSync(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := db.InitializeAnimeTMDB(cfg.TMDBAPIKey); err != nil {
-		db.Close()
-		return nil, err
-	}
 	a := &App{db: db, appState: &appState{
 		cfg: cfg, cache: cache.NewManaged(cacheStore),
 		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
@@ -210,23 +189,8 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	defer func() {
 		if !ready {
 			a.rootCancel()
-			if a.artwork != nil {
-				_ = a.artwork.Close()
-			}
-			if a.archive != nil {
-				_ = a.archive.Close()
-			}
 		}
 	}()
-	a.archiveClient = catalog.NewHTTPClient()
-	a.archive, err = catalog.Open(filepath.Join(filepath.Dir(cfg.DBPath), "anime-catalog"))
-	if err != nil {
-		slog.Warn("动漫目录快照不可用，可重新导入", "error", err)
-	}
-	a.artwork, err = artwork.Open(a.rootCtx, filepath.Join(filepath.Dir(cfg.DBPath), "anime-images"))
-	if err != nil {
-		slog.Warn("动漫图片归档不可用", "error", err)
-	}
 	a.serverID = cfg.ServerID
 	if a.serverID == "" {
 		// 未显式配置则在本库生成稳定 UUID，避免重启漂移（客户端以 ServerId 识别实例）。
@@ -311,12 +275,6 @@ func (a *App) Close() {
 	a.mediaMu.Unlock()
 	a.mediaWG.Wait()
 	a.mediaSessionsWG.Wait()
-	a.anime.mu.Lock()
-	if a.anime.job != nil && a.anime.job.cancel != nil {
-		a.anime.job.cancel()
-	}
-	a.anime.mu.Unlock()
-	a.anime.wg.Wait()
 	if a.sched != nil {
 		a.sched.Stop()
 	}
@@ -326,12 +284,6 @@ func (a *App) Close() {
 	}
 	a.probeTaskMu.Unlock()
 	a.closeLibraryMonitors()
-	if a.artwork != nil {
-		_ = a.artwork.Close()
-	}
-	if a.archive != nil {
-		_ = a.archive.Close()
-	}
 	a.db.Close()
 }
 func (a *App) Handler() http.Handler { return a.router }
@@ -352,10 +304,6 @@ func (a *App) routes() {
 	r.GET("/api/browse/libraries", a.requireAuth, noStore, a.bind((*App).browseLibraries))
 	// Browser image requests use the read-only session cookie.
 	r.GET("/api/admin/scrape/image", a.requireAuth, a.requireAdministrator, a.bind((*App).adminScrapeImage))
-	r.GET("/api/anime/images/:id", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animeEntryImage))
-	r.GET("/api/anime/subjects/:id/image", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animeSubjectImage))
-	r.GET("/api/anime/people/:kind/:id/image", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animePersonImage))
-	r.GET("/api/anime/episodes/:id/stills/:revision/:index", a.requireAuth, a.requireAnimeAccess, a.bind((*App).animeEpisodeStill))
 
 	admin := r.Group("/api/admin", a.requireAuth, a.adminBoundary, noStore)
 	admin.GET("/account", a.bind((*App).account))
@@ -364,7 +312,6 @@ func (a *App) routes() {
 	admin.POST("/users", a.bind((*App).createUser))
 	admin.PUT("/users/:uid", a.bind((*App).editUser))
 	admin.DELETE("/users/:uid", a.bind((*App).deleteUser))
-	a.registerAnime(admin)
 	admin.GET("/libraries", a.bind((*App).adminLibraries))
 	admin.POST("/libraries", a.bind((*App).adminAddLibrary))
 	admin.PUT("/libraries/:id", a.bind((*App).adminUpdateLibrary))
@@ -480,8 +427,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Library/VirtualFolders/Query", true, a.virtualFoldersQuery},
 		{"GET", "/Users/:uid/Items/Resume", true, a.resume},
 		{"GET", "/Shows/NextUp", true, a.nextUp},
-		{"GET", "/Shows/:id/Seasons", true, a.animeSeasons},
-		{"GET", "/Shows/:id/Episodes", true, a.animeEpisodes},
+		{"GET", "/Shows/:id/Seasons", true, a.televisionSeasons},
+		{"GET", "/Shows/:id/Episodes", true, a.televisionEpisodes},
 		{"GET", "/Users/:uid/Views", true, a.views},
 		{"GET", "/Users/:uid/Items", true, a.items},
 		{"GET", "/Items", true, a.rootItems},

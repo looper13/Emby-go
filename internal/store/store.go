@@ -56,7 +56,6 @@ type Library struct {
 	Enabled      bool   `json:"Enabled"`
 	ProxyEnabled bool   `json:"ProxyEnabled"`
 	SourceType   string `json:"SourceType"`
-	SystemKey    string `json:"SystemKey,omitempty"`
 	Revision     int64  `json:"Revision"`
 }
 
@@ -151,19 +150,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := s.migrateAnime(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.migrateLibraryProxy(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.migrateAnimeSources(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := s.migrateAnimeTMDB(); err != nil {
+	if err := s.migrateDirectoryLibraries(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -264,7 +251,8 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) init() error {
 	_, err := s.db.Exec(`PRAGMA foreign_keys=ON;
-CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL, type TEXT DEFAULT 'movies', enabled INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL CHECK(length(trim(path))>0), type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type='nfo_directory'), revision INTEGER NOT NULL DEFAULT 1, proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1)));
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, library_id INTEGER NOT NULL, source_path TEXT UNIQUE NOT NULL, file_size INTEGER DEFAULT 0, file_mtime TEXT, source_protocol TEXT, source_container TEXT, number TEXT, status TEXT NOT NULL, nfo_path TEXT, output_dir TEXT, title TEXT, original_title TEXT, plot TEXT, year INTEGER, premiered TEXT, rating REAL, director TEXT, series TEXT, maker TEXT, label TEXT, collection TEXT, official_rating TEXT, sortname TEXT, taglines TEXT, provider_id TEXT, genres TEXT, tags TEXT, studios TEXT, poster_path TEXT, backdrop_path TEXT, landscape_path TEXT, runtime_seconds INTEGER DEFAULT 0, additional_parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(library_id) REFERENCES libraries(id));
 CREATE TABLE IF NOT EXISTS userdata (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, position_ticks INTEGER DEFAULT 0, play_count INTEGER DEFAULT 0, played INTEGER DEFAULT 0, last_played_at TEXT, last_stopped_ticks INTEGER DEFAULT -1, is_favorite INTEGER NOT NULL DEFAULT 0, likes INTEGER NOT NULL DEFAULT 0, hide_from_resume INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS item_favorites (item_id TEXT PRIMARY KEY NOT NULL);
@@ -441,7 +429,7 @@ func (s *Store) Libraries() ([]Library, error) {
 	return s.listLibraries("WHERE enabled=1")
 }
 
-func jsonText(v []string) string { b, _ := json.Marshal(v); return string(b) }
+func jsonText(v any) string { b, _ := json.Marshal(v); return string(b) }
 func parseStrings(v string) []string {
 	var out []string
 	_ = json.Unmarshal([]byte(v), &out)
@@ -457,7 +445,7 @@ const upsertMovieSQL = `INSERT INTO movies(library_id,source_path,file_size,file
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_path) DO UPDATE SET library_id=excluded.library_id,file_size=excluded.file_size,file_mtime=excluded.file_mtime,source_protocol=excluded.source_protocol,source_container=excluded.source_container,number=excluded.number,status=excluded.status,nfo_path=excluded.nfo_path,output_dir=excluded.output_dir,title=excluded.title,original_title=excluded.original_title,plot=excluded.plot,year=excluded.year,premiered=excluded.premiered,rating=excluded.rating,director=excluded.director,series=excluded.series,maker=excluded.maker,label=excluded.label,collection=excluded.collection,official_rating=excluded.official_rating,sortname=excluded.sortname,taglines=excluded.taglines,provider_id=excluded.provider_id,genres=excluded.genres,tags=excluded.tags,studios=excluded.studios,poster_path=excluded.poster_path,backdrop_path=excluded.backdrop_path,landscape_path=excluded.landscape_path,runtime_seconds=excluded.runtime_seconds,additional_parts=excluded.additional_parts,updated_at=excluded.updated_at,backdrop_paths=excluded.backdrop_paths,trailer_url=excluded.trailer_url,cover_url=excluded.cover_url,television=excluded.television RETURNING id`
 
 func movieValues(movie Movie, size int64, mtime time.Time, now string) []any {
-	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops()), movie.TrailerURL, movie.CoverURL, animeJSON(movie.Television)}
+	return []any{movie.LibraryID, movie.SourcePath, size, mtime.UTC().Format(time.RFC3339), movie.SourceProtocol, movie.SourceContainer, movie.Number, movie.Status, movie.NFOPath, movie.OutputDir, movie.Title, movie.OriginalTitle, movie.Plot, movie.Year, movie.Premiere, movie.Rating, movie.Director, movie.Series, movie.Maker, movie.Label, movie.Collection, movie.OfficialRating, movie.SortName, jsonText(movie.Taglines), movie.ProviderID, jsonText(movie.Genres), jsonText(movie.Tags), jsonText(movie.Studios), movie.PosterPath, movie.BackdropPath, movie.LandscapePath, movie.RuntimeSeconds, jsonText(movie.AdditionalParts), now, now, jsonText(movie.Backdrops()), movie.TrailerURL, movie.CoverURL, jsonText(movie.Television)}
 }
 
 func (s *Store) UpsertMovie(m Movie, size int64, mtime time.Time) (int64, error) {
@@ -889,13 +877,6 @@ func (s *Store) DeleteMovie(id int64) error {
 // DeleteLibrary 删除媒体库及其影片索引（仅删库内记录，不触碰磁盘文件）。
 // userdata / movie_actors 通过外键 ON DELETE CASCADE 随影片一并清理。
 func (s *Store) DeleteLibrary(id int64) error {
-	var systemKey sql.NullString
-	if err := s.db.QueryRow(`SELECT system_key FROM libraries WHERE id=?`, id).Scan(&systemKey); err != nil {
-		return err
-	}
-	if systemKey.Valid {
-		return ErrSystemLibrary
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -1130,7 +1111,7 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 	}
 	if len(exclude) > 0 {
 		where = append(where, "id NOT IN (SELECT value FROM json_each(?))")
-		args = append(args, animeJSON(exclude))
+		args = append(args, jsonText(exclude))
 	}
 	switch status {
 	case "":

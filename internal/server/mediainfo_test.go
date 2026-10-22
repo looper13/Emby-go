@@ -39,7 +39,7 @@ func countingMedia(t *testing.T) (*httptest.Server, *int64) {
 func newProbeTestApp(t *testing.T, root string) (*App, *httptest.Server, string) {
 	t.Helper()
 	// Keep this legacy regression fixture as an upgrade of an existing directory
-	// library. Fresh-instance builtin identity is covered by TestAnime*.
+	// library.
 	seedDirectoryTestLibrary(t, filepath.Join(root, "t.db"), root, "L")
 	app, err := newApp(config.Config{DBPath: filepath.Join(root, "t.db")}, cache.NewMemory(256))
 	if err != nil {

@@ -16,7 +16,6 @@ async function logout() {
 }
 const navigation = computed(() => [
   { page: 'overview', label: '总览', icon: LayoutGrid }, { page: 'libraries', label: '媒体库', icon: Folder },
-  { page: 'anime', label: '动漫', icon: Sparkles },
   { page: 'favorites', label: '收藏', icon: Heart },
   { page: 'items', label: '媒体墙', icon: Film }, { page: 'actors', label: '演员', icon: Users }, { page: 'manual', label: '手动补录', icon: CirclePlus },
   { page: 'settings', label: '设置', icon: Settings }, { page: 'apikeys', label: 'API 密钥', icon: KeyRound },
@@ -24,7 +23,7 @@ const navigation = computed(() => [
   { page: 'users', label: '用户管理', icon: Users },
   { page: 'scrape', label: '刮削', icon: Sparkles }, { page: 'scheduled', label: '计划任务', icon: Clock },
   { page: 'tasks', label: '任务', icon: Activity }, { page: 'probe', label: '接口探针', icon: Search },
-].filter(item => auth.isAdministrator || ['items', 'anime', 'favorites', 'account'].includes(item.page)));
+].filter(item => auth.isAdministrator || ['items', 'favorites', 'account'].includes(item.page)));
 const detailTitle = ref('');
 function updateTitle(value: string) { detailTitle.value = value; }
 watch(() => route.fullPath, () => { detailTitle.value = ''; });
@@ -53,7 +52,7 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
         </div>
         <div class="top-actions">
           <button class="icon-btn" type="button" :title="`${auth.user?.Name || ''}：退出登录`" aria-label="退出登录" :disabled="auth.submitting" @click="logout"><LogOut :size="18" aria-hidden="true" /></button>
-          <button v-if="auth.isAdministrator && route.meta.navigation !== 'anime'" id="scan" class="btn btn-accent" title="增量扫描：只更新新增或变化的影片；需要重新读取全部影片时使用全量重建索引" :disabled="tasks.mutationBusy" @click="tasks.run()"><TrendingUp :size="15" :stroke-width="1.8" aria-hidden="true" /><span>{{ tasks.busy ? '扫描中…' : '开始扫描' }}</span></button>
+          <button v-if="auth.isAdministrator" id="scan" class="btn btn-accent" title="增量扫描：只更新新增或变化的影片；需要重新读取全部影片时使用全量重建索引" :disabled="tasks.mutationBusy" @click="tasks.run()"><TrendingUp :size="15" :stroke-width="1.8" aria-hidden="true" /><span>{{ tasks.busy ? '扫描中…' : '开始扫描' }}</span></button>
         </div>
       </header>
       <div id="content" class="content" aria-live="polite"><RouterView v-slot="{ Component }"><component :is="Component" v-on="route.name === 'item' ? { title: updateTitle } : {}" /></RouterView></div>

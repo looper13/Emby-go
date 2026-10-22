@@ -52,10 +52,6 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 	}
 	wasMonitored := a.stopLibraryMonitor(id)
 	if err = a.db.DeleteLibrary(id); err != nil {
-		if errors.Is(err, store.ErrSystemLibrary) {
-			c.JSON(400, gin.H{"error": err.Error()})
-			return
-		}
 		if wasMonitored {
 			a.startLibraryMonitoring()
 		}

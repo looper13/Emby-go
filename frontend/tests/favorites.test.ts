@@ -70,25 +70,12 @@ describe('favorite controls and API', () => {
     await w.trigger('click'); w.unmount(); finish(true); await flushPromises();
     expect(w.emitted('changed')).toBeUndefined();
   });
-  it('routes media, anime, television and named entities to usable views', () => {
+  it('将媒体、电视节目和命名实体导航到可用页面', () => {
     expect(favoriteDestination(item)).toEqual({ path: '/item/5' });
-    expect(favoriteDestination({ ...item, Id: 'anime-season:10:1', Type: 'Season', SeriesId: 'anime-series:10', bangumiSubjectId: '101' })).toEqual({ path: '/anime/subjects/101' });
     expect(favoriteDestination({ ...item, Id: 'tv-season:2:1:L3Nob3c', Type: 'Season', SeriesId: 'tv-series:2:L3Nob3c' })).toMatchObject({ path: '/items', query: { library_id: '2', tv_season: 'tv-season:2:1:L3Nob3c' } });
     for (const [Type, key] of [['Person', 'person'], ['Genre', 'genre'], ['Tag', 'tag'], ['Studio', 'studio'], ['BoxSet', 'collection']]) {
       expect(favoriteDestination({ ...item, Type: Type!, Id: favoriteEntityId(key!, 'Name'), Name: 'Name' })).toEqual({ path: '/items', query: { [key!]: 'Name' } });
     }
-  });
-  it('resolves anime episode links with external series ids and shares parent reads', async () => {
-    const request = vi.spyOn(apiClient, 'request').mockResolvedValueOnce({ Items: [
-      { ...item, Id: 'anime-episode:1', Type: 'Episode', SeriesId: 'anime-series:10', ProviderIds: { Bangumi: '201' } },
-      { ...item, Id: 'anime-episode:2', Type: 'Episode', SeriesId: 'anime-series:10', ProviderIds: { Bangumi: '202' } },
-    ], TotalRecordCount: 2 }).mockResolvedValueOnce({ ...item, Id: 'anime-series:10', Type: 'Series', ProviderIds: { Bangumi: '101' } });
-    const result = await favoritesApi.list('Episode', '', 0);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.lastCall?.[0]).toBe('/Items/anime-series%3A10');
-    for (const episode of result.items) expect(favoriteDestination(episode)).toEqual({ path: '/anime/subjects/101' });
-    const film = parseFavoriteItem({ ...item, Id: 'anime-movie:11', ProviderIds: { Bangumi: '102' } });
-    expect(favoriteDestination(film)).toEqual({ path: '/anime/subjects/102' });
   });
 });
 

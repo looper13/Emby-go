@@ -6,7 +6,6 @@ import { replaceLegacyUrl } from './router/legacy-url';
 import { viewHistories, viewHistoryKey } from './router/view-history';
 import './styles/legacy.css';
 import './styles/library.css';
-import './styles/anime.css';
 import './styles/artwork.css';
 
 replaceLegacyUrl();

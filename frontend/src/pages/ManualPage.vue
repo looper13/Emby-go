@@ -18,6 +18,6 @@ async function submit(payload: ManualPayload) {
   <section class="panel"><div class="panel-head"><h2>手动补录</h2><span class="hint" style="margin:0">写入 .strm + 生成 NFO，即时进入 Emby</span></div>
     <p>为一条 <code>http(s)</code> 直链登记影片：系统会在此服务器上写入源文件、同目录 NFO，并将影片元数据入库。源地址必须为 http/https。</p>
     <ReadState :error="error" :loading="loading" :empty="!data" @retry="load" />
-    <ManualForm :key="formKey" :submitting="submitting" :library-hint="data?.items?.find(lib=>lib.SourceType!=='anime_catalog'&&lib.Enabled!==false)?.Name ?? ''" @submit="submit" />
+    <ManualForm :key="formKey" :submitting="submitting" :library-hint="data?.items?.find(lib=>lib.Enabled!==false)?.Name ?? ''" @submit="submit" />
   </section>
 </template>

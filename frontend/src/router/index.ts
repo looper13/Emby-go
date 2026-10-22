@@ -19,11 +19,6 @@ import ScrapePage from '../pages/ScrapePage.vue';
 import ActorsPage from '../pages/ActorsPage.vue';
 import FavoritesPage from '../pages/FavoritesPage.vue';
 import ScheduledPage from '../pages/ScheduledPage.vue';
-import AnimePage from '../pages/AnimePage.vue';
-import AnimeDetailPage from '../pages/AnimeDetailPage.vue';
-import AnimeSettingsPage from '../pages/AnimeSettingsPage.vue';
-import BangumiPage from '../pages/BangumiPage.vue';
-import BangumiDetailPage from '../pages/BangumiDetailPage.vue';
 import AccountPage from '../pages/AccountPage.vue';
 import UsersPage from '../pages/UsersPage.vue';
 
@@ -38,11 +33,6 @@ export function createAppRouter(pinia: Pinia, history: RouterHistory = createWeb
         children: [
           { path: 'account', name: 'account', component: AccountPage, meta: { title: '我的账号', crumb: 'Archive / Account', navigation: 'account' } },
           { path: 'users', name: 'users', component: UsersPage, meta: { adminOnly: true, title: '用户管理', crumb: 'Archive / Users', navigation: 'users' } },
-          { path: 'anime', name: 'anime', component: BangumiPage, meta: { title: '动漫', crumb: 'Archive / Anime', navigation: 'anime' } },
-          { path: 'anime/mikan', name: 'anime-mikan', component: AnimePage, meta: { title: '蜜柑发布', crumb: '动漫 / 蜜柑发布', navigation: 'anime' } },
-          { path: 'anime/subjects/:id', name: 'bangumi-detail', component: BangumiDetailPage, meta: { title: '番剧详情', crumb: '动漫 / 详情', navigation: 'anime' } },
-          { path: 'anime/settings', name: 'anime-settings', component: AnimeSettingsPage, meta: { adminOnly: true, title: '动漫设置', crumb: '动漫 / 设置', navigation: 'anime' } },
-          { path: 'anime/entries/:id', name: 'anime-detail', component: AnimeDetailPage, meta: { title: '番剧详情', crumb: '动漫 / 详情', navigation: 'anime' } },
           { path: 'actors', name: 'actors', component: ActorsPage, meta: { adminOnly: true, title: '演员', crumb: 'Archive / Actors', navigation: 'actors' } },
           { path: 'favorites', name: 'favorites', component: FavoritesPage, meta: { title: '收藏', crumb: 'Archive / Favorites', navigation: 'favorites' } },
           { path: 'scrape', name: 'scrape', component: ScrapePage, meta: { adminOnly: true, title: '刮削', crumb: 'Archive / Scrape', navigation: 'scrape' } },

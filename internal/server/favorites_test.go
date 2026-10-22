@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"emby-go/internal/anime"
 	"emby-go/internal/store"
 	"emby-go/internal/subtitle"
 	"github.com/gin-gonic/gin"
@@ -277,83 +275,5 @@ func TestEmbyFavoriteDirectorAndHiddenEntities(t *testing.T) {
 	}
 	if result := call("GET", "/Items?Filters=IsFavorite"); result["TotalRecordCount"] != float64(2) {
 		t.Fatal("favorite state lost after metadata refresh", result)
-	}
-}
-
-func TestEmbyFavoriteAnimeAliasesAndFolders(t *testing.T) {
-	root := t.TempDir()
-	a, server, token := newProbeTestApp(t, root)
-	const source = "https://media.invalid/episode.mp4"
-	path := filepath.Join(root, "episode.strm")
-	writeFile(t, path, source)
-	movie, err := a.db.UpsertMovie(store.Movie{LibraryID: 1, SourcePath: path, Status: "success", Title: "Source"}, 0, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject, err := a.db.SaveAnimeSubject(context.Background(), anime.Subject{BangumiID: 101, Name: "Series", Platform: "TV"}, []anime.Episode{{BangumiID: 201, Name: "Episode", Sort: "1", Season: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	episodes, err := a.db.AnimeEpisodes(subject)
-	if err != nil || len(episodes) != 1 {
-		t.Fatal(episodes, err)
-	}
-	binding, err := a.db.BindAnime(subject, episodes[0].ID, movie, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = a.db.SetAnimeAvailability(binding, "playable", anime.SourceVersion(source), ""); err != nil {
-		t.Fatal(err)
-	}
-	series, season, episode := anime.ID("series", subject), anime.SeasonID(subject, 1), anime.ID("episode", episodes[0].ID)
-	var discoveries atomic.Int32
-	a.discoverSubtitles = func(string) []subtitle.File { discoveries.Add(1); return nil }
-	call := func(method, path string) map[string]any {
-		t.Helper()
-		response, raw := embyRaw(t, server, method, path, token, "")
-		if response.StatusCode != 200 {
-			t.Fatal(path, response.StatusCode, string(raw))
-		}
-		var result map[string]any
-		if err := json.Unmarshal(raw, &result); err != nil {
-			t.Fatal(err)
-		}
-		return result
-	}
-	for _, id := range []string{series, season} {
-		call("POST", "/Users/1/FavoriteItems/"+id)
-	}
-	if data, _ := a.db.Data(movie); data.IsFavorite {
-		t.Fatal("folder state cascaded", data)
-	}
-	call("POST", "/Users/1/FavoriteItems/"+episode)
-	call("POST", "/Users/1/FavoriteItems/"+strconv.FormatInt(movie, 10))
-	before := discoveries.Load()
-	result := call("GET", "/Items?IsFavorite=true&IncludeItemTypes=Movie,Episode,Series,Season")
-	if result["TotalRecordCount"] != float64(3) {
-		t.Fatal("aliases duplicated", result)
-	}
-	seen := map[string]bool{}
-	for _, raw := range result["Items"].([]any) {
-		seen[raw.(map[string]any)["Id"].(string)] = true
-	}
-	if !seen[series] || !seen[season] || !seen[episode] {
-		t.Fatal(seen)
-	}
-	if discoveries.Load() != before {
-		t.Fatal("favorites discovered subtitles")
-	}
-	if result = call("GET", "/Shows/"+series+"/Seasons?IsFavorite=true"); result["TotalRecordCount"] != float64(1) {
-		t.Fatal(result)
-	}
-	if result = call("GET", "/Shows/"+series+"/Episodes?IsFavorite=false"); result["TotalRecordCount"] != float64(0) {
-		t.Fatal(result)
-	}
-	call("DELETE", "/Users/1/FavoriteItems/"+strconv.FormatInt(movie, 10))
-	if result = call("GET", "/Items?IsFavorite=true&IncludeItemTypes=Episode"); result["TotalRecordCount"] != float64(0) {
-		t.Fatal(result)
-	}
-	if result = call("GET", "/Items?IsFavorite=true&IncludeItemTypes=Series,Season"); result["TotalRecordCount"] != float64(2) {
-		t.Fatal(result)
 	}
 }

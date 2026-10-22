@@ -3,23 +3,9 @@ package server
 import (
 	"strconv"
 
-	"emby-go/internal/anime"
 	"emby-go/internal/store"
 	"github.com/gin-gonic/gin"
 )
-
-func (a *App) canAccessAnime() bool {
-	l, err := a.db.AnimeLibrary()
-	return err == nil && a.db.CanAccessLibrary(l.ID)
-}
-
-func (a *App) requireAnimeAccess(c *gin.Context) {
-	if !a.forRequest(c).canAccessAnime() {
-		c.AbortWithStatusJSON(404, gin.H{"error": "library not found"})
-		return
-	}
-	c.Next()
-}
 
 // Check identities before DTO/image caches and before reading any source file.
 // Aggregate listings use the same boundary in SQL, before counting/pagination.
@@ -29,16 +15,6 @@ func (a *App) canAccessItem(raw string) bool {
 	}
 	if _, lib, _, _, ok := store.ParseTVID(raw); ok {
 		return a.db.CanAccessLibrary(lib)
-	}
-	if kind, _, _, ok := anime.ParseID(raw); ok {
-		if !a.canAccessAnime() {
-			return false
-		}
-		if kind == "movie" || kind == "episode" {
-			_, _, binding, err := a.db.AnimeTarget(raw)
-			return err == nil && a.db.CanAccessMovie(binding.MovieID)
-		}
-		return true
 	}
 	if id, _, ok := parseVirtualPartID(raw); ok {
 		return a.db.CanAccessMovie(id)

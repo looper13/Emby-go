@@ -801,18 +801,18 @@ func TestAdminDeleteLibrary(t *testing.T) {
 	}
 	// 列表带 total 计数。
 	resp, list := authed("GET", "/api/admin/libraries", "")
-	if resp.StatusCode != http.StatusOK || list["total"].(float64) != 2 {
-		t.Fatalf("libraries list should include directory and builtin: status=%d body=%v", resp.StatusCode, list)
+	if resp.StatusCode != http.StatusOK || list["total"].(float64) != 1 {
+		t.Fatalf("媒体库列表应只包含添加的目录: status=%d body=%v", resp.StatusCode, list)
 	}
 	id := int64(lib["Id"].(float64))
 	if resp, _ := authed("DELETE", "/api/admin/libraries/"+strconv.FormatInt(id, 10), ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete library: %d", resp.StatusCode)
 	}
-	if _, list = authed("GET", "/api/admin/libraries", ""); list["total"].(float64) != 1 {
+	if _, list = authed("GET", "/api/admin/libraries", ""); list["total"].(float64) != 0 {
 		t.Fatalf("library should be gone: %v", list)
 	}
-	if items, ok := list["items"].([]any); !ok || len(items) != 1 || items[0].(map[string]any)["SourceType"] != "anime_catalog" {
-		t.Fatalf("only builtin anime library should remain: %v", list)
+	if items, ok := list["items"].([]any); !ok || len(items) != 0 {
+		t.Fatalf("删除后媒体库列表应为空: %v", list)
 	}
 	// 删除不存在的库返回 404。
 	if resp, _ := authed("DELETE", "/api/admin/libraries/"+strconv.FormatInt(id, 10), ""); resp.StatusCode != http.StatusNotFound {

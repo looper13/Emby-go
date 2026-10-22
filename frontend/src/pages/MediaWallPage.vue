@@ -119,7 +119,7 @@ async function enter(position?: ViewPosition) {
   try {
     const result = await catalogApi.libraries(current.signal);
     if (!current.isCurrent()) return;
-    libraries.value = (result.items ?? []).filter(lib => lib.SourceType !== 'anime_catalog' && lib.Enabled !== false);
+    libraries.value = (result.items ?? []).filter(lib => lib.Enabled !== false);
     if (value('library_id') && !libraries.value.some(lib => String(lib.Id) === value('library_id'))) {
       const q = { ...route.query }; delete q.library_id;
       await router.replace({ path: '/items', query: q }); return;

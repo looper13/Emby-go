@@ -29,7 +29,6 @@ type Config struct {
 	Debug         bool           `yaml:"debug"`       // 开启后启用 gin 调试模式与详细请求日志
 	RedisAddr     string         `yaml:"redis_addr"`
 	RedisPassword string         `yaml:"redis_password"`
-	TMDBAPIKey    string         `yaml:"tmdb_api_key" json:"-"`
 	RedisDB       int            `yaml:"redis_db"`
 	ServerDomains []ServerDomain `yaml:"server_domains"`
 
@@ -98,9 +97,6 @@ func Load(path string) (Config, error) {
 	}
 	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", path: path}
 	if path == "" {
-		if err := cfg.loadTMDBDefault(); err != nil {
-			return cfg, err
-		}
 		return cfg, cfg.ResolveStorage()
 	}
 	data, err := os.ReadFile(path)
@@ -118,36 +114,9 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("library_monitor_mode 必须为 realtime 或 polling，当前为 %q", cfg.LibraryMonitorMode)
 	}
 	cfg.path = path
-	if err := cfg.loadTMDBDefault(); err != nil {
-		return cfg, err
-	}
 	return cfg, cfg.ResolveStorage()
 }
 
-func (c *Config) loadTMDBDefault() error {
-	if key := strings.TrimSpace(os.Getenv("TMDB_API_KEY")); key != "" {
-		c.TMDBAPIKey = key
-		return nil
-	}
-	if strings.TrimSpace(c.TMDBAPIKey) != "" {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(c.path), "anime-tmdb.local.yaml"))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("cannot read local TMDB configuration")
-	}
-	var local struct {
-		APIKey string `yaml:"tmdb_api_key"`
-	}
-	if len(data) > 8192 || yaml.Unmarshal(data, &local) != nil {
-		return fmt.Errorf("invalid local TMDB configuration")
-	}
-	c.TMDBAPIKey = strings.TrimSpace(local.APIKey)
-	return nil
-}
 
 // ResolveStorage anchors relative actor storage to the database, never to the config file.
 func (c *Config) ResolveStorage() error {

@@ -166,7 +166,7 @@ describe('media wall state and request ownership', () => {
       expect(wall.prepare(new URLSearchParams(), true)).toBe(true); expect(wall.needsRefresh()).toBe(false);
       await apiClient.request('/Users/1/PlayedItems/1', { auth: 'required', method: 'DELETE' });
       expect(wall.userdata['1']?.played).toBe(false);
-      await apiClient.request('/Users/1/FavoriteItems/anime-episode%3A1', { auth: 'required', method: 'POST' });
+      await apiClient.request('/Users/1/FavoriteItems/person%3Aexample', { auth: 'required', method: 'POST' });
       expect(wall.dirty).toBe(true);
     } finally { vi.unstubAllGlobals(); }
   });

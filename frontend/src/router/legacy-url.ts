@@ -1,11 +1,11 @@
 const pages = new Set([
   'overview', 'libraries', 'items', 'manual', 'settings', 'apikeys', 'account', 'users',
-  'actors', 'favorites', 'scrape', 'scheduled', 'tasks', 'probe', 'anime', 'anime/settings', 'anime/mikan',
+  'actors', 'favorites', 'scrape', 'scheduled', 'tasks', 'probe',
 ]);
 const filterKeys = new Set([
   'library_id', 'status', 'search', 'sort', 'order', 'source_protocol',
   'genre', 'tag', 'studio', 'person', 'collection', 'scrape', 'limit', 'offset',
-  'year', 'season', 'weekday', 'source', 'playable',
+  'year',
   'view', 'tv_series', 'tv_season', 'favorite', 'type',
 ]);
 
@@ -15,9 +15,7 @@ export function isValidItemId(value: string): boolean {
 
 function allowedPath(path: string, login: boolean): boolean {
   return path.startsWith('/') && (pages.has(path.slice(1)) || (login && path === '/login')
-    || (path.startsWith('/item/') && isValidItemId(path.slice(6)))
-    || (path.startsWith('/anime/entries/') && isValidItemId(path.slice(15)))
-    || (path.startsWith('/anime/subjects/') && isValidItemId(path.slice(16))));
+    || (path.startsWith('/item/') && isValidItemId(path.slice(6))));
 }
 
 function filteredQuery(input: URLSearchParams): URLSearchParams {

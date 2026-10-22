@@ -21,7 +21,7 @@ export interface LoginDto {
 }
 
 export type LibraryContentType = 'movies' | 'tvshows' | 'mixed';
-export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory' | 'anime_catalog'; Enabled?: boolean; ProxyEnabled?: boolean; Revision?: number; Type?: LibraryContentType | ''; SystemKey?: string }
+export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory'; Enabled?: boolean; ProxyEnabled?: boolean; Revision?: number; Type?: LibraryContentType | '' }
 export interface LibrariesDto { items: LibraryDto[] | null; total: number }
 export interface StatusDto { success: number; manual: number; pending: number; incompatible: number }
 
@@ -167,7 +167,7 @@ export function parseLibraries(value: unknown): LibrariesDto {
     if (!isRecord(item) || !isCount(item.Id) || item.Id === 0
       || typeof item.Name !== 'string' || typeof item.Path !== 'string') return invalidDto();
     const library: LibraryDto = { Id: item.Id, Name: item.Name, Path: item.Path };
-    if (item.SourceType !== undefined) { if (item.SourceType !== 'nfo_directory' && item.SourceType !== 'anime_catalog') return invalidDto(); library.SourceType = item.SourceType; }
+    if (item.SourceType !== undefined) { if (item.SourceType !== 'nfo_directory') return invalidDto(); library.SourceType = item.SourceType; }
     if (item.Enabled !== undefined) { if (typeof item.Enabled !== 'boolean') return invalidDto(); library.Enabled = item.Enabled; }
     if (item.ProxyEnabled !== undefined) { if (typeof item.ProxyEnabled !== 'boolean') return invalidDto(); library.ProxyEnabled = item.ProxyEnabled; }
     if (item.Revision !== undefined) { if (!isCount(item.Revision)) return invalidDto(); library.Revision = item.Revision; }

@@ -33,7 +33,7 @@ func (a *App) adminBoundary(c *gin.Context) {
 	allowed := p == "/account" && (c.Request.Method == "GET" || c.Request.Method == "PUT")
 	if c.Request.Method == "GET" {
 		switch p {
-		case "/items", "/items/:id/detail", "/shows", "/anime/bangumi", "/anime/subjects/:id", "/anime/catalog", "/anime/entries/:id", "/anime/entries/:id/episodes", "/anime/entries/:id/releases":
+		case "/items", "/items/:id/detail", "/shows":
 			allowed = true
 		}
 	}
