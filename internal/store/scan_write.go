@@ -88,10 +88,37 @@ ON CONFLICT(movie_id) DO UPDATE SET fingerprint=excluded.fingerprint`)
 		return stats, err
 	}
 	defer actorSelect.Close()
+	features, err := prepareFeatureStatements(transaction)
+	if err != nil {
+		return stats, err
+	}
+	defer features.close()
 	stats.Prepare = time.Since(stage)
 	preparing = false
 	ids := make([]int64, 0, len(movies))
 	now := time.Now().UTC().Format(time.RFC3339)
+	stage = time.Now()
+	// A shared actor may occur in every movie. Preserve the last nonempty NFO
+	// avatar in batch order, then write that actor once before inserting links.
+	actors := make(map[string]string)
+	for _, entry := range movies {
+		for _, actor := range entry.Actors {
+			name, avatar := strings.TrimSpace(actor.Name), strings.TrimSpace(actor.AvatarURL)
+			if name == "" {
+				continue
+			}
+			if _, exists := actors[name]; !exists || avatar != "" {
+				actors[name] = avatar
+			}
+		}
+	}
+	for name, avatar := range actors {
+		if _, err = actorUpsert.Exec(name, avatar, now); err != nil {
+			stats.Actors += time.Since(stage)
+			return stats, err
+		}
+	}
+	stats.Actors += time.Since(stage)
 	for _, entry := range movies {
 		var movieID int64
 		stage = time.Now()
@@ -102,13 +129,13 @@ ON CONFLICT(movie_id) DO UPDATE SET fingerprint=excluded.fingerprint`)
 		}
 		ids = append(ids, movieID)
 		stage = time.Now()
-		err = saveScanActors(movieID, entry.Actors, now, actorSelect, actorDelete, actorUpsert, actorInsert)
+		err = saveScanActors(movieID, entry.Actors, actorSelect, actorDelete, actorInsert)
 		stats.Actors += time.Since(stage)
 		if err != nil {
 			return stats, err
 		}
 		stage = time.Now()
-		err = saveFeatureValuesTx(transaction, movieID, movieFeatureValues(entry.Movie, entry.Actors))
+		err = features.save(movieID, movieFeatureValues(entry.Movie, entry.Actors))
 		stats.Features += time.Since(stage)
 		if err != nil {
 			return stats, err
@@ -137,7 +164,7 @@ ON CONFLICT(movie_id) DO UPDATE SET fingerprint=excluded.fingerprint`)
 	return stats, nil
 }
 
-func saveScanActors(movieID int64, actors []ActorRef, now string, selectNames, deleteNames, upsert, insert *sql.Stmt) error {
+func saveScanActors(movieID int64, actors []ActorRef, selectNames, deleteNames, insert *sql.Stmt) error {
 	next := make(map[string]bool, len(actors))
 	for _, actor := range actors {
 		if name := strings.TrimSpace(actor.Name); name != "" {
@@ -172,16 +199,7 @@ func saveScanActors(movieID int64, actors []ActorRef, now string, selectNames, d
 		if _, err := deleteNames.Exec(movieID); err != nil {
 			return err
 		}
-	}
-	for _, actor := range actors {
-		name := strings.TrimSpace(actor.Name)
-		if name == "" {
-			continue
-		}
-		if _, err := upsert.Exec(name, strings.TrimSpace(actor.AvatarURL), now); err != nil {
-			return err
-		}
-		if !same {
+		for name := range next {
 			if _, err := insert.Exec(movieID, name); err != nil {
 				return err
 			}

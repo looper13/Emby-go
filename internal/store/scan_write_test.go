@@ -1,10 +1,92 @@
 package store
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestScanBatchMergesActorAvatarsAndRollsBackFeatureFailure(t *testing.T) {
+	s, libID := newFeatureStore(t)
+	if err := s.SetActorAvatar("Shared", "https://example.test/old.jpg", "local-tag"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE TABLE actor_write_count(name TEXT);
+CREATE TRIGGER count_actor_update AFTER UPDATE ON actors BEGIN INSERT INTO actor_write_count VALUES(NEW.name); END;
+CREATE TRIGGER count_actor_insert AFTER INSERT ON actors BEGIN INSERT INTO actor_write_count VALUES(NEW.name); END;`); err != nil {
+		t.Fatal(err)
+	}
+	entries := make([]ScannedMovie, 3)
+	for i, avatar := range []string{"https://example.test/first.jpg", "", " https://example.test/last.jpg "} {
+		entries[i] = ScannedMovie{Movie: Movie{LibraryID: libID, SourcePath: fmt.Sprintf("/tmp/av/merged-%d.strm", i), Status: "success", Title: "Merged"}, Actors: []ActorRef{{Name: " Shared ", AvatarURL: avatar}, {Name: "Shared"}, {Name: " "}}}
+	}
+	if err := s.SaveScannedMovies(entries); err != nil {
+		t.Fatal(err)
+	}
+	var avatar, tag string
+	var writes int
+	if err := s.db.QueryRow("SELECT avatar_url,avatar_tag FROM actors WHERE name='Shared'").Scan(&avatar, &tag); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM actor_write_count WHERE name='Shared'").Scan(&writes); err != nil {
+		t.Fatal(err)
+	}
+	if avatar != "https://example.test/last.jpg" || tag != "local-tag" || writes != 1 {
+		t.Fatalf("avatar=%q tag=%q writes=%d", avatar, tag, writes)
+	}
+	for _, entry := range entries {
+		id, err := s.MovieIDByPath(entry.Movie.SourcePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actors, err := s.Actors(id)
+		if err != nil || len(actors) != 1 || actors[0].Name != "Shared" {
+			t.Fatalf("actor links=%v err=%v", actors, err)
+		}
+	}
+	if _, err := s.db.Exec(`CREATE TRIGGER reject_feature BEFORE INSERT ON movie_features WHEN NEW.value='Rejected' BEGIN SELECT RAISE(ABORT,'feature rejected'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	entries[0].Movie.Title = "Must roll back"
+	entries[0].Actors = []ActorRef{{Name: "Shared", AvatarURL: "https://example.test/wrong.jpg"}}
+	entries[1].Actors = []ActorRef{{Name: "Rejected"}}
+	if err := s.SaveScannedMovies(entries); err == nil {
+		t.Fatal("feature failure accepted")
+	}
+	var title string
+	if err := s.db.QueryRow("SELECT title FROM movies WHERE source_path=?", entries[0].Movie.SourcePath).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT avatar_url FROM actors WHERE name='Shared'").Scan(&avatar); err != nil {
+		t.Fatal(err)
+	}
+	var rejected int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM actors WHERE name='Rejected'").Scan(&rejected); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Merged" || avatar != "https://example.test/last.jpg" || rejected != 0 {
+		t.Fatalf("partial transaction survived: title=%q avatar=%q rejected=%d", title, avatar, rejected)
+	}
+}
+
+func TestScanFeaturesLargeBatchAndRemoval(t *testing.T) {
+	s, libID := newFeatureStore(t)
+	entry := ScannedMovie{Movie: Movie{LibraryID: libID, SourcePath: "/tmp/av/large-features.strm", Status: "success"}}
+	for i := 0; i < 300; i++ {
+		entry.Movie.Tags = append(entry.Movie.Tags, fmt.Sprintf("Tag %03d", i))
+	}
+	for _, count := range []int{300, 129, 128, 0} {
+		entry.Movie.Tags = entry.Movie.Tags[:count]
+		if err := s.SaveScannedMovies([]ScannedMovie{entry}); err != nil {
+			t.Fatal(err)
+		}
+		var actual int
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM movie_features").Scan(&actual); err != nil || actual != count {
+			t.Fatalf("features=%d want=%d err=%v", actual, count, err)
+		}
+	}
+}
 
 func TestSaveScannedMoviesAtomicAndComplete(test *testing.T) {
 	database, libraryID := newFeatureStore(test)

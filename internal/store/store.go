@@ -41,6 +41,7 @@ type storeState struct {
 	itemFavoritesMu      sync.RWMutex
 	itemFavorites        map[string]bool
 	itemFavoriteVersion  atomic.Uint64
+	searchCounts         searchCountCache
 	// featuresReady 在首次倒排特征回填结束时关闭（见 Open）。
 	featuresReady chan struct{}
 	// visibleCount/visibleVersion 可见影片数缓存（见 visibleMovieCount）。
@@ -155,6 +156,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateTelevision(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateSearchIndexes(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -639,51 +644,6 @@ func movieFeatureValues(movie Movie, actors []ActorRef) map[string]int {
 	return values
 }
 
-func saveFeatureValuesTx(tx *sql.Tx, movieID int64, next map[string]int) error {
-	existing := make(map[string]int, len(next))
-	rows, err := tx.Query("SELECT kind, value, weight FROM movie_features WHERE movie_id=?", movieID)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var kind, value string
-		var weight int
-		if err = rows.Scan(&kind, &value, &weight); err != nil {
-			rows.Close()
-			return err
-		}
-		existing[kind+"\x00"+value] = weight
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	if len(existing) == len(next) {
-		same := true
-		for key, weight := range next {
-			if existing[key] != weight {
-				same = false
-				break
-			}
-		}
-		if same {
-			return nil
-		}
-	}
-
-	if _, err = tx.Exec("DELETE FROM movie_features WHERE movie_id=?", movieID); err != nil {
-		return err
-	}
-	for key, weight := range next {
-		kind, value, _ := strings.Cut(key, "\x00")
-		if _, err = tx.Exec("INSERT OR REPLACE INTO movie_features(movie_id,kind,value,weight) VALUES(?,?,?,?)",
-			movieID, kind, value, weight); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // firstNonEmptyValue 返回第一个非空值（系列名优先取 NFO <set>）。
 func firstNonEmptyValue(values ...string) string {
 	for _, value := range values {
@@ -1091,8 +1051,16 @@ type movieOrder struct {
 }
 
 func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, years, genre, tags, studios, person, collection, protocol, scrape string, unplayed bool, favorite *bool, order movieOrder, limit, offset int, officialRatings ...string) ([]Movie, int, error) {
-	where := []string{"library_id IN (SELECT id FROM " + s.userLibrariesSQL() + ")"}
+	where := []string{}
 	args := []any{}
+	if libraryID > 0 {
+		// A fixed library needs one permission check for the query, rather than
+		// testing every matching movie against the full visible-library set.
+		where = append(where, "EXISTS (SELECT 1 FROM "+s.userLibrariesSQL()+" WHERE id=?)")
+		args = append(args, libraryID)
+	} else {
+		where = append(where, "library_id IN (SELECT id FROM "+s.userLibrariesSQL()+")")
+	}
 	if len(order.itemTypes) > 0 {
 		movie, episode := false, false
 		for _, typ := range order.itemTypes {
@@ -1119,6 +1087,10 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		where = append(where, "status IN ('success','manual')")
 	case StatusAll:
 		// 明确要求不限状态（如按刮削失败筛选，那些条目多半还是 pending）。
+	case "success", "manual":
+		// Keep the visible partial indexes usable for an explicit wall status.
+		where = append(where, "status IN ('success','manual')", "status=?")
+		args = append(args, status)
 	default:
 		where = append(where, "status=?")
 		args = append(args, status)
@@ -1173,7 +1145,8 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		}
 		where = append(where, "official_rating IN ("+strings.Join(placeholders, ",")+")")
 	}
-	for field, value := range map[string]string{"genres": genre, "tags": tags, "studios": studios} {
+	for _, filter := range []struct{ field, value string }{{"genres", genre}, {"tags", tags}, {"studios", studios}} {
+		field, value := filter.field, filter.value
 		if value == "" {
 			continue
 		}
@@ -1216,8 +1189,8 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 	if cond != "" {
 		clause = " WHERE " + cond
 	}
-	var total int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM movies"+clause, args...).Scan(&total); err != nil {
+	total, err := s.cachedSearchCount(clause, args, unplayed || favorite != nil)
+	if err != nil {
 		return nil, 0, err
 	}
 	allowed := map[string]string{
@@ -1406,6 +1379,7 @@ func (s *Store) SetPlayed(id int64, played bool) error {
 		ON CONFLICT(user_id,movie_id) DO UPDATE SET played=excluded.played`, s.UserID(), id, b2i(played))
 	if err == nil {
 		s.touchUserData(id)
+		s.touchSearchUserData()
 	}
 	return err
 }
@@ -1416,6 +1390,7 @@ func (s *Store) SetFavorite(id int64, favorite bool) error {
 		ON CONFLICT(user_id,movie_id) DO UPDATE SET is_favorite=excluded.is_favorite`, s.UserID(), id, b2i(favorite))
 	if err == nil {
 		s.touchUserData(id)
+		s.touchSearchUserData()
 	}
 	return err
 }

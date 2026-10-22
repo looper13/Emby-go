@@ -253,6 +253,9 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		if result.Added+result.Updated+result.Deleted > 0 || scanErr != nil {
 			started := time.Now()
 			scanErr = errors.Join(scanErr, s.BumpVersion(lib.ID))
+			if result.Added+result.Updated+result.Deleted > 0 {
+				s.OptimizeSearchIndexes()
+			}
 			perf.version += time.Since(started)
 		}
 	}()

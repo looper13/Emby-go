@@ -26,6 +26,7 @@ func (s *Store) BumpVersion(libraryID int64) error {
 	}
 	s.gversion.Add(1)
 	s.libraryVersions[key]++
+	s.searchCounts.revision.Add(1)
 	return nil
 }
 func (s *Store) Version(key string) string {
@@ -81,6 +82,7 @@ func (s *Store) touchUserData(id int64) {
 	v.(*atomic.Uint64).Add(1)
 }
 func (s *Store) TouchMovie(id int64) {
+	s.searchCounts.revision.Add(1)
 	if v, ok := s.movieVersions.Load(id); ok {
 		v.(*atomic.Uint64).Add(1)
 		return
