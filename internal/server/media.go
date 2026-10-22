@@ -1135,24 +1135,87 @@ func (a *App) proxyStream(c *gin.Context) {
 
 // proxyRemote 将外部视频响应透传给客户端，保留 Range 播放所需的状态和响应头。
 func (a *App) proxyRemote(c *gin.Context, raw string) {
-	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, raw, nil)
+	a.proxyRemoteWithHLSSession(c, raw, "")
+}
+
+func (a *App) proxyRemoteWithHLSSession(c *gin.Context, raw, hlsSessionID string) {
+	parsed, _ := url.Parse(raw)
+	knownPlaylist := parsed != nil && strings.EqualFold(path.Ext(parsed.Path), ".m3u8")
+	forwardRange := !knownPlaylist
+	resp, err := a.doProxyRequest(c, raw, forwardRange)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	if rng := c.GetHeader("Range"); rng != "" {
-		req.Header.Set("Range", rng)
+	if isHLSResponse(resp) {
+		if forwardRange && c.GetHeader("Range") != "" && resp.StatusCode == http.StatusPartialContent {
+			resp.Body.Close()
+			resp, err = a.doProxyRequest(c, raw, false)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			defer resp.Body.Close()
+			if c.Request.Method == http.MethodHead {
+				c.Header("Content-Type", "application/vnd.apple.mpegurl")
+				c.Status(http.StatusOK)
+				return
+			}
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHLSPlaylistBytes+1))
+			if readErr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "读取 HLS 播放列表失败"})
+				return
+			}
+			if len(body) > maxHLSPlaylistBytes {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "HLS 播放列表超过大小限制"})
+				return
+			}
+			if hlsSessionID == "" {
+				var createErr error
+				hlsSessionID, createErr = a.newHLSProxySession(c.Param("id"))
+				if createErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "创建 HLS 代理会话失败"})
+					return
+				}
+			}
+			baseURL := raw
+			if resp.Request != nil && resp.Request.URL != nil {
+				baseURL = resp.Request.URL.String()
+			}
+			rewritten, rewriteErr := a.rewriteHLSPlaylist(c, c.Param("id"), hlsSessionID, baseURL, body)
+			if rewriteErr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "改写 HLS 播放列表失败"})
+				return
+			}
+			c.Header("Content-Type", "application/vnd.apple.mpegurl")
+			c.Header("Content-Length", strconv.Itoa(len(rewritten)))
+			c.Status(http.StatusOK)
+			_, _ = c.Writer.Write(rewritten)
+			return
+		}
 	}
-	// 必须禁用压缩：否则 transport 自动解压会让 Content-Length/Content-Range 失真、拖动失效。
+	defer resp.Body.Close()
+	a.writeProxyResponse(c, raw, resp)
+}
+
+func (a *App) doProxyRequest(c *gin.Context, raw string, forwardRange bool) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	if forwardRange {
+		if rng := c.GetHeader("Range"); rng != "" {
+			req.Header.Set("Range", rng)
+		}
+	}
+	// 必须禁用压缩，避免解压后 Content-Length / Content-Range 失真。
 	req.Header.Set("Accept-Encoding", "identity")
-	if ua := c.GetHeader("User-Agent"); ua != "" {
-		req.Header.Set("User-Agent", ua)
-	}
-	if accept := c.GetHeader("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-	if language := c.GetHeader("Accept-Language"); language != "" {
-		req.Header.Set("Accept-Language", language)
+	for _, header := range []string{"User-Agent", "Accept", "Accept-Language"} {
+		if value := c.GetHeader(header); value != "" {
+			req.Header.Set(header, value)
+		}
 	}
 	if parsed, parseErr := url.Parse(raw); parseErr == nil {
 		host := strings.ToLower(parsed.Hostname())
@@ -1160,12 +1223,10 @@ func (a *App) proxyRemote(c *gin.Context, raw string) {
 			req.Header.Set("Referer", "https://www.dmm.co.jp/")
 		}
 	}
-	resp, err := streamClient.Do(req)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	defer resp.Body.Close()
+	return streamClient.Do(req)
+}
+
+func (a *App) writeProxyResponse(c *gin.Context, raw string, resp *http.Response) {
 	for _, header := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"} {
 		if value := resp.Header.Get(header); value != "" {
 			c.Header(header, value)

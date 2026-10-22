@@ -114,6 +114,8 @@ type appState struct {
 	mediaSessions      map[string]*audioSession
 	mediaWG            sync.WaitGroup
 	mediaSessionsWG    sync.WaitGroup
+	hlsProxyMu         sync.Mutex
+	hlsProxySessions   map[string]*hlsProxySession
 	subtitleSigningKey [32]byte
 	subtitleBytes      *cache.Memory
 	discoverSubtitles  func(string) []subtitle.File
@@ -507,6 +509,11 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 	registerTrailerRoutes(streams, a.bind((*App).trailer))
 	for _, base := range []string{"/Videos/:id/hls/:session/:file", "/videos/:id/hls/:session/:file"} {
 		g.GET(base, noStore, a.bind((*App).hlsResource))
+	}
+	for _, base := range []string{"/Videos/:id/hls-proxy/:session/:resource", "/videos/:id/hls-proxy/:session/:resource"} {
+		// 随机会话 ID 作为短期播放能力；handler 会按会话所属用户重新检查权限。
+		g.GET(base, noStore, a.bind((*App).hlsProxyResource))
+		g.HEAD(base, noStore, a.bind((*App).hlsProxyResource))
 	}
 }
 
