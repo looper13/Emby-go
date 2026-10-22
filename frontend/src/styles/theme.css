@@ -1,0 +1,637 @@
+/* ==========================================================================
+   Emby-go · 现代 Emby 风格与双色主题系统 (Dark / Light)
+   采用 Emby 标志性绿调、无衬线现代媒体排版、平滑卡片动效与双模式色彩。
+   ========================================================================== */
+
+/* ------------------------------------------------------------------ 暗色主题（默认） */
+:root,
+[data-theme="dark"] {
+  --bg: #101419;
+  --bg-soft: #141920;
+  --panel: #171d26;
+  --panel-2: #1e2632;
+  --panel-3: #252f3e;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --text: #f3f4f6;
+  --muted: #9ca3af;
+  --dim: #6b7280;
+
+  /* Emby 经典绿色品牌基调 */
+  --accent: #52b54b;
+  --accent-strong: #5ec956;
+  --accent-soft: rgba(82, 181, 75, 0.16);
+  --accent-ink: #ffffff;
+
+  --ok: #52b54b;
+  --ok-soft: rgba(82, 181, 75, 0.16);
+  --warn: #f59e0b;
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.15);
+  --info: #38bdf8;
+  --info-soft: rgba(56, 189, 248, 0.15);
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: var(--font-sans);
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+}
+
+/* ------------------------------------------------------------------ 浅色主题 */
+[data-theme="light"],
+.theme-light {
+  color-scheme: light;
+  --bg: #f4f6f9;
+  --bg-soft: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --panel-3: #f1f5f9;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --text: #0f172a;
+  --muted: #475569;
+  --dim: #64748b;
+
+  /* 浅色模式下采用稍高对比度的 Emby 绿 */
+  --accent: #43a047;
+  --accent-strong: #388e3c;
+  --accent-soft: rgba(67, 160, 71, 0.12);
+  --accent-ink: #ffffff;
+
+  --ok: #43a047;
+  --ok-soft: rgba(67, 160, 71, 0.12);
+  --warn: #d97706;
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.1);
+  --info: #0284c7;
+  --info-soft: rgba(2, 132, 199, 0.1);
+
+  --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+}
+
+/* ------------------------------------------------------------------ 页面全局 */
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg);
+  color: var(--text);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+[data-theme="dark"] body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(82, 181, 75, 0.06), transparent 60%),
+    radial-gradient(900px 520px at -8% 108%, rgba(20, 35, 45, 0.2), transparent 55%),
+    var(--bg);
+}
+
+[data-theme="light"] body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(67, 160, 71, 0.05), transparent 60%),
+    radial-gradient(900px 520px at -8% 108%, rgba(226, 232, 240, 0.6), transparent 55%),
+    var(--bg);
+}
+
+h1, h2, h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ------------------------------------------------------------------ 侧边栏 & 品牌 */
+.sidebar {
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+[data-theme="dark"] .sidebar {
+  background: linear-gradient(180deg, rgba(19, 25, 33, 0.96), rgba(16, 20, 26, 0.98));
+  border-right-color: var(--line);
+}
+
+[data-theme="light"] .sidebar {
+  background: #ffffff;
+  border-right-color: var(--line);
+}
+
+.brand {
+  border-bottom-color: var(--line);
+}
+
+.brand-mark {
+  border-radius: 9px;
+  background: linear-gradient(135deg, #5ec956 0%, #52b54b 100%);
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(82, 181, 75, 0.35);
+}
+
+.brand-text strong {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.brand-text small {
+  color: var(--dim);
+}
+
+.nav-item {
+  border-radius: 8px;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.nav-item:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.nav-item.is-active {
+  background: var(--accent-soft);
+  border-color: rgba(82, 181, 75, 0.25);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-item.is-active::before {
+  background: var(--accent);
+}
+
+.nav-item.is-active svg {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ 顶栏 Topbar */
+.topbar {
+  border-bottom-color: var(--line);
+  transition: border-color 0.25s ease;
+}
+
+.crumb {
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.topbar h1 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------------ 按钮通用 */
+.btn {
+  font-family: var(--font-sans);
+  border-radius: 7px;
+  transition: transform 0.12s ease, border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+[data-theme="light"] .btn {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #1e293b;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.btn-accent {
+  background: #52b54b;
+  border-color: #52b54b;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(82, 181, 75, 0.3);
+}
+
+.btn-accent:hover {
+  background: #5ec956;
+  border-color: #5ec956;
+  box-shadow: 0 6px 18px rgba(82, 181, 75, 0.42);
+  transform: translateY(-1px);
+}
+
+.btn-accent:active {
+  transform: translateY(0);
+}
+
+.icon-btn {
+  border-radius: 8px;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+[data-theme="light"] .icon-btn {
+  color: #64748b;
+}
+
+[data-theme="light"] .icon-btn:hover {
+  color: #0f172a;
+  background: #f1f5f9;
+}
+
+.icon-btn:hover {
+  transform: translateY(-1px);
+}
+
+/* ------------------------------------------------------------------ 海报墙 & 卡片美化 (Emby 风格) */
+.wall {
+  gap: 18px;
+}
+
+.wall-card {
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.wall-card:hover {
+  transform: translateY(-4px);
+}
+
+.wall-poster {
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  transition: box-shadow 0.22s ease, border-color 0.22s ease;
+}
+
+[data-theme="light"] .wall-poster {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  background: #e2e8f0;
+}
+
+.wall-card:hover .wall-poster {
+  border-color: var(--accent);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.28);
+}
+
+[data-theme="light"] .wall-card:hover .wall-poster {
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+}
+
+.wall-poster img {
+  transition: transform 0.3s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.wall-card:hover .wall-poster img {
+  transform: scale(1.03);
+}
+
+/* Emby 经典的“已看”绿色对勾圆形徽章 */
+.wall-badge.played {
+  background: #52b54b;
+  color: #ffffff;
+  border: none;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.wall-badge.multi {
+  color: var(--accent);
+  border-color: rgba(82, 181, 75, 0.35);
+}
+
+/* 播放进度条 */
+.wall-progress {
+  height: 4px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.wall-progress i {
+  background: #52b54b;
+}
+
+/* Emby 风格海报居中绿色播放圆钮 */
+.wall-play {
+  width: 52px;
+  height: 52px;
+  background: rgba(82, 181, 75, 0.92);
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%) scale(0.9);
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.wall-card:hover .wall-play {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+}
+
+.wall-play:hover {
+  background: #5ec956;
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.wall-play svg {
+  color: #ffffff;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.wall-meta strong {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wall-meta small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ 筛选器 & 表单 */
+.pill {
+  border-radius: 20px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+[data-theme="light"] .pill {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.pill:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.pill.is-active {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(82, 181, 75, 0.3);
+}
+
+input, textarea, select {
+  font-family: var(--font-sans);
+  border-radius: 7px;
+}
+
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #94a3b8;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.filter-chip {
+  background: var(--accent-soft);
+  border-color: rgba(82, 181, 75, 0.35);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.tag-chip {
+  border-radius: 16px;
+  transition: all 0.15s ease;
+}
+
+.tag-chip:hover, .tag-chip:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 开关 Switch */
+.switch input:checked + i {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.switch input:checked + i::after {
+  background: var(--accent);
+}
+
+/* ------------------------------------------------------------------ 详情页 Hero & 部件 */
+.item-hero {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+[data-theme="dark"] .item-hero-bg::after {
+  background: linear-gradient(180deg, rgba(16, 20, 25, 0.25) 0%, rgba(16, 20, 25, 0.8) 58%, var(--bg) 100%);
+}
+
+[data-theme="light"] .item-hero-bg::after {
+  background: linear-gradient(180deg, rgba(244, 246, 249, 0.15) 0%, rgba(244, 246, 249, 0.85) 60%, var(--bg) 100%);
+}
+
+.item-hero-poster {
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+}
+
+.item-hero-title {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.similar-card {
+  transition: transform 0.2s ease;
+}
+
+.similar-card:hover {
+  transform: translateY(-3px);
+}
+
+.similar-poster {
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
+.similar-card:hover .similar-poster {
+  border-color: var(--accent);
+}
+
+.avatar-card img, .avatar-fallback {
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.avatar-card:hover img {
+  transform: scale(1.06);
+  border-color: var(--accent);
+}
+
+.entity-link {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ 面板 & 统计卡片 */
+.panel {
+  border-radius: var(--radius);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+
+/* 移除旧版顶部细金线，对齐 Emby 极简一体化设计 */
+.panel::before {
+  display: none;
+}
+
+[data-theme="light"] .panel {
+  background: #ffffff;
+  border-color: var(--line);
+}
+
+.panel > h2, .panel-head h2 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card {
+  border-radius: var(--radius);
+  border-color: var(--line);
+}
+
+.card::after {
+  display: none;
+}
+
+[data-theme="light"] .card {
+  background: #ffffff;
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.card strong {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ 表格 */
+[data-theme="light"] thead th {
+  background: #f8fafc;
+  color: #475569;
+  border-bottom-color: #cbd5e1;
+  font-family: var(--font-sans);
+}
+
+[data-theme="light"] tbody td {
+  border-bottom-color: #e2e8f0;
+  color: #1e293b;
+}
+
+[data-theme="light"] tbody tr:hover {
+  background: #f8fafc;
+}
+
+/* ------------------------------------------------------------------ 登录页 */
+[data-theme="light"] .auth-root {
+  background:
+    radial-gradient(1000px 520px at 78% -6%, rgba(67, 160, 71, 0.12), transparent 58%),
+    radial-gradient(820px 460px at 0% 106%, rgba(226, 232, 240, 0.6), transparent 55%),
+    var(--bg);
+}
+
+[data-theme="light"] .auth-card {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.08);
+}
+
+.auth-card::before {
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+
+.auth-card h1 {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ 浮层、通知与进度条 */
+[data-theme="light"] .toast {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .scan-progress {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .scan-progress-bar {
+  background: #e2e8f0;
+}
+
+[data-theme="light"] .scan-progress-head strong {
+  color: #0f172a;
+}
+
+.scan-progress-bar i {
+  background: var(--accent);
+}
+
+[data-theme="light"] .scrape-modal {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  color: #0f172a;
+}
+
+[data-theme="light"] .scrape-head {
+  border-bottom-color: #e2e8f0;
+}
+
+[data-theme="light"] .scrape-candidate {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+[data-theme="light"] .scrape-candidate.is-active {
+  background: rgba(67, 160, 71, 0.12);
+  border-color: var(--accent);
+}
+
+[data-theme="light"] .scrape-diff-row.is-change {
+  background: rgba(67, 160, 71, 0.12);
+}
+
+/* 登录页右上角主题切换按钮定位 */
+.auth-theme-switch {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+}

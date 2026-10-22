@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { RefreshCw } from '@lucide/vue';
+import { RefreshCw, Sun, Moon } from '@lucide/vue';
 import { useAuthStore } from '../stores/auth';
 import { resolveLoginTarget } from '../router/legacy-url';
 import AuthLayout from '../layouts/AuthLayout.vue';
+import { useTheme } from '../composables/useTheme';
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const theme = useTheme();
 const username = ref('');
 const password = ref('');
 const confirmation = ref('');
@@ -85,8 +87,14 @@ onMounted(() => { void boot(); });
 
 <template>
   <AuthLayout>
+    <div class="auth-theme-switch">
+      <button class="icon-btn theme-toggle" type="button" :title="theme.theme.value === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :aria-label="theme.theme.value === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="theme.toggleTheme()">
+        <Sun v-if="theme.theme.value === 'dark'" :size="18" aria-hidden="true" />
+        <Moon v-else :size="18" aria-hidden="true" />
+      </button>
+    </div>
     <section class="auth-card">
-      <p class="eyebrow">Emby-go · Archive Console</p>
+      <p class="eyebrow">Emby-go · Media Console</p>
       <h1>{{ initializing ? '建立管理员账户' : '欢迎回来' }}</h1>
       <form id="auth-form" class="auth-form" @submit.prevent="submit">
         <div class="field">
