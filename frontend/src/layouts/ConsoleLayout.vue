@@ -18,14 +18,20 @@ async function logout() {
   catch (cause) { toasts.show(cause instanceof Error ? cause.message : '退出失败，请重试', 'error'); }
 }
 const navigation = computed(() => [
-  { page: 'overview', label: '总览', icon: LayoutGrid }, { page: 'libraries', label: '媒体库', icon: Folder },
-  { page: 'favorites', label: '收藏', icon: Heart },
-  { page: 'items', label: '媒体墙', icon: Film }, { page: 'actors', label: '演员', icon: Users }, { page: 'manual', label: '手动补录', icon: CirclePlus },
-  { page: 'settings', label: '设置', icon: Settings }, { page: 'apikeys', label: 'API 密钥', icon: KeyRound },
-  { page: 'account', label: '我的账号', icon: UserRound },
-  { page: 'users', label: '用户管理', icon: Users },
-  { page: 'scrape', label: '刮削', icon: Sparkles }, { page: 'scheduled', label: '计划任务', icon: Clock },
-  { page: 'tasks', label: '任务', icon: Activity }, { page: 'probe', label: '接口探针', icon: Search },
+  { page: 'overview', label: '总览', icon: LayoutGrid, group: '媒体浏览' },
+  { page: 'libraries', label: '媒体库', icon: Folder, group: '媒体浏览' },
+  { page: 'favorites', label: '收藏', icon: Heart, group: '媒体浏览' },
+  { page: 'items', label: '媒体墙', icon: Film, group: '媒体浏览' },
+  { page: 'actors', label: '演员', icon: Users, group: '媒体浏览' },
+  { page: 'manual', label: '手动补录', icon: CirclePlus, group: '录入与工具' },
+  { page: 'settings', label: '设置', icon: Settings, group: '系统与账号' },
+  { page: 'apikeys', label: 'API 密钥', icon: KeyRound, group: '系统与账号' },
+  { page: 'account', label: '我的账号', icon: UserRound, group: '系统与账号' },
+  { page: 'users', label: '用户管理', icon: Users, group: '系统与账号' },
+  { page: 'scrape', label: '刮削', icon: Sparkles, group: '自动化与运维' },
+  { page: 'scheduled', label: '计划任务', icon: Clock, group: '自动化与运维' },
+  { page: 'tasks', label: '任务', icon: Activity, group: '自动化与运维' },
+  { page: 'probe', label: '接口探针', icon: Search, group: '自动化与运维' },
 ].filter(item => auth.isAdministrator || ['items', 'favorites', 'account'].includes(item.page)));
 const detailTitle = ref('');
 function updateTitle(value: string) { detailTitle.value = value; }
@@ -36,14 +42,21 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
   <div id="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">E</span>
+        <span class="brand-mark" aria-hidden="true">
+          <Film :size="20" aria-hidden="true" />
+        </span>
         <div class="brand-text"><strong>Emby-go</strong><small>媒体档案控制台</small></div>
       </div>
       <nav id="nav" class="nav" aria-label="主导航">
-        <button v-for="item in navigation" :key="item.page" class="nav-item" :class="{ 'is-active': route.meta.navigation === item.page }"
-          :data-page="item.page" :aria-current="route.meta.navigation === item.page ? 'page' : undefined" @click="router.push('/' + item.page)">
-          <component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" /><span>{{ item.label }}</span>
-        </button>
+        <template v-for="(item, index) in navigation" :key="item.page">
+          <div v-if="index === 0 || item.group !== navigation[index - 1]?.group" class="nav-group-label" aria-hidden="true">
+            {{ item.group }}
+          </div>
+          <button class="nav-item" :class="{ 'is-active': route.meta.navigation === item.page }"
+            :data-page="item.page" :aria-current="route.meta.navigation === item.page ? 'page' : undefined" @click="router.push('/' + item.page)">
+            <component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" /><span>{{ item.label }}</span>
+          </button>
+        </template>
       </nav>
       <footer class="side-foot"><span class="status-dot" aria-hidden="true"></span>EMBY-GO · CONSOLE</footer>
     </aside>
@@ -54,6 +67,9 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
           <h1 id="page-title">{{ detailTitle || route.meta.title }}</h1>
         </div>
         <div class="top-actions">
+          <div class="connection-indicator" title="服务已连接">
+            <span class="status-dot" aria-hidden="true"></span>
+          </div>
           <button class="icon-btn theme-toggle" type="button" :title="theme.theme.value === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :aria-label="theme.theme.value === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="theme.toggleTheme()">
             <Sun v-if="theme.theme.value === 'dark'" :size="18" aria-hidden="true" />
             <Moon v-else :size="18" aria-hidden="true" />

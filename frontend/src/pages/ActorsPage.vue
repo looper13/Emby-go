@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Users, Sparkles } from '@lucide/vue';
+import { Users, Sparkles, Film } from '@lucide/vue';
 import { adminApi } from '../api/admin';
 import { actorsApi, type ActorStatus } from '../api/actors';
 import { scrapeApi, type ScrapeSettings, type SourceTest, type GFriendsStatus } from '../api/scrape';
@@ -99,7 +99,12 @@ async function test(target: SourceTest) {
       <template v-if="actors && !actorsError && !actorsLoading">
         <div v-if="actors.items.length" class="actor-grid">
           <article v-for="actor in actors.items" :key="actor.name" class="actor-card"><RouterLink :to="{path:'/items',query:{person:actor.name,...(library ? {library_id:String(library)} : {})}}">
-            <div class="actor-portrait"><MediaImage v-if="actor.has_image" :src="imageURL(entityIdOf('person',actor.name),'Primary',240,actor.image_tag)" loading="lazy" :alt="actor.name + '的头像'" /><span v-else class="actor-placeholder"><Users :size="32" aria-hidden="true" /></span><span class="portrait-status" :class="{missing:!actor.has_image}">{{ actor.has_image ? '已有头像' : '缺少头像' }}</span></div>
+            <div class="actor-portrait">
+              <MediaImage v-if="actor.has_image" :src="imageURL(entityIdOf('person',actor.name),'Primary',240,actor.image_tag)" loading="lazy" :alt="actor.name + '的头像'" />
+              <span v-else class="actor-placeholder"><Users :size="32" aria-hidden="true" /></span>
+              <span class="portrait-status" :class="{missing:!actor.has_image}">{{ actor.has_image ? '已有头像' : '缺少头像' }}</span>
+              <span v-if="actor.movie_count" class="portrait-count"><Film :size="11" aria-hidden="true" />{{ actor.movie_count }}</span>
+            </div>
             <strong>{{ actor.name }}</strong><small>{{ actor.movie_count }} 部影片 · 查看作品</small>
           </RouterLink><div class="actor-favorite-action"><FavoriteButton :item-id="entityIdOf('person',actor.name)" :favorite="actor.favorite" :label="actor.name" @changed="loadActors" /></div></article>
         </div>
@@ -113,43 +118,48 @@ async function test(target: SourceTest) {
 <style scoped>
 .actor-overview .panel-head { align-items: flex-start; }
 .actor-overview .hint { line-height: 1.7; color: var(--muted); }
-.source-badge { color: var(--accent); background: var(--panel-2); border: 1px solid var(--line); border-radius: 20px; padding: 5px 12px; font-size: 12px; }
-.actor-actions, .actor-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.source-badge { color: var(--accent); background: var(--accent-soft); border: 1px solid rgba(43, 122, 254, 0.25); border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600; }
+.actor-actions, .actor-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .actor-actions .field { min-width: 200px; flex: 1; max-width: 340px; }
-.actor-stats { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin: 22px 0; }
-.actor-stats > div { border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
-.actor-stats span { display: block; font-size: 12px; color: var(--muted); }
-.actor-stats strong { display: block; font-size: 28px; margin-top: 4px; }
+.actor-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 20px 0; }
+.actor-stats > div { border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; background: var(--panel-2); transition: border-color 0.15s ease; }
+.actor-stats span { display: block; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dim); }
+.actor-stats strong { display: block; font-family: var(--font-mono); font-size: 28px; font-weight: 700; margin-top: 6px; color: var(--text); }
 .actor-config { margin: 20px 0 22px; }
-.actor-config > summary { padding: 16px 20px; cursor: pointer; border: 1px solid var(--line); border-radius: 10px; font-weight: 600; }
+.actor-config > summary { padding: 14px 18px; cursor: pointer; border: 1px solid var(--line); border-radius: 8px; font-weight: 600; background: var(--panel-2); transition: border-color 0.15s ease, background-color 0.15s ease; }
+.actor-config > summary:hover { border-color: var(--accent); }
 .actor-config > summary span { margin-left: 12px; font-size: 12px; font-weight: normal; color: var(--muted); }
 .actor-config[open] > summary { margin-bottom: 16px; }
 .actor-filters { margin-bottom: 22px; }
 .actor-filters input, .actor-filters select { width: 100%; min-width: 0; }
 .actor-filters .field:first-child { flex: 1; min-width: 160px; }
-.actor-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(140px,1fr)); gap: 22px 16px; }
-.actor-card { min-width: 0; text-decoration: none; color: inherit; }
+.actor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 22px 16px; }
+.actor-card { min-width: 0; text-decoration: none; color: inherit; transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1); }
+.actor-card:hover { transform: translateY(-3px); }
 .actor-card > a { display: block; text-decoration: none; color: inherit; }
 .actor-favorite-action { display: flex; justify-content: flex-end; margin-top: 8px; }
-.actor-favorite-filter { display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; }
-.actor-favorite-filter input { width: 16px; height: 16px; }
+.actor-favorite-filter { display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; font-size: 13px; color: var(--muted); cursor: pointer; }
+.actor-favorite-filter input { width: 16px; height: 16px; accent-color: var(--accent); }
 .actor-card:hover strong { color: var(--accent); }
-.actor-portrait { position: relative; aspect-ratio: 3/4; border-radius: 10px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); }
-.actor-portrait :deep(img) { width: 100%; height: 100%; object-fit: cover; }
-.actor-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: var(--muted); }
-.portrait-status { position: absolute; bottom: 8px; left: 8px; background: #20372e; color: #e4f7ed; font-size: 11px; padding: 3px 7px; border-radius: 5px; }
-.portrait-status.missing { background: #443924; color: #ffe3af; }
-.actor-card strong, .actor-card small { display: block; overflow-wrap: anywhere; margin-top: 8px; }
-.actor-card strong { font-size: 14px; }
-.actor-card small { color: var(--muted); font-size: 12px; }
-.actor-empty { padding: 30px 0; color: var(--muted); line-height: 1.7; }
-.actor-pagination { display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 24px; }
+.actor-portrait { position: relative; aspect-ratio: 3/4; border-radius: 8px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); transition: border-color 0.18s ease, box-shadow 0.18s ease; }
+.actor-card:hover .actor-portrait { border-color: var(--accent); box-shadow: 0 6px 18px rgba(43, 122, 254, 0.25); }
+.actor-portrait :deep(img) { width: 100%; height: 100%; object-fit: cover; transition: transform 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.actor-card:hover .actor-portrait :deep(img) { transform: scale(1.03); }
+.actor-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: var(--dim); }
+.portrait-status { position: absolute; bottom: 8px; left: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.15); color: #20c997; font-size: 11px; font-weight: 700; padding: 2px 8px; }
+.portrait-status.missing { color: #fab005; border-color: rgba(250, 176, 5, 0.3); }
+.portrait-count { position: absolute; top: 8px; right: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.15); color: #d0bfff; font-size: 11px; font-weight: 700; padding: 2px 7px; }
+.actor-card strong, .actor-card small { display: block; overflow-wrap: anywhere; margin-top: 6px; }
+.actor-card strong { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.actor-card small { color: var(--dim); font-size: 11.5px; }
+.actor-empty { padding: 36px 0; color: var(--muted); text-align: center; }
+.actor-pagination { display: flex; justify-content: center; align-items: center; gap: 16px; margin-top: 28px; }
 @media(max-width:600px) {
   .actor-actions .field { max-width: none; width: 100%; }
   .actor-actions #avatar-start { flex: 1; justify-content: center; }
   .actor-stats { gap: 8px; }
   .actor-stats > div { padding: 12px; }
-  .actor-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 12px; }
+  .actor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; }
   .actor-overview .panel-head { flex-direction: column; gap: 12px; }
   .actor-config > summary span { display: block; margin: 8px 0 0; }
 }

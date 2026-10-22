@@ -90,12 +90,12 @@ onScopeDispose(() => { request?.abort(); document.removeEventListener('pointerdo
 .detail-playback { min-width: 0; margin: 16px 0; position: relative; z-index: 3; }
 .detail-track-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .detail-track-fields label { display: flex; flex: 1 1 190px; flex-direction: column; gap: 6px; min-width: 0; max-width: 340px; font-size: 12px; color: var(--muted); }
-.detail-track-fields select { width: 100%; min-width: 0; height: 38px; padding: 0 30px 0 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; }
+.detail-track-fields select { width: 100%; min-width: 0; height: 38px; padding: 0 30px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; }
 .external-player { position: relative; flex: 0 0 auto; }
 .external-player > button { display: inline-flex; align-items: center; gap: 7px; height: 38px; }
-.external-player-menu { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; width: 180px; max-width: calc(100vw - 48px); border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 4px; box-shadow: 0 6px 20px rgb(0 0 0 / 30%); }
-.external-player-menu a { display: flex; align-items: center; gap: 10px; padding: 10px; color: var(--text); font-size: 13px; text-decoration: none; border-radius: 3px; }
-.external-player-menu a:hover, .external-player-menu a:focus-visible { background: var(--line); outline: 2px solid var(--accent); outline-offset: -2px; }
-.detail-playback-error { display: flex; align-items: center; gap: 8px; color: var(--danger, #ed8d8d); font-size: 13px; margin-top: 8px; overflow-wrap: anywhere; }
+.external-player-menu { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; width: 180px; max-width: calc(100vw - 48px); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 4px; box-shadow: var(--shadow); }
+.external-player-menu a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; color: var(--text); font-size: 13px; text-decoration: none; border-radius: 6px; transition: background-color 0.15s ease, color 0.15s ease; }
+.external-player-menu a:hover, .external-player-menu a:focus-visible { background: var(--accent-soft); color: var(--accent); outline: none; }
+.detail-playback-error { display: flex; align-items: center; gap: 8px; color: var(--danger); font-size: 13px; margin-top: 8px; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .detail-track-fields label { flex-basis: 100%; max-width: none; } .external-player-menu { left: 0; right: auto; } }
 </style>

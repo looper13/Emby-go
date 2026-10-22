@@ -56,21 +56,27 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
 </template>
 <style scoped>
 .favorites-page { min-width: 0; }
-.favorites-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); gap: 4px 14px; }
-.favorites-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); padding: 12px 4px; font: inherit; cursor: pointer; }
-.favorites-tabs [aria-selected="true"] { border-color: var(--accent); color: var(--text); }
-.favorites-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 20px 0; }
+.favorites-tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); gap: 4px 18px; margin-bottom: 18px; }
+.favorites-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); padding: 10px 4px; font-family: var(--font-sans); font-size: 13.5px; font-weight: 500; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease; }
+.favorites-tabs button:hover { color: var(--text); }
+.favorites-tabs [aria-selected="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.favorites-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0 22px; }
 .favorite-search { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 360px; min-width: 120px; }
 .favorite-search input { min-width: 0; width: 100%; }
-.favorites-toolbar .hint { margin: 0 0 0 auto; }
-.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(145px,1fr)); gap: 24px 16px; }
-.favorite-card { min-width: 0; }
+.favorites-toolbar .hint { margin: 0 0 0 auto; color: var(--dim); font-size: 12.5px; }
+.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 22px 16px; }
+.favorite-card { min-width: 0; transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1); }
+.favorite-card:hover { transform: translateY(-3px); }
 .favorite-link { color: inherit; text-decoration: none; display: block; }
-.favorite-art { display: grid; place-items: center; aspect-ratio: 2/3; border-radius: 6px; overflow: hidden; background: var(--panel-2); color: var(--muted); }
-.favorite-art :deep(img) { width: 100%; height: 100%; object-fit: cover; }
-.favorite-link strong { display: block; margin-top: 10px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
-.favorite-card-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
-.favorites-empty { padding: 50px 0; color: var(--muted); text-align: center; }
-.favorite-pagination { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 28px; }
-@media(max-width:480px) { .favorites-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px 12px; } }
+.favorite-art { display: grid; place-items: center; aspect-ratio: 0.7; border-radius: 8px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); color: var(--dim); transition: border-color 0.18s ease, box-shadow 0.18s ease; }
+.favorite-art.portrait { aspect-ratio: 3/4; }
+.favorite-card:hover .favorite-art { border-color: var(--accent); box-shadow: 0 6px 18px rgba(43, 122, 254, 0.25); }
+.favorite-art :deep(img) { width: 100%; height: 100%; object-fit: cover; transition: transform 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.favorite-card:hover .favorite-art :deep(img) { transform: scale(1.03); }
+.favorite-link strong { display: block; margin-top: 8px; font-size: 13.5px; font-weight: 600; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.favorite-card:hover strong { color: var(--accent); }
+.favorite-card-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.favorites-empty { padding: 48px 0; color: var(--muted); text-align: center; font-size: 14px; }
+.favorite-pagination { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 28px; }
+@media(max-width:480px) { .favorites-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; } }
 </style>
