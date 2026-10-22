@@ -15,6 +15,9 @@ func (s *Store) migrateSearchIndexes() error {
 		`CREATE INDEX IF NOT EXISTS idx_movies_visible_library_title ON movies(library_id,title,id) WHERE status IN ('success','manual')`,
 		`CREATE INDEX IF NOT EXISTS idx_movies_visible_created ON movies(id) WHERE status IN ('success','manual')`,
 		`CREATE INDEX IF NOT EXISTS idx_movies_visible_library_created ON movies(library_id,id) WHERE status IN ('success','manual')`,
+		// Keep case-insensitive wall filters indexed without changing the
+		// case-sensitive features used for similarity scoring.
+		`CREATE INDEX IF NOT EXISTS idx_movie_features_lookup_nocase ON movie_features(kind,value COLLATE NOCASE,movie_id)`,
 	} {
 		if _, err := tx.Exec(query); err != nil {
 			return err

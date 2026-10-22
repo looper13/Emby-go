@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"emby-go/internal/nfo"
@@ -294,30 +296,43 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		lastFlush = time.Now()
 		return nil
 	}
-	process := func(item candidate, parts []string, fallbackNFO string) error {
-		defer func() {
-			perf.processed++
-			perf.report(PhaseProcess, result)
-		}()
-		paths[item.path] = struct{}{}
+	type scanTask struct {
+		index       int
+		groupKey    string
+		item        candidate
+		parts       []string
+		fallbackNFO string
+	}
+	type scanTaskResult struct {
+		task        scanTask
+		entry       store.ScannedMovie
+		outcome     Result
+		hasEntry    bool
+		sourceTime  time.Duration
+		prepareTime time.Duration
+		verifyTime  time.Duration
+		prepStats   preparationStats
+	}
+	processTask := func(task scanTask) scanTaskResult {
+		res := scanTaskResult{task: task}
 		started := time.Now()
-		before, err := readLibraryMetadataState(lib, item.path, fallbackNFO)
-		perf.source += time.Since(started)
+		before, err := readLibraryMetadataState(lib, task.item.path, task.fallbackNFO)
+		res.sourceTime = time.Since(started)
 		if err != nil {
-			result.Failed++
-			return nil
+			res.outcome.Failed++
+			return res
 		}
-		previous, exists := fingerprints[item.path]
-		if !full && previous.Fingerprint == before.Fingerprint && slices.Equal(previous.AdditionalParts, parts) {
-			result.Skipped++
-			return nil
+		previous, exists := fingerprints[task.item.path]
+		if !full && previous.Fingerprint == before.Fingerprint && slices.Equal(previous.AdditionalParts, task.parts) {
+			res.outcome.Skipped++
+			return res
 		}
 		started = time.Now()
-		entry, outcome := prepareCandidate(lib, item, parts, fallbackNFO, &perf.preparation)
-		perf.prepare += time.Since(started)
+		entry, outcome := prepareCandidate(lib, task.item, task.parts, task.fallbackNFO, &res.prepStats)
+		res.prepareTime = time.Since(started)
 		if outcome.Failed != 0 {
-			result.add(outcome)
-			return nil
+			res.outcome = outcome
+			return res
 		}
 		if exists {
 			outcome.Updated++
@@ -325,37 +340,29 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			outcome.Added++
 		}
 		started = time.Now()
-		if after, err := readLibraryMetadataState(lib, item.path, fallbackNFO); err == nil && after.Fingerprint == before.Fingerprint {
+		if after, err := readLibraryMetadataState(lib, task.item.path, task.fallbackNFO); err == nil && after.Fingerprint == before.Fingerprint {
 			entry.Fingerprint = before.Fingerprint
 		}
-		perf.verify += time.Since(started)
-		batch = append(batch, entry)
-		batchResult.add(outcome)
-		if len(batch) >= batchSize || time.Since(lastFlush) >= 500*time.Millisecond {
-			return flush()
-		}
-		return nil
+		res.verifyTime = time.Since(started)
+		res.hasEntry = true
+		res.entry = entry
+		res.outcome = outcome
+		return res
 	}
 	groupKeys := make([]string, 0, len(groups))
 	for key := range groups {
 		groupKeys = append(groupKeys, key)
 	}
 	sort.Strings(groupKeys)
-	done := 0
+	tasks := make([]scanTask, 0, len(groups))
+	groupPending := make(map[string]int, len(groups))
 	for _, key := range groupKeys {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			// 取消时先落库已处理的分批再返回：已完成的索引更新不该白做。
-			// 删除阶段不会执行——被取消的遍历不完整，按它删索引会误删。
-			flushErr := flush()
-			return result, errors.Join(ctxErr, flushErr)
-		}
 		group := groups[key]
 		primary, parts, ok := stackedGroup(group)
 		if !ok {
 			for _, item := range group {
-				if err := process(item, nil, ""); err != nil {
-					return result, err
-				}
+				tasks = append(tasks, scanTask{groupKey: key, item: item})
+				groupPending[key]++
 			}
 		} else {
 			partPaths := make([]string, 0, len(parts))
@@ -363,17 +370,130 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 				partPaths = append(partPaths, part.path)
 			}
 			fallbackNFO := filepath.Join(filepath.Dir(primary.path), primary.base+".nfo")
-			if err := process(primary, partPaths, fallbackNFO); err != nil {
+			tasks = append(tasks, scanTask{groupKey: key, item: primary, parts: partPaths, fallbackNFO: fallbackNFO})
+			groupPending[key]++
+		}
+	}
+	done := 0
+	handleResult := func(res scanTaskResult) error {
+		paths[res.task.item.path] = struct{}{}
+		perf.source += res.sourceTime
+		perf.prepare += res.prepareTime
+		perf.verify += res.verifyTime
+		perf.preparation.addNFO(res.prepStats.nfo)
+		perf.preparation.metadata += res.prepStats.metadata
+		perf.processed++
+		perf.report(PhaseProcess, result)
+
+		if res.hasEntry {
+			batch = append(batch, res.entry)
+			batchResult.add(res.outcome)
+			if len(batch) >= batchSize || time.Since(lastFlush) >= 500*time.Millisecond {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+		} else {
+			result.add(res.outcome)
+		}
+
+		groupPending[res.task.groupKey]--
+		if groupPending[res.task.groupKey] <= 0 {
+			done++
+			report(done, res.task.groupKey)
+		}
+		return nil
+	}
+	if len(tasks) <= 1 {
+		for _, task := range tasks {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				flushErr := flush()
+				return result, errors.Join(ctxErr, flushErr)
+			}
+			if err := handleResult(processTask(task)); err != nil {
 				return result, err
 			}
 		}
-		done++
-		if len(batch) > 0 && time.Since(lastFlush) >= 500*time.Millisecond {
-			if err := flush(); err != nil {
-				return result, err
+	} else {
+		workers := min(8, max(2, runtime.GOMAXPROCS(0)))
+		if workers > len(tasks) {
+			workers = len(tasks)
+		}
+		taskCh := make(chan scanTask, workers*2)
+		resCh := make(chan scanTaskResult, workers*2)
+		// Bound prepared results while an earlier, slower task is outstanding.
+		slots := make(chan struct{}, workers*2)
+		workerCtx, stopWorkers := context.WithCancel(ctx)
+		// A failed batch must also stop producers and workers. Drain until all
+		// goroutines exit before returning or releasing the scan's ownership.
+		defer func() {
+			stopWorkers()
+			for range resCh {
+			}
+		}()
+
+		var wg sync.WaitGroup
+		wg.Add(workers + 1)
+		go func() {
+			defer wg.Done()
+			defer close(taskCh)
+			for index, task := range tasks {
+				select {
+				case slots <- struct{}{}:
+				case <-workerCtx.Done():
+					return
+				}
+				task.index = index
+				select {
+				case taskCh <- task:
+				case <-workerCtx.Done():
+					return
+				}
+			}
+		}()
+
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				for task := range taskCh {
+					if workerCtx.Err() != nil {
+						return
+					}
+					res := processTask(task)
+					select {
+					case resCh <- res:
+					case <-workerCtx.Done():
+						return
+					}
+				}
+			}()
+		}
+		go func() {
+			wg.Wait()
+			close(resCh)
+		}()
+
+		pending := make(map[int]scanTaskResult, workers*2)
+		next := 0
+		for res := range resCh {
+			pending[res.task.index] = res
+			for {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					flushErr := flush()
+					return result, errors.Join(ctxErr, flushErr)
+				}
+				res, ready := pending[next]
+				if !ready {
+					break
+				}
+				if err := handleResult(res); err != nil {
+					return result, err
+				}
+				delete(pending, next)
+				next++
+				<-slots
 			}
 		}
-		report(done, key)
 	}
 	if err := flush(); err != nil {
 		return result, err

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,5 +39,29 @@ func TestOpenKeepsDBPathAndPragmas(t *testing.T) {
 	}
 	if !strings.EqualFold(journalMode, "wal") {
 		t.Errorf("journal_mode = %q，期望 wal", journalMode)
+	}
+}
+
+func TestOpenKeepsFullSynchronousOnEveryConnection(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "durable.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	for i := 0; i < maxOpenConns; i++ {
+		// Hold each connection so the next iteration opens another one.
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var synchronous int
+		if err := conn.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+			t.Fatal(err)
+		}
+		if synchronous != 2 {
+			t.Errorf("connection %d synchronous=%d, want FULL (2)", i, synchronous)
+		}
 	}
 }

@@ -129,7 +129,7 @@ const maxOpenConns = 8
 func Open(path string) (*Store, error) {
 	// pragma 写进 DSN：busy_timeout / foreign_keys 是 per-connection 的，
 	// 只 Exec 一次只能覆盖池里的那一条连接，新开的连接会丢掉它们。
-	dsn := path + "?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+	dsn := path + "?_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=cache_size(-32000)&_pragma=mmap_size(268435456)&_pragma=temp_store(MEMORY)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(maxOpenConns)
 	db.SetMaxIdleConns(maxOpenConns)
 	// 新建库时立刻把 WAL 落盘（DSN 里的 pragma 同样会生效，这里只是让文件状态确定）。
-	if _, err := db.Exec("PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON"); err != nil {
+	if _, err := db.Exec("PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA cache_size=-32000; PRAGMA mmap_size=268435456; PRAGMA temp_store=MEMORY"); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -1145,8 +1145,12 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		}
 		where = append(where, "official_rating IN ("+strings.Join(placeholders, ",")+")")
 	}
-	for _, filter := range []struct{ field, value string }{{"genres", genre}, {"tags", tags}, {"studios", studios}} {
-		field, value := filter.field, filter.value
+	for _, filter := range []struct{ kind, value string }{
+		{FeatureGenre, genre},
+		{FeatureTag, tags},
+		{FeatureStudio, studios},
+	} {
+		kind, value := filter.kind, filter.value
 		if value == "" {
 			continue
 		}
@@ -1154,12 +1158,12 @@ func (s *Store) searchExcluding(exclude []int64, libraryID int64, term, status, 
 		if len(terms) == 0 {
 			continue
 		}
-		clauses := make([]string, 0, len(terms))
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(terms)), ",")
+		where = append(where, "EXISTS (SELECT 1 FROM movie_features mf WHERE mf.movie_id = movies.id AND mf.kind = ? AND mf.value COLLATE NOCASE IN ("+placeholders+"))")
+		args = append(args, kind)
 		for _, t := range terms {
-			clauses = append(clauses, field+" LIKE ?")
-			args = append(args, "%\""+strings.ReplaceAll(t, `"`, "")+"\"%")
+			args = append(args, strings.ReplaceAll(t, `"`, ""))
 		}
-		where = append(where, "("+strings.Join(clauses, " OR ")+")")
 	}
 	if person != "" {
 		terms := splitTerms(person)

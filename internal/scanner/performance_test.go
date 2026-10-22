@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,34 @@ func capturePerformanceLogs(t *testing.T) *bytes.Buffer {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return &output
+}
+
+func TestParallelScanPerformanceCountsNFO(t *testing.T) {
+	output := capturePerformanceLogs(t)
+	root := t.TempDir()
+	const count = 205
+	const metadata = "<movie><title>Movie</title><genre>Drama</genre></movie>"
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("%04d", i)
+		writeScanFile(t, root, name+".strm", "https://media.test/movie.mp4")
+		writeScanFile(t, root, name+".nfo", metadata)
+	}
+	database, library := scanLibrary(t, root)
+	requireScan(t, database, library, Result{Added: count, Success: count})
+	requireScan(t, database, library, Result{Skipped: count})
+	records := performanceRecords(t, output, "扫描性能汇总")
+	if len(records) != 2 {
+		t.Fatalf("expected scan and skip summaries: %s", output)
+	}
+	for _, field := range []string{"nfo_reads", "nfo_parses", "nfo_bytes"} {
+		want := float64(count)
+		if field == "nfo_bytes" {
+			want *= float64(len(metadata))
+		}
+		if records[0][field] != want || records[1][field] != float64(0) {
+			t.Errorf("%s first=%v skipped=%v want=%v/0", field, records[0][field], records[1][field], want)
+		}
+	}
 }
 
 func performanceRecords(t *testing.T, output *bytes.Buffer, message string) []map[string]any {

@@ -22,7 +22,7 @@ INSERT INTO movies(library_id,source_path,status,title,created_at,updated_at)
 SELECT ?,printf('/test/%d.strm',x),CASE WHEN x%7=0 THEN 'manual' ELSE 'success' END,printf('Title %d',x),'','' FROM n`, lib.ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, index := range []string{"idx_movies_visible_title", "idx_movies_visible_library_title", "idx_movies_visible_created", "idx_movies_visible_library_created"} {
+	for _, index := range []string{"idx_movies_visible_title", "idx_movies_visible_library_title", "idx_movies_visible_created", "idx_movies_visible_library_created", "idx_movie_features_lookup_nocase"} {
 		if _, err := s.db.Exec("DROP INDEX " + index); err != nil {
 			t.Fatal(err)
 		}
@@ -38,6 +38,14 @@ SELECT ?,printf('/test/%d.strm',x),CASE WHEN x%7=0 THEN 'manual' ELSE 'success' 
 	var indexes int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name GLOB 'idx_movies_visible_*'").Scan(&indexes); err != nil || indexes != 4 {
 		t.Fatalf("upgraded indexes=%d err=%v", indexes, err)
+	}
+	var id, parent, unused int
+	var featurePlan string
+	if err := s.db.QueryRow("EXPLAIN QUERY PLAN SELECT movie_id FROM movie_features WHERE kind=? AND value COLLATE NOCASE IN (?)", FeatureGenre, "drama").Scan(&id, &parent, &unused, &featurePlan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(featurePlan, "idx_movie_features_lookup_nocase") || !strings.Contains(featurePlan, "value=?") {
+		t.Fatalf("case-insensitive filter does not look up values through upgraded index: %s", featurePlan)
 	}
 	for _, library := range []bool{false, true} {
 		for _, order := range []string{"title,id", "id DESC"} {
