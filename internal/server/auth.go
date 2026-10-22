@@ -50,8 +50,9 @@ func requestToken(c *gin.Context) string {
 		if authorization == "" {
 			authorization = c.GetHeader("Authorization")
 		}
-		if scheme, value, ok := strings.Cut(strings.TrimSpace(authorization), " "); ok && (strings.EqualFold(scheme, "Emby") || strings.EqualFold(scheme, "MediaBrowser")) {
-			authorization = value
+		authorization = strings.TrimSpace(authorization)
+		if i := strings.IndexAny(authorization, " \t"); i >= 0 && (strings.EqualFold(authorization[:i], "Emby") || strings.EqualFold(authorization[:i], "MediaBrowser")) {
+			authorization = strings.TrimSpace(authorization[i+1:])
 		}
 		for _, part := range strings.Split(authorization, ",") {
 			key, value, found := strings.Cut(strings.TrimSpace(part), "=")
@@ -173,6 +174,12 @@ func (a *App) authenticateByID(c *gin.Context) {
 func (a *App) authenticateCredentials(c *gin.Context, username, password string) {
 	a.credentialMu.Lock()
 	defer a.credentialMu.Unlock()
+	ip := c.RemoteIP()
+	if wait := a.authLimiter.retryAfter(ip, username); wait > 0 {
+		c.Header("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "登录尝试过于频繁，请稍后重试"})
+		return
+	}
 	initialized, err := a.db.HasAdministrator()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -184,6 +191,7 @@ func (a *App) authenticateCredentials(c *gin.Context, username, password string)
 	}
 	user, err := a.db.AuthenticateUser(strings.TrimSpace(username), password)
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, store.ErrInvalidPassword) {
+		a.authLimiter.recordFailure(ip, username)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "账号或密码错误"})
 		return
 	}
@@ -192,6 +200,7 @@ func (a *App) authenticateCredentials(c *gin.Context, username, password string)
 		return
 	}
 	b := make([]byte, 24)
+	a.authLimiter.reset(ip, username)
 	if _, err = rand.Read(b); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成访问令牌失败"})
 		return

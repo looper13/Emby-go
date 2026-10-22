@@ -7,7 +7,9 @@ import { usePageRequest } from '../composables/usePageRequest';
 import FavoriteButton from '../components/media/FavoriteButton.vue';
 import MediaImage from '../components/media/MediaImage.vue';
 import { imageURL } from '../lib/image-url';
+import { useMediaVisibility } from '../composables/useMediaVisibility';
 const route = useRoute(), router = useRouter(), scope = usePageRequest();
+const { hideImages } = useMediaVisibility();
 const tabs = [['Movie,Episode', '影片与单集'], ['Series,Season', '剧集与季'], ['Person', '演员'], ['Genre', '类型'], ['Studio', '厂商'], ['Tag', '标签'], ['BoxSet', '合集']] as const;
 const type = computed(() => tabs.find(([id]) => id === route.query.type)?.[0] ?? tabs[0][0]);
 const offset = computed(() => { const n = Number(route.query.offset ?? 0); return Number.isSafeInteger(n) && n >= 0 ? n : 0; });
@@ -40,7 +42,7 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
     <div v-else-if="!error && items.length" class="favorites-grid">
       <article v-for="item in items" :key="item.Id" class="favorite-card">
         <RouterLink :to="favoriteDestination(item)" class="favorite-link">
-          <div class="favorite-art" :class="{ portrait: item.Type === 'Person' }"><MediaImage v-if="item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" :alt="item.Name" loading="lazy" /><Film v-else :size="36" aria-hidden="true" /></div>
+          <div class="favorite-art" :class="{ portrait: item.Type === 'Person' }"><MediaImage v-if="!hideImages && item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" :alt="item.Name" loading="lazy" /><Film v-else :size="36" aria-hidden="true" /></div>
           <strong>{{ item.Name }}</strong>
         </RouterLink>
         <div class="favorite-card-actions"><FavoriteButton :item-id="item.Id" :favorite="item.UserData.IsFavorite" :label="item.Name" @changed="load" /></div>

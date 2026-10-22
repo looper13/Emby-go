@@ -6,8 +6,10 @@ import { usePageRequest } from '../../composables/usePageRequest';
 import MediaImage from './MediaImage.vue';
 import FavoriteButton from './FavoriteButton.vue';
 import { imageURL } from '../../lib/image-url';
+import { useMediaVisibility } from '../../composables/useMediaVisibility';
 const props = defineProps<{ library: number; search: string; revision: number; series?: string; season?: string }>();
 const emit = defineEmits<{ open: [id: number]; browse: [series: string, season: string] }>();
+const { hideImages } = useMediaVisibility();
 const scope = usePageRequest();
 const items = ref<TelevisionItem[]>([]); const seasons = ref<TelevisionItem[]>([]);
 const selected = ref<TelevisionItem>(); const season = ref('');
@@ -65,7 +67,7 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
     <p v-if="error" role="alert">{{ error }} <button class="btn btn-sm" @click="retry"><RefreshCw :size="14" /><span>重试</span></button></p>
     <div class="television-grid" :class="{'episode-grid':selected}">
       <article v-for="item in items" :key="item.Id" class="television-entry"><button class="television-card" :data-tv-id="item.Id" @click="select(item)">
-        <div class="television-cover"><MediaImage v-if="item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" alt="" loading="lazy" /><span v-else class="image-placeholder">{{ item.Name }}</span></div>
+        <div class="television-cover"><MediaImage v-if="!hideImages && item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" alt="" loading="lazy" /><span v-else class="image-placeholder">{{ item.Name }}</span></div>
         <strong>{{ selected ? `${item.IndexNumber}. ${item.Name}` : item.Name }}</strong><small>{{ selected ? item.SeriesName : [item.ProductionYear || '',`${item.ChildCount} 季`,`${item.RecursiveItemCount} 集`].filter(Boolean).join(' · ') }}</small>
       </button><div class="television-favorite"><FavoriteButton :item-id="item.Id" :favorite="item.Favorite" :label="item.Name" /></div></article>
     </div>

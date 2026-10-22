@@ -158,10 +158,10 @@ func (s *Store) AuthenticateUser(name, password string) (User, error) {
 	return u, nil
 }
 func (s *Store) TokenUser(token string) (User, error) {
-	return scanUser(s.db.QueryRow("SELECT u.id,u.username,u.is_administrator,u.is_disabled FROM users u JOIN access_tokens t ON t.user_id=u.id WHERE t.token=? AND u.is_disabled=0", token))
+	return scanUser(s.db.QueryRow("SELECT u.id,u.username,u.is_administrator,u.is_disabled FROM users u JOIN access_tokens t ON t.user_id=u.id WHERE t.token=? AND u.is_disabled=0", accessTokenDigest(token)))
 }
 func (s *Store) SaveUserToken(token string, id int64) error {
-	_, err := s.db.Exec("INSERT INTO access_tokens(token,created_at,user_id) VALUES(?,?,?)", token, time.Now().UTC().Format(time.RFC3339), id)
+	_, err := s.db.Exec("INSERT INTO access_tokens(token,created_at,user_id) VALUES(?,?,?)", accessTokenDigest(token), time.Now().UTC().Format(time.RFC3339), id)
 	return err
 }
 func (s *Store) CreateUser(name, password string) (User, error) {

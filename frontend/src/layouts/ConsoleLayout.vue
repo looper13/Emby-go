@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users, Heart, UserRound, LogOut, Sun, Moon } from '@lucide/vue';
+import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users, Heart, UserRound, LogOut, Sun, Moon, Image, ImageOff } from '@lucide/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { computed, ref, watch } from 'vue';
 import { useTasksStore } from '../stores/tasks';
 import { useAuthStore } from '../stores/auth';
 import { useToastStore } from '../stores/toasts';
 import { useTheme } from '../composables/useTheme';
+import { useMediaVisibility } from '../composables/useMediaVisibility';
 
 const route = useRoute();
 const router = useRouter();
 const tasks = useTasksStore();
 const auth = useAuthStore(), toasts = useToastStore();
 const theme = useTheme();
+const mediaVisibility = useMediaVisibility();
 
 async function logout() {
   try { await auth.logout(); if (!auth.authenticated) await router.replace('/login'); }
@@ -70,6 +72,10 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
           <div class="connection-indicator" title="服务已连接">
             <span class="status-dot" aria-hidden="true"></span>
           </div>
+          <button class="icon-btn media-image-toggle" :class="{ 'is-active': mediaVisibility.hideImages.value }" type="button" :title="mediaVisibility.hideImages.value ? '显示媒体图片（封面、剧照）' : '隐藏媒体图片（封面、剧照）'" :aria-label="mediaVisibility.hideImages.value ? '显示媒体图片' : '隐藏媒体图片'" @click="mediaVisibility.toggleHideImages()">
+            <ImageOff v-if="mediaVisibility.hideImages.value" :size="18" aria-hidden="true" />
+            <Image v-else :size="18" aria-hidden="true" />
+          </button>
           <button class="icon-btn theme-toggle" type="button" :title="theme.theme.value === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :aria-label="theme.theme.value === 'dark' ? '切换为浅色模式' : '切换为深色模式'" @click="theme.toggleTheme()">
             <Sun v-if="theme.theme.value === 'dark'" :size="18" aria-hidden="true" />
             <Moon v-else :size="18" aria-hidden="true" />

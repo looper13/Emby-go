@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"emby-go/internal/config"
 	"emby-go/internal/logging"
@@ -48,6 +49,10 @@ func main() {
 	// 日志落盘：程序日志与请求日志分别按天写入 log/，同时保留控制台输出。
 	logs := logging.Setup(cfg.Debug)
 	defer logs.Close()
+	if err := logging.SetRetentionDays(cfg.LogRetentionDays); err != nil {
+		slog.Warn("日志保留策略应用失败", "error", err)
+	}
+	server.BuildVersion, server.BuildCommit, server.BuildTime = version, commit, buildTime
 
 	app, err := server.New(cfg)
 	if err != nil {
@@ -56,7 +61,8 @@ func main() {
 	}
 	defer app.Close()
 	slog.Info("Emby-go listening", "addr", cfg.Addr(), "version", version, "config", path)
-	if err := http.ListenAndServe(cfg.Addr(), app.Handler()); err != nil {
+	httpServer := &http.Server{Addr: cfg.Addr(), Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	if err := httpServer.ListenAndServe(); err != nil {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}

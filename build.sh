@@ -5,7 +5,7 @@ usage() {
   printf '%s\n' \
     'Usage: bash build.sh' \
     'Builds a Linux amd64 binary in dist/emby-go-linux-amd64.' \
-    'Requires Go 1.25+, Node 24.14.1, npm 11.11.0. Optional: VERSION, OUT_DIR.'
+    'Requires Go 1.26+ (toolchain 1.27.3), Node 24.14.1, npm 11.11.0. Optional: VERSION, OUT_DIR.'
 }
 
 if (( $# > 0 )); then
@@ -18,7 +18,7 @@ if (( $# > 0 )); then
 fi
 
 if ! command -v go >/dev/null 2>&1; then
-  printf '%s\n' 'Error: Go 1.25 or newer must be installed and available in PATH.' >&2
+  printf '%s\n' 'Error: Go 1.26 or newer must be installed and available in PATH.' >&2
   exit 1
 fi
 

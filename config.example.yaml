@@ -13,6 +13,9 @@ port: 18080
 # 调试模式：true 时启用 gin 调试及脱敏请求头日志，不记录请求正文
 debug: false
 
+# 应用与请求日志保留天数；0 不自动清理，范围 0..3650，重启生效。
+log_retention_days: 0
+
 disable_library_monitor: false
 library_monitor_mode: realtime
 

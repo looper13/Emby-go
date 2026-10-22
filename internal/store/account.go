@@ -106,7 +106,7 @@ func (s *Store) CanAccessMovie(id int64) bool {
 }
 
 func (s *Store) DeleteAccessToken(token string) error {
-	_, err := s.db.Exec("DELETE FROM access_tokens WHERE token=?", token)
+	_, err := s.db.Exec("DELETE FROM access_tokens WHERE token=?", accessTokenDigest(token))
 	return err
 }
 

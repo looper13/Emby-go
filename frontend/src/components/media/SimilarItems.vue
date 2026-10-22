@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ChevronLeft, ChevronRight } from '@lucide/vue';
+import { ChevronLeft, ChevronRight, Film } from '@lucide/vue';
 import type { SimilarDto } from '../../api/contracts';
 import { imageURL } from '../../lib/image-url';
 import { fmtDuration } from '../../lib/media';
 import MediaImage from './MediaImage.vue';
+import { useMediaVisibility } from '../../composables/useMediaVisibility';
 
 const props = defineProps<{ items: SimilarDto[] }>();
 const emit = defineEmits<{ open: [id: string] }>();
+const { hideImages } = useMediaVisibility();
 const row = ref<HTMLDivElement>();
 const overflowing = ref(false);
 const atStart = ref(true);
@@ -55,7 +57,7 @@ onBeforeUnmount(() => observer?.disconnect());
     </div>
     <div v-if="items.length" ref="row" class="similar-row" @scroll.passive="updateScroll">
       <button v-for="item in items" :key="item.Id" class="similar-card" :data-similar="item.Id" :title="item.Name" @click="emit('open', item.Id)">
-        <span class="similar-poster"><MediaImage v-if="item.ImageTags?.Primary" :src="imageURL(item.Id, 'Primary', 320, item.ImageTags.Primary)" loading="lazy" alt="" /></span>
+        <span class="similar-poster"><MediaImage v-if="!hideImages && item.ImageTags?.Primary" :src="imageURL(item.Id, 'Primary', 320, item.ImageTags.Primary)" loading="lazy" alt="" /><span v-else class="image-placeholder"><Film :size="24" aria-hidden="true" /></span></span>
         <strong>{{ item.Name || item.Id }}</strong>
         <small>{{ [item.ProductionYear, item.RunTimeTicks ? fmtDuration(item.RunTimeTicks / 10000000) : '', item.CommunityRating ? `★ ${item.CommunityRating}` : ''].filter(Boolean).join(' · ') }}</small>
       </button>

@@ -15,7 +15,9 @@ import BackgroundTaskProgress from '../components/tasks/BackgroundTaskProgress.v
 import MediaImage from '../components/media/MediaImage.vue';
 import FavoriteButton from '../components/media/FavoriteButton.vue';
 import ReadState from '../components/common/ReadState.vue';
+import { useMediaVisibility } from '../composables/useMediaVisibility';
 
+const { hideImages } = useMediaVisibility();
 const tasks = useTasksStore(), toasts = useToastStore();
 const library = ref(0), status = ref<ActorStatus>('all'), search = ref(''), term = ref(''), offset = ref(0), limit = 48;
 const favoritesOnly = ref(false);
@@ -100,7 +102,7 @@ async function test(target: SourceTest) {
         <div v-if="actors.items.length" class="actor-grid">
           <article v-for="actor in actors.items" :key="actor.name" class="actor-card"><RouterLink :to="{path:'/items',query:{person:actor.name,...(library ? {library_id:String(library)} : {})}}">
             <div class="actor-portrait">
-              <MediaImage v-if="actor.has_image" :src="imageURL(entityIdOf('person',actor.name),'Primary',240,actor.image_tag)" loading="lazy" :alt="actor.name + '的头像'" />
+              <MediaImage v-if="!hideImages && actor.has_image" :src="imageURL(entityIdOf('person',actor.name),'Primary',240,actor.image_tag)" loading="lazy" :alt="actor.name + '的头像'" />
               <span v-else class="actor-placeholder"><Users :size="32" aria-hidden="true" /></span>
               <span class="portrait-status" :class="{missing:!actor.has_image}">{{ actor.has_image ? '已有头像' : '缺少头像' }}</span>
               <span v-if="actor.movie_count" class="portrait-count"><Film :size="11" aria-hidden="true" />{{ actor.movie_count }}</span>

@@ -3,7 +3,9 @@ package nfo
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -21,7 +23,7 @@ const existingNFO = `<?xml version="1.0" encoding="UTF-8"?>
   <unknownvendor>
     <whatever attr="1">外部工具写的扩展块</whatever>
   </unknownvendor>
-  <lockdata>true</lockdata>
+  <lockdata>false</lockdata>
   <uniqueid type="tmdb">12345</uniqueid>
   <actor>
     <name>旧演员</name>
@@ -73,7 +75,7 @@ func TestUpdateScrapedPreservesUnknownTags(t *testing.T) {
 		`<unknownvendor>`,
 		`<whatever attr="1">外部工具写的扩展块</whatever>`,
 		"</unknownvendor>",
-		"<lockdata>true</lockdata>",
+		"<lockdata>false</lockdata>",
 		`<uniqueid type="tmdb">12345</uniqueid>`,
 		"<fileinfo>",
 		"<codec>h264</codec>",
@@ -159,7 +161,7 @@ func TestUpdateScrapedListReplace(t *testing.T) {
 		}
 	}
 	// 未介入的标签块不能被动。
-	if !strings.Contains(got, "<lockdata>true</lockdata>") {
+	if !strings.Contains(got, "<lockdata>false</lockdata>") {
 		t.Error("未涉及的标签不应被删")
 	}
 }
@@ -434,5 +436,190 @@ func TestUpdateScrapedTagNameIsolation(t *testing.T) {
 		len(meta.Taglines) != 1 || meta.Taglines[0] != "新标语" ||
 		len(meta.Studios) != 1 || meta.Studios[0] != "新厂商" {
 		t.Errorf("解析结果不对: tags=%v taglines=%v studios=%v", meta.Tags, meta.Taglines, meta.Studios)
+	}
+}
+
+// TestUpdateScrapedDollarValueIsLiteral 含 $ 的元数据必须原样写入。
+// 回归：regexp 的替换模板里未转义的 $ 会被当成捕获组引用，组号越界展开为空串——
+// "Price $100" 会被静默写成 "Price "，内容丢失且不报任何错。
+func TestUpdateScrapedDollarValueIsLiteral(t *testing.T) {
+	path := writeTempNFO(t, `<movie>
+  <title>旧</title>
+  <plot>旧简介</plot>
+</movie>
+`)
+	err := UpdateScraped(path, ScrapeFields{
+		Title: "Price $100", Plot: "立减 $5 OFF", Overwrite: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateScraped: %v", err)
+	}
+	got := readTempNFO(t, path)
+	if !strings.Contains(got, "<title>Price $100</title>") {
+		t.Errorf("标题里的 $ 被吞:\n%s", got)
+	}
+	if !strings.Contains(got, "<plot>立减 $5 OFF</plot>") {
+		t.Errorf("简介里的 $ 被吞:\n%s", got)
+	}
+	// ${1} 形式同样不能被当成组引用。
+	if err := UpdateScraped(path, ScrapeFields{Title: "A ${1} B", Overwrite: true}); err != nil {
+		t.Fatalf("UpdateScraped: %v", err)
+	}
+	if got = readTempNFO(t, path); !strings.Contains(got, "<title>A ${1} B</title>") {
+		t.Errorf("${1} 被当成组引用:\n%s", got)
+	}
+}
+
+func TestUpdateScrapedCompactDirectChildren(t *testing.T) {
+	const extension = `<vendor><title>nested</title><genre>nested genre</genre><actor><name>nested actor</name></actor><set><name>nested set</name></set><uniqueid type="metatube">nested id</uniqueid></vendor>`
+	const comment = `<!-- <genre>comment</genre><title>comment title</title> -->`
+	const info = `<fileinfo><streamdetails><video><runtime>777</runtime></video></streamdetails></fileinfo>`
+	path := writeTempNFO(t, `<movie>`+extension+comment+`<title>old title</title><genre>old genre</genre><genre/><actor><name>old actor</name></actor><set><name>old set</name></set>`+info+`</movie>`)
+	if err := UpdateScraped(path, ScrapeFields{Title: "new title", Genres: []string{"new genre"}, Actors: []Actor{{Name: "new actor"}}, Series: "new set", ProviderID: "new id", Runtime: 90, Overwrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	got := readTempNFO(t, path)
+	for _, keep := range []string{extension, comment, info} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("lost untouched content %s\n%s", keep, got)
+		}
+	}
+	for _, stale := range []string{"old title", "old genre", "old actor", "old set", "<genre/>"} {
+		if strings.Contains(got, stale) {
+			t.Errorf("stale %q\n%s", stale, got)
+		}
+	}
+	meta, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "new title" || len(meta.Genres) != 1 || len(meta.Actors) != 1 || meta.Collection() != "new set" || meta.ProviderID() != "new id" || meta.Runtime != 90 {
+		t.Fatalf("wrong result: %+v", meta)
+	}
+}
+
+func TestUpdateScrapedFieldLocks(t *testing.T) {
+	fields := ScrapeFields{Number: "new", Title: "new", OriginalTitle: "new", SortTitle: "new", Plot: "new", Year: 2025, Premiered: "2025-01-01", Rating: 9, Mpaa: "new", Director: "new", Maker: "new", Label: "new", Runtime: 100, Series: "new", ProviderID: "new", TrailerURL: "new", Genres: []string{"new"}, Tags: []string{"new"}, Studios: []string{"new"}, Taglines: []string{"new"}, Actors: []Actor{{Name: "new"}}, Overwrite: true}
+	for _, locks := range []string{`<lockdata>true</lockdata>`, `<lockedfields> Name |Number|OriginalTitle|SortName|Overview|ProductionYear|PremiereDate|CommunityRating|OfficialRating|People|Maker|Label|Runtime|Collections|ProviderIds|Genres|Tags|Studios|Taglines|FutureField </lockedfields>`} {
+		t.Run(locks, func(t *testing.T) {
+			body := `<movie>` + locks + `<title>old</title><vendor keep="yes"/></movie>`
+			path := writeTempNFO(t, body)
+			if err := UpdateScraped(path, fields); err != nil {
+				t.Fatal(err)
+			}
+			if got := readTempNFO(t, path); got != body {
+				t.Fatalf("automatic overwrite changed locked data\n%s", got)
+			}
+		})
+	}
+	path := writeTempNFO(t, `<movie><lockedfields>Name|Genres|FutureField</lockedfields><title>old</title><genre>old</genre><plot>old</plot></movie>`)
+	if err := UpdateScraped(path, fields); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "old" || meta.Genres[0] != "old" || meta.Plot != "new" || meta.LockedFields != "Name|Genres|FutureField" {
+		t.Fatalf("partial locks: %+v", meta)
+	}
+}
+
+func TestUpdateScrapedManualLockConfiguration(t *testing.T) {
+	locks := []string{" Name ", "Genres", "", "FutureField"}
+	all := true
+	path := writeTempNFO(t, `<movie><lockdata>true</lockdata><lockedfields>Overview|ExternalLock</lockedfields><title>old</title><plot>old</plot><vendor/></movie>`)
+	if err := UpdateScraped(path, ScrapeFields{Title: "manual", Plot: "manual", ManualEdit: true, Overwrite: true, LockedFields: &locks, LockData: &all}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "manual" || meta.Plot != "manual" || meta.LockedFields != "Name|Genres|FutureField" || meta.LockData != "true" {
+		t.Fatalf("manual update: %+v", meta)
+	}
+	// nil preserves locks; automatic requests cannot set or clear either configuration.
+	if err := UpdateScraped(path, ScrapeFields{ManualEdit: true}); err != nil {
+		t.Fatal(err)
+	}
+	empty := []string{}
+	all = false
+	if err := UpdateScraped(path, ScrapeFields{Title: "automatic", Overwrite: true, LockedFields: &empty, LockData: &all}); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ = Read(path)
+	if meta.Title != "manual" || meta.LockedFields != "Name|Genres|FutureField" || meta.LockData != "true" {
+		t.Fatalf("automatic changed locks: %+v", meta)
+	}
+	if err := UpdateScraped(path, ScrapeFields{ManualEdit: true, LockedFields: &empty, LockData: &all}); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ = Read(path)
+	if meta.LockedFields != "" || meta.LockData != "false" {
+		t.Fatalf("clear locks: %+v", meta)
+	}
+	if err := UpdateScraped(path, ScrapeFields{Title: "unlocked", Overwrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	meta, _ = Read(path)
+	if meta.Title != "unlocked" || !strings.Contains(readTempNFO(t, path), "<vendor/>") {
+		t.Fatalf("unlocked: %+v", meta)
+	}
+	for _, manual := range []bool{false, true} {
+		newPath := filepath.Join(t.TempDir(), "new.nfo")
+		all = true
+		if err := UpdateScraped(newPath, ScrapeFields{Title: "new", ManualEdit: manual, LockedFields: &locks, LockData: &all}); err != nil {
+			t.Fatal(err)
+		}
+		meta, err := Read(newPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if manual && (meta.LockedFields != "Name|Genres|FutureField" || meta.LockData != "true") {
+			t.Fatalf("new locks: %+v", meta)
+		}
+		if !manual && (meta.LockedFields != "" || meta.LockData != "") {
+			t.Fatalf("automatic new locks: %+v", meta)
+		}
+	}
+}
+
+// TestSetActorThumbConcurrent 同一份 NFO 的并发「读-改-写」必须串行化。
+// 回归：头像任务按演员并发，多个演员共演同一部片时各自读全文、改自己那处、再原子写，
+// 无锁时后写的整份快照会盖掉先写的（丢更新），共用的 *.nfo.tmp 还会互相截断。
+func TestSetActorThumbConcurrent(t *testing.T) {
+	const n = 8
+	var body strings.Builder
+	body.WriteString("<movie>\n")
+	for i := 0; i < n; i++ {
+		body.WriteString("  <actor>\n    <name>演员" + strconv.Itoa(i) + "</name>\n  </actor>\n")
+	}
+	body.WriteString("</movie>\n")
+	path := writeTempNFO(t, body.String())
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := "演员" + strconv.Itoa(i)
+			thumb := "https://cdn/" + strconv.Itoa(i) + ".jpg"
+			if _, err := SetActorThumb(path, name, thumb); err != nil {
+				t.Errorf("SetActorThumb(%s): %v", name, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	got := readTempNFO(t, path)
+	for i := 0; i < n; i++ {
+		want := "<thumb>https://cdn/" + strconv.Itoa(i) + ".jpg</thumb>"
+		if !strings.Contains(got, want) {
+			t.Errorf("并发写丢了第 %d 个演员的 thumb:\n%s", i, got)
+		}
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("并发改写后 NFO 无法解析: %v", err)
 	}
 }

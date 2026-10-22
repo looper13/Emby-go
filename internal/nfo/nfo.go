@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"errors"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -184,6 +185,7 @@ type MovieMeta struct {
 	Maker         string     `xml:"maker,omitempty"`
 	Label         string     `xml:"label,omitempty"`
 	LockData      string     `xml:"lockdata,omitempty"`
+	LockedFields  string     `xml:"lockedfields,omitempty"`
 	MetaTubeID    string     `xml:"metatubeid,omitempty"`
 	TrailerURLID  string     `xml:"trailerurlid,omitempty"`
 	Trailer       string     `xml:"trailer,omitempty"`
@@ -308,7 +310,7 @@ func read(path string, stats *ReadStats) (MovieMeta, error) {
 		started = time.Now()
 		stats.Parses++
 	}
-	err = xml.Unmarshal(b, &m)
+	err = decodeMetadata(b, &m)
 	if stats != nil {
 		stats.Parse = time.Since(started)
 	}
@@ -333,11 +335,23 @@ func Save(path string, m MovieMeta) error {
 }
 func FromFields(title string, year int) MovieMeta { return MovieMeta{Title: title, Year: year} }
 func SaveAtomic(path string, m MovieMeta) error {
+	defer lockNFOPath(path)()
+	return saveAtomicLocked(path, m)
+}
+
+// saveAtomicLocked 是不持锁的原子写内核，供已持锁的调用方复用
+// （UpdateScraped 新建 NFO 时会走到这里，重复加锁会死锁）。
+func saveAtomicLocked(path string, m MovieMeta) error {
 	tmp := path + ".tmp"
 	if err := Save(tmp, m); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // SaveFileInfo 写入 NFO 的 <fileinfo> 块（含媒体体积、探测版本与 <streamdetails>）；
@@ -347,6 +361,8 @@ func SaveAtomic(path string, m MovieMeta) error {
 // 结构体未建模的元素（刮削器写入的扩展标签、属性等）静默丢掉。
 // 因此只做块级替换，其余内容字节级保留（含文件头 BOM 与原有缩进风格）。
 func SaveFileInfo(path string, meta FileInfoMeta, details *StreamDetails) error {
+	// 读-改-写整体持锁：探测写 <fileinfo> 与刮削改写标签可能并发命中同一文件。
+	defer lockNFOPath(path)()
 	if details == nil {
 		return errors.New("nfo: 流信息为空")
 	}
@@ -354,28 +370,62 @@ func SaveFileInfo(path string, meta FileInfoMeta, details *StreamDetails) error 
 	if err != nil {
 		return err
 	}
-	block := renderFileInfo(meta, details)
 	text := string(raw)
-	if start := strings.Index(text, "<fileinfo"); start >= 0 {
-		if rel := strings.Index(text[start:], "</fileinfo>"); rel >= 0 {
-			end := start + rel + len("</fileinfo>")
-			// 匹配从 "<fileinfo" 起，不含它所在行的缩进；若不一并吃掉，
-			// 新块自带的缩进会与残留缩进叠加（<fileinfo> 被顶到 4 空格）。
-			lineStart := start
-			for lineStart > 0 && (text[lineStart-1] == ' ' || text[lineStart-1] == '\t') {
-				lineStart--
-			}
-			return writeFileAtomic(path, text[:lineStart]+block+text[end:])
-		}
+	elements, closing, root, err := directElements(text)
+	if err != nil {
+		return err
 	}
-	index := strings.LastIndex(text, "</movie>")
-	if index < 0 {
-		index = strings.LastIndex(text, "</episodedetails>")
-	}
-	if index < 0 {
+	if root.Space != "" || (root.Local != "movie" && root.Local != "episodedetails") || !strings.HasPrefix(text[closing:], "</"+root.Local) {
 		return errors.New("nfo: 未找到 </movie>，无法写入流信息")
 	}
-	return writeFileAtomic(path, text[:index]+block+"\n"+text[index:])
+	if err := rejectFileInfoOutsideText(text); err != nil {
+		return err
+	}
+	block := renderFileInfo(meta, details)
+	for _, element := range elements {
+		if element.name.Space != "" || element.name.Local != "fileinfo" {
+			continue
+		}
+		// XML offsets select only the direct node, including self-closing nodes;
+		// comments, CDATA and nested/namespace extensions remain byte-identical.
+		lineStart := element.start
+		for lineStart > 0 && (text[lineStart-1] == ' ' || text[lineStart-1] == '\t') {
+			lineStart--
+		}
+		return writeFileAtomic(path, text[:lineStart]+block+text[element.end:])
+	}
+	return writeFileAtomic(path, text[:closing]+block+"\n"+text[closing:])
+}
+
+// rejectFileInfoOutsideText narrows this writer's validation without changing
+// directElements' other callers. XML decoder permits root-external CharData;
+// accept only XML whitespace there, plus a single leading UTF-8 BOM. Parsing
+// does not reserialize or alter the original byte offsets used for replacement.
+func rejectFileInfoOutsideText(text string) error {
+	text = strings.TrimPrefix(text, "\ufeff")
+	decoder := xml.NewDecoder(strings.NewReader(text))
+	depth := 0
+	for {
+		start := int(decoder.InputOffset())
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			depth++
+		case xml.EndElement:
+			depth--
+		case xml.CharData:
+			if depth == 0 && (strings.Trim(string(token), " \t\r\n") != "" ||
+				strings.HasPrefix(text[start:int(decoder.InputOffset())], "<![CDATA[")) {
+				return errors.New("nfo: 根元素外存在无效文本，拒绝改写")
+			}
+		}
+	}
 }
 
 // renderFileInfo 按 Metatube/Kodi 的既有缩进风格（2 空格逐层）渲染 <fileinfo> 块。
@@ -488,5 +538,9 @@ func writeFileAtomic(path string, content string) error {
 	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

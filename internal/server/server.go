@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -44,6 +43,7 @@ type appState struct {
 	adminName       string
 	credentialMu    sync.Mutex
 	serverID        string
+	startAt         time.Time
 	taskMu          sync.Mutex
 	tasks           []task
 	nextTaskID      int64
@@ -89,8 +89,14 @@ type appState struct {
 
 	// 未实现端点的探测记录去重：客户端启动期会反复请求同一路径，
 	// 只需记下「哪些端点被调用过」，避免每个 404 都写一次库。
-	probeMu   sync.Mutex
-	probeSeen map[string]struct{}
+	probeMu        sync.Mutex
+	probeSeen      map[string]probeSeenEntry
+	probePersistMu sync.Mutex
+	probeEpoch     uint64
+	probeNow       func() time.Time
+	probeTokens    float64
+	probeRefillAt  time.Time
+	authLimiter    *authRateLimiter
 
 	// 计划任务调度器：定义存 DB，保存后 Reload 即时生效。
 	sched    *scheduler.Scheduler
@@ -177,8 +183,8 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		return nil, err
 	}
 	a := &App{db: db, appState: &appState{
-		cfg: cfg, cache: cache.NewManaged(cacheStore),
-		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]struct{}),
+		cfg: cfg, cache: cache.NewManaged(cacheStore), startAt: time.Now(),
+		tags: make(map[string]tagEntry), nfos: newNFOCache(nfoCacheMaxEntries), probeSeen: make(map[string]probeSeenEntry), authLimiter: newAuthRateLimiter(),
 		imgMeta: cache.NewMemory(imageMetaCacheSize), imgThumb: cache.NewMemory(imageThumbCacheSize),
 		thumbSem: make(chan struct{}, maxThumbConcurrency), scrapeSem: make(chan struct{}, maxScrapeImageConcurrency),
 	}}
@@ -226,7 +232,7 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	middlewares := []gin.HandlerFunc{requestLogger()}
+	middlewares := []gin.HandlerFunc{securityHeaders(), requestBodyLimit(), requestLogger()}
 	if cfg.Debug {
 		middlewares = append(middlewares, requestContentLogger())
 	}
@@ -278,7 +284,7 @@ func (a *App) Close() {
 	a.mediaWG.Wait()
 	a.mediaSessionsWG.Wait()
 	if a.sched != nil {
-		a.sched.Stop()
+		<-a.sched.Stop().Done()
 	}
 	a.probeTaskMu.Lock()
 	if a.probeCancel != nil {
@@ -302,6 +308,7 @@ func (a *App) routes() {
 	r.GET("/web/vendor/artplayer.min.js", a.bind((*App).webAsset))
 	registerWebUIRoutes(r, webUIFiles)
 	r.GET("/api/auth/status", noStore, a.bind((*App).authStatus))
+	r.GET("/api/version", noStore, a.bind((*App).buildInfo))
 	r.POST("/api/auth/initialize", noStore, a.bind((*App).initialize))
 	r.GET("/api/browse/libraries", a.requireAuth, noStore, a.bind((*App).browseLibraries))
 	// Browser image requests use the read-only session cookie.
@@ -340,6 +347,8 @@ func (a *App) routes() {
 	admin.GET("/settings", a.bind((*App).adminSettings))
 	admin.GET("/config", a.bind((*App).adminConfig))
 	admin.PUT("/config", a.bind((*App).adminSaveConfig))
+	admin.GET("/logs", a.bind((*App).adminLogs))
+	admin.GET("/metrics", a.bind((*App).adminMetrics))
 	admin.GET("/tasks", a.bind((*App).adminTasks))
 	// 刮削（R4）：配置 + 批量/头像任务 + 单条预览确认 + 图片代理。
 	admin.GET("/scrape/settings", a.bind((*App).adminScrapeSettings))
@@ -436,6 +445,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Items", true, a.rootItems},
 		{"GET", "/Users/:uid/Items/:id", true, a.item},
 		{"GET", "/Items/:id", true, a.item},
+		{"GET", "/Items/:id/Collections", true, a.itemCollections},
+		{"GET", "/Users/:uid/Items/:id/Collections", true, a.itemCollections},
 		{"GET", "/Items/:id/Images/:kind", true, a.image},
 		{"GET", "/Items/:id/Images/:kind/:index", true, a.image},
 		{"GET", "/Items/:id/Images", true, a.imageInfo},
@@ -548,21 +559,14 @@ func registerStreamRoutes(g *gin.RouterGroup, h gin.HandlerFunc) {
 }
 
 func (a *App) noRoute(c *gin.Context) {
-	// 客户端会探测式地反复请求未实现端点；404 一旦被浏览器/中间层缓存，
-	// 后续补上实现客户端也拿不到——明确禁止缓存。
 	c.Header("Cache-Control", "no-store")
-	if !strings.HasPrefix(c.Request.URL.Path, "/api/") {
-		key := c.Request.Method + " " + c.Request.URL.Path
-		a.probeMu.Lock()
-		_, seen := a.probeSeen[key]
-		if !seen {
-			a.probeSeen[key] = struct{}{}
-		}
-		a.probeMu.Unlock()
-		// 只记首次：客户端探测期同一端点会反复命中，逐次写库会拖慢 404 响应。
-		if !seen {
-			body, _ := io.ReadAll(io.LimitReader(c.Request.Body, 4096))
-			_ = a.db.Probe(c.Request.Method, c.Request.URL.Path, c.Request.URL.RawQuery, string(body))
+	path := c.Request.URL.Path
+	if !strings.HasPrefix(path, "/api/") && !isScannerProbe(path) {
+		method := c.Request.Method
+		write, epoch := a.observeProbe(method+" "+path, a.probeClock())
+		if write {
+			_, query, _ := strings.Cut(redactRequestTarget("/?"+c.Request.URL.RawQuery), "?")
+			a.persistDiagnosticProbe(method, path, query, epoch)
 		}
 	}
 	c.JSON(404, gin.H{"error": "not found"})

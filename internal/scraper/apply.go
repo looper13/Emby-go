@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"emby-go/internal/imageutil"
@@ -76,8 +79,14 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 	}
 	result := ApplyResult{MovieID: movie.ID, Provider: info.Provider, ProviderID: providerID(info.Provider, info.ID)}
 	result.Number = info.Number
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 
 	title, plot, translated := s.translateFields(ctx, info)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	result.Title, result.Translated = title, translated
 
 	// 版本标记（-C / -U / -UC）取自文件名：既写进 NFO 标签，也给主海报贴角标。
@@ -94,6 +103,9 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 			return err == nil && !stat.IsDir() && stat.Size() > 0
 		})
 		for _, target := range imageTargets {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
 			if !opts.Overwrite && map[string]string{"primary": existing.Poster, "backdrop": existing.Backdrop, "thumb": existing.Landscape}[target.kind] != "" {
 				continue
 			}
@@ -105,6 +117,9 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 			dest := imageutil.MovieImageDestination(movie.SourcePath, dir, strings.TrimSuffix(target.name, ".webp"))
 			path, err := s.downloadImage(ctx, info, target.kind, dest, badge, opts.Overwrite)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return result, ctxErr
+				}
 				// 图片尽力而为：元数据成功即算成功（需求 A5 #28）。
 				slog.Warn("刮削下载图片失败", "movie_id", movie.ID, "kind", target.kind, "error", err)
 				result.ImageWarn = append(result.ImageWarn, target.kind+": "+err.Error())
@@ -118,9 +133,13 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 	}
 
 	fields := buildFields(info, title, plot, opts.Overwrite, mark)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if err := writeNFO(movie, fields); err != nil {
 		return result, err
 	}
+	// The NFO is committed. Publish it even if cancellation races with this write.
 	if s.store != nil {
 		// 记录本次刮削结果；成功时清空上次的错误/待确认标记。
 		if err := s.store.SetScrapeResult(movie.ID, ""); err != nil {
@@ -183,8 +202,13 @@ func (s *Scraper) translateFields(ctx context.Context, info metatube.MovieInfo) 
 
 // downloadImage 下载一张图并转 webp 落盘；只补缺失模式下已有文件则跳过（返回空路径）。
 // badge 非空时由后端把角标合成进图里再返回（只对主海报传）。
+var imageCommitLocks [256]sync.Mutex
+
 func (s *Scraper) downloadImage(ctx context.Context, info metatube.MovieInfo, kind, dest, badge string,
 	overwrite bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if !overwrite {
 		if stat, err := os.Stat(dest); err == nil && !stat.IsDir() && stat.Size() > 0 {
 			return "", nil
@@ -194,6 +218,9 @@ func (s *Scraper) downloadImage(ctx context.Context, info metatube.MovieInfo, ki
 	// 某些来源没有某类图时后端会返回错误，我们记 warn 跳过（图片尽力而为）。
 	url := s.client.ImageURL(kind, info.Provider, info.ID, s.cfg.ImageQualityValue(), "", badge)
 	data, err := s.client.Download(ctx, url, maxImageBytes)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", err
 	}
@@ -203,22 +230,48 @@ func (s *Scraper) downloadImage(ctx context.Context, info metatube.MovieInfo, ki
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	file, err := os.CreateTemp(filepath.Dir(dest), ".scrape-image-*.tmp")
+	// 同目录唯一临时文件：独立刮削请求可并发写同一目标，清理只涉及本次文件。
+	file, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+"-*.tmp")
 	if err != nil {
 		return "", err
 	}
 	tmp := file.Name()
+	defer os.Remove(tmp)
+	// EncodeWebP 按路径打开文件；先关闭 CreateTemp 的句柄以兼容 Windows。
 	if err := file.Close(); err != nil {
-		os.Remove(tmp)
 		return "", err
 	}
-	defer os.Remove(tmp)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err := imageutil.EncodeWebP(bytes.NewReader(data), tmp); err != nil {
-		_ = os.Remove(tmp)
 		return "", fmt.Errorf("转 webp 失败: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	key, err := filepath.Abs(dest)
+	if err != nil {
+		return "", err
+	}
+	key = filepath.Clean(key)
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(key))
+	mu := &imageCommitLocks[hash.Sum32()%uint32(len(imageCommitLocks))]
+	mu.Lock()
+	defer mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !overwrite {
+		if stat, err := os.Stat(dest); err == nil && !stat.IsDir() && stat.Size() > 0 {
+			return "", nil
+		}
+	}
 	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
 		return "", err
 	}
 	return dest, nil

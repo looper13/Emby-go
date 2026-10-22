@@ -624,7 +624,7 @@ func (a *App) adminEdit(c *gin.Context) {
 	// 走标签级更新而不是「读成结构体 → 整体重写」：NFO 里可能有外部工具写的
 	// 扩展标签，整体重写会静默丢掉它们（见 internal/nfo/update.go 的说明）。
 	// 空值表示「本次不修改该字段」，不删除已有内容。
-	fields := nfo.ScrapeFields{Overwrite: true}
+	fields := nfo.ScrapeFields{Overwrite: true, ManualEdit: true}
 	if req.Title != nil {
 		fields.Title = strings.TrimSpace(*req.Title)
 	}
@@ -844,7 +844,7 @@ func (a *App) adminProbe(c *gin.Context) {
 }
 
 func (a *App) adminClearProbes(c *gin.Context) {
-	if err := a.db.ClearProbes(); err != nil {
+	if err := a.clearDiagnosticProbes(); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

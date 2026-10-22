@@ -2,6 +2,11 @@ package metatube
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -193,4 +198,37 @@ func asAPIError(err error, target **APIError) bool {
 		err = unwrapper.Unwrap()
 	}
 	return false
+}
+
+// IsFatal distinguishes service failures from per-item metadata failures.
+func TestIsFatal(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"404 上游没有这部片", &APIError{StatusCode: 404, Message: "info not found"}, false},
+		{"500 元数据不全", &APIError{StatusCode: 500, Message: "incomplete metadata"}, false},
+		{"400 参数问题", &APIError{StatusCode: 400}, false},
+		{"401 鉴权失败", &APIError{StatusCode: 401, Message: "invalid token"}, true},
+		{"403 鉴权失败", &APIError{StatusCode: 403}, true},
+		{"502 网关故障", &APIError{StatusCode: 502}, true},
+		{"503 服务不可用", &APIError{StatusCode: 503}, true},
+		{"504 网关超时", &APIError{StatusCode: 504}, true},
+		{"429 请求过多", &APIError{StatusCode: 429}, true},
+		{"连接失败", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, true},
+		{"解析响应失败", &json.SyntaxError{}, false},
+		{"响应缺少 data", errors.New("metatube: 响应缺少 data"), false},
+		{"读取响应中断", fmt.Errorf("read response: %w", io.ErrUnexpectedEOF), true},
+		{"被 wrap 的鉴权失败", fmt.Errorf("metatube: 请求 /x 失败: %w", &APIError{StatusCode: 401}), true},
+		{"被 wrap 的数据问题", fmt.Errorf("metatube: 请求 /x 失败: %w", &APIError{StatusCode: 500}), false},
+		{"请求取消", context.Canceled, false},
+		{"请求超时", context.DeadlineExceeded, false},
+	}
+	for _, tc := range cases {
+		if got := IsFatal(tc.err); got != tc.want {
+			t.Errorf("%s: IsFatal = %v，期望 %v", tc.name, got, tc.want)
+		}
+	}
 }

@@ -762,11 +762,14 @@ func (a *App) embyItemWithArtwork(m store.Movie, d store.UserData, actors []stor
 	v := gin.H{
 		"Id": id, "Name": m.Title, "SortName": sortName,
 		"Type": m.ItemType(), "MediaType": "Video", "IsFolder": false,
-		"ParentId":  strconv.FormatInt(m.LibraryID, 10),
+		"ParentId":  externalLibraryID(m.LibraryID),
 		"ServerId":  a.serverID,
 		"Container": m.SourceContainer,
 		"CanDelete": false, "CanDownload": false, "SupportsSync": false,
 		"UserData": d,
+	}
+	if m.Collection != "" {
+		v["CollectionIds"] = []string{boxsetID(m.Collection)}
 	}
 	if tv := m.Television; tv != nil {
 		v["SeriesId"], v["SeriesName"] = store.TVSeriesID(m.LibraryID, tv.SeriesPath), tv.Title
@@ -1181,14 +1184,31 @@ func movieIDs(ms []store.Movie) []int64 {
 
 // boxsetListResponse 分页返回「合集」媒体库的 BoxSet 列表。
 func (a *App) boxsetListResponse(c *gin.Context, start, limit int, term string) {
-	stats, err := a.db.CollectionStats(a.collectionMinMovies())
+	lib, _ := parseParentScope(c.Query("ParentId"))
+	stats, err := a.db.LibraryCollectionStats(lib, a.collectionMinMovies())
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	term = strings.ToLower(strings.TrimSpace(term))
+	members, present := c.Request.URL.Query()["ListItemIds"]
+	owned, err := a.memberCollections(members, lib)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "item data unavailable"})
+		return
+	}
+	ids, idsPresent := c.Request.URL.Query()["Ids"]
+	wanted := make(map[string]bool)
+	for _, values := range ids {
+		for _, id := range strings.Split(values, ",") {
+			wanted[strings.TrimSpace(id)] = true
+		}
+	}
 	names := make([]string, 0, len(stats))
 	for name := range stats {
+		if (present && !owned[name]) || (idsPresent && !wanted[boxsetID(name)]) {
+			continue
+		}
 		if (term == "" || strings.Contains(strings.ToLower(name), term)) && matchesFavorite(c, a.db.ItemFavorite(boxsetID(name))) {
 			names = append(names, name)
 		}

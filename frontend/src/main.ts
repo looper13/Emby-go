@@ -5,12 +5,14 @@ import { createAppRouter } from './router';
 import { replaceLegacyUrl } from './router/legacy-url';
 import { viewHistories, viewHistoryKey } from './router/view-history';
 import { initTheme } from './composables/useTheme';
+import { initMediaVisibility } from './composables/useMediaVisibility';
 import './styles/legacy.css';
 import './styles/library.css';
 import './styles/artwork.css';
 import './styles/theme.css';
 
 initTheme();
+initMediaVisibility();
 replaceLegacyUrl();
 window.history.scrollRestoration = 'manual';
 const pinia = createPinia();

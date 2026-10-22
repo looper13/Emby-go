@@ -21,16 +21,17 @@ type Config struct {
 	DisableLibraryMonitor bool   `yaml:"disable_library_monitor"`
 	LibraryMonitorMode    string `yaml:"library_monitor_mode"`
 
-	Port          int            `yaml:"port"` // 监听端口（如 18080）
-	DBPath        string         `yaml:"db_path"`
-	ActorsDir     string         `yaml:"actors_dir"`
-	ServerName    string         `yaml:"server_name"` // 对外站点名（System/Info 的 ServerName）
-	ServerID      string         `yaml:"server_id"`   // Emby ServerId；留空则首次启动生成稳定 UUID 存 DB 并回写
-	Debug         bool           `yaml:"debug"`       // 开启后启用 gin 调试模式与详细请求日志
-	RedisAddr     string         `yaml:"redis_addr"`
-	RedisPassword string         `yaml:"redis_password"`
-	RedisDB       int            `yaml:"redis_db"`
-	ServerDomains []ServerDomain `yaml:"server_domains"`
+	Port             int            `yaml:"port"` // 监听端口（如 18080）
+	DBPath           string         `yaml:"db_path"`
+	ActorsDir        string         `yaml:"actors_dir"`
+	ServerName       string         `yaml:"server_name"`        // 对外站点名（System/Info 的 ServerName）
+	ServerID         string         `yaml:"server_id"`          // Emby ServerId；留空则首次启动生成稳定 UUID 存 DB 并回写
+	Debug            bool           `yaml:"debug"`              // 开启后启用 gin 调试模式与详细请求日志
+	LogRetentionDays int            `yaml:"log_retention_days"` // 0 retains logs; valid range 0..3650.
+	RedisAddr        string         `yaml:"redis_addr"`
+	RedisPassword    string         `yaml:"redis_password"`
+	RedisDB          int            `yaml:"redis_db"`
+	ServerDomains    []ServerDomain `yaml:"server_domains"`
 
 	// 媒体信息探测（独立于扫库）：调用系统 ffprobe 读取真实技术参数并写回 NFO。
 	FFProbePath         string `yaml:"ffprobe_path"`          // ffprobe 可执行文件路径；留空则从 PATH 查找
@@ -106,6 +107,9 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, err
 	}
+	if cfg.LogRetentionDays < 0 || cfg.LogRetentionDays > 3650 {
+		return cfg, fmt.Errorf("log_retention_days 必须在 0-3650 之间")
+	}
 	if cfg.Port <= 0 {
 		cfg.Port = 18080
 	}
@@ -116,7 +120,6 @@ func Load(path string) (Config, error) {
 	cfg.path = path
 	return cfg, cfg.ResolveStorage()
 }
-
 
 // ResolveStorage anchors relative actor storage to the database, never to the config file.
 func (c *Config) ResolveStorage() error {

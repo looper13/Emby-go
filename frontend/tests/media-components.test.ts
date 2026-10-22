@@ -6,8 +6,12 @@ import MediaImage from '../src/components/media/MediaImage.vue';
 import { useToastStore } from '../src/stores/toasts';
 import { readViewPosition, saveViewPosition } from '../src/router/view-history';
 import { imageURL } from '../src/lib/image-url';
+import { applyMediaVisibility } from '../src/composables/useMediaVisibility';
 import fixture from '../../vue-migration/fixtures/json/item-detail.json';
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  applyMediaVisibility(false);
+});
 describe('declarative media components', () => {
   it('activates cards by click, Enter and Space while excluding nested action keys', async () => {
     const wrapper = mount(MediaCard, { props: { movie: fixture.movie } });
@@ -22,6 +26,21 @@ describe('declarative media components', () => {
     await wrapper.find('img').trigger('error'); expect(wrapper.find('img').attributes('src')).toBe('/cover');
     await wrapper.find('img').trigger('error'); expect(wrapper.find('[role=img]').attributes('aria-label')).toBe('海报');
     await wrapper.setProps({ src: '/new' }); expect(wrapper.find('img').attributes('src')).toBe('/new'); wrapper.unmount();
+  });
+  it('hides media images and renders placeholder when hideImages is true', async () => {
+    applyMediaVisibility(true);
+    const wrapper = mount(MediaImage, { props: { src: '/poster.jpg', alt: '海报' } });
+    expect(wrapper.find('img').exists()).toBe(false);
+    expect(wrapper.find('.image-hidden').exists()).toBe(true);
+    wrapper.unmount();
+  });
+  it('hides poster in MediaCard and displays title placeholder when hideImages is true', async () => {
+    applyMediaVisibility(true);
+    const wrapper = mount(MediaCard, { props: { movie: fixture.movie } });
+    expect(wrapper.findComponent(MediaImage).exists()).toBe(false);
+    expect(wrapper.find('.wall-path-hidden').exists()).toBe(true);
+    expect(wrapper.find('.wall-hidden-title').text()).toBe(fixture.movie.Title);
+    wrapper.unmount();
   });
   it('retains versioned thumbnail parameter order and original image links', () => {
     expect(imageURL(5, 'Primary', 320, 'version')).toBe('/Items/5/Images/Primary?tag=version&maxWidth=320');

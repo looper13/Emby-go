@@ -175,6 +175,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.migrateAccessTokenHashes(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.loadItemFavorites(); err != nil {
 		db.Close()
 		return nil, err
@@ -317,13 +321,13 @@ func (s *Store) AdministratorName() (string, error) {
 }
 
 func (s *Store) SaveAccessToken(token string) error {
-	_, err := s.db.Exec("INSERT OR IGNORE INTO access_tokens(token,created_at) VALUES(?,?)", token, time.Now().UTC().Format(time.RFC3339))
+	_, err := s.db.Exec("INSERT OR IGNORE INTO access_tokens(token,created_at) VALUES(?,?)", accessTokenDigest(token), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
 func (s *Store) HasAccessToken(token string) (bool, error) {
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM access_tokens t JOIN users u ON u.id=t.user_id WHERE t.token=? AND u.is_disabled=0", token).Scan(&count); err != nil {
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM access_tokens t JOIN users u ON u.id=t.user_id WHERE t.token=? AND u.is_disabled=0", accessTokenDigest(token)).Scan(&count); err != nil {
 		return false, err
 	}
 	return count == 1, nil
@@ -1820,14 +1824,23 @@ type CollectionStat struct {
 // 避免逐项调 CollectionSummary/CollectionPoster 造成的 N+1 查询。
 // minMovies 与 Collections 同义：低于该影片数的合集不返回。
 func (s *Store) CollectionStats(minMovies int) (map[string]CollectionStat, error) {
+	return s.LibraryCollectionStats(0, minMovies)
+}
+
+// LibraryCollectionStats scopes membership, counts and genres before aggregation.
+func (s *Store) LibraryCollectionStats(libraryID int64, minMovies int) (map[string]CollectionStat, error) {
+	movies := s.userMoviesSQL()
+	if libraryID > 0 {
+		movies = "(SELECT * FROM " + movies + " WHERE library_id=" + strconv.FormatInt(libraryID, 10) + ")"
+	}
 	if minMovies < 1 {
 		minMovies = 1
 	}
 	rows, err := s.db.Query(`SELECT m1.collection, COUNT(*),
-		COALESCE((SELECT COALESCE(NULLIF(m2.poster_path,''),m2.source_path) FROM `+s.userMoviesSQL()+` m2
+		COALESCE((SELECT COALESCE(NULLIF(m2.poster_path,''),m2.source_path) FROM `+movies+` m2
 			WHERE m2.collection=m1.collection AND m2.status IN ('success','manual')
 			ORDER BY m2.id DESC LIMIT 1),'')
-		FROM `+s.userMoviesSQL()+` m1
+		FROM `+movies+` m1
 		WHERE m1.status IN ('success','manual') AND COALESCE(m1.collection,'')<>''
 		GROUP BY m1.collection HAVING COUNT(*) >= ?`, minMovies)
 	if err != nil {
@@ -1847,7 +1860,7 @@ func (s *Store) CollectionStats(minMovies int) (map[string]CollectionStat, error
 		return nil, err
 	}
 	// 流派存在每行的 JSON 列里，单独取两列后在内存聚合去重。
-	rows2, err := s.db.Query(`SELECT collection, genres FROM ` + s.userMoviesSQL() + `
+	rows2, err := s.db.Query(`SELECT collection, genres FROM ` + movies + `
 		WHERE status IN ('success','manual') AND COALESCE(collection,'')<>''`)
 	if err != nil {
 		return nil, err
