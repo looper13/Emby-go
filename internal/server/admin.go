@@ -76,6 +76,8 @@ func (a *App) adminAddLibrary(c *gin.Context) {
 		Path         string
 		Type         string
 		ProxyEnabled bool
+		SourceIP     string
+		TargetIP     string
 	}
 	if c.ShouldBindJSON(&req) != nil || req.Name == "" || req.Path == "" {
 		c.JSON(400, gin.H{"error": "name and path required"})
@@ -84,7 +86,7 @@ func (a *App) adminAddLibrary(c *gin.Context) {
 	if req.Type == "" {
 		req.Type = store.LibraryMovies
 	}
-	v, e := a.db.AddLibraryWithProxy(req.Name, req.Path, req.ProxyEnabled, req.Type)
+	v, e := a.db.AddLibraryWithSettings(req.Name, req.Path, req.ProxyEnabled, req.SourceIP, req.TargetIP, req.Type)
 	if e != nil {
 		c.JSON(400, gin.H{"error": e.Error()})
 		return
@@ -102,14 +104,40 @@ func (a *App) adminUpdateLibrary(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ProxyEnabled *bool `json:"ProxyEnabled"`
-		Revision     int64 `json:"Revision"`
+		ProxyEnabled *bool   `json:"ProxyEnabled"`
+		SourceIP     *string `json:"SourceIP"`
+		TargetIP     *string `json:"TargetIP"`
+		Revision     int64   `json:"Revision"`
 	}
 	if c.ShouldBindJSON(&req) != nil || req.ProxyEnabled == nil || req.Revision <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ProxyEnabled and Revision are required"})
 		return
 	}
-	v, err := a.db.UpdateLibraryProxy(id, *req.ProxyEnabled, req.Revision)
+	if (req.SourceIP == nil) != (req.TargetIP == nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "SourceIP and TargetIP must be supplied together"})
+		return
+	}
+	sourceIP, targetIP := "", ""
+	if req.SourceIP != nil {
+		sourceIP, targetIP = *req.SourceIP, *req.TargetIP
+	} else {
+		library, readErr := a.db.Library(id)
+		if readErr != nil {
+			if store.NotFound(readErr) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": readErr.Error()})
+			}
+			return
+		}
+		sourceIP, targetIP = library.SourceIP, library.TargetIP
+	}
+	sourceIP, targetIP, err = store.NormalizeIPRewrite(sourceIP, targetIP)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	v, err := a.db.UpdateLibrarySettings(id, *req.ProxyEnabled, sourceIP, targetIP, req.Revision)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			c.JSON(http.StatusConflict, gin.H{"error": "媒体库已被修改，请刷新后重试"})

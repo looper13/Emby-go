@@ -24,6 +24,45 @@ func TestDirectoryDatabaseOmitsOnlineCatalog(t *testing.T) {
 	}
 }
 
+func TestLibraryIPRewriteSettings(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "library-ip.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	lib, err := s.AddLibraryWithSettings("LAN", "/lan", false, " 192.168.1.4 ", "10.126.126.2")
+	if err != nil || lib.SourceIP != "192.168.1.4" || lib.TargetIP != "10.126.126.2" {
+		t.Fatalf("create library mapping: %+v err=%v", lib, err)
+	}
+	updated, err := s.UpdateLibrarySettings(lib.ID, true, lib.SourceIP, lib.TargetIP, lib.Revision)
+	if err != nil || !updated.ProxyEnabled || updated.SourceIP != lib.SourceIP || updated.TargetIP != lib.TargetIP || updated.Revision != lib.Revision+1 {
+		t.Fatalf("update library settings: %+v err=%v", updated, err)
+	}
+	if _, err = s.UpdateLibrarySettings(lib.ID, false, "192.168.1.4", "", updated.Revision); err == nil {
+		t.Fatal("incomplete mapping should fail")
+	}
+	if _, err = s.UpdateLibrarySettings(lib.ID, false, "not-an-ip", "10.126.126.2", updated.Revision); err == nil {
+		t.Fatal("invalid IP should fail")
+	}
+}
+
+func TestDirectoryMigrationAddsLibraryIPRewriteColumns(t *testing.T) {
+	path, _ := legacyCatalogFixture(t, false)
+	if err := runCatalogRemovalSQL(path); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	lib, err := s.Library(1)
+	if err != nil || lib.SourceIP != "" || lib.TargetIP != "" {
+		t.Fatalf("migrated library defaults: %+v err=%v", lib, err)
+	}
+}
+
 // 夹具模拟已经启用在线库的数据库，同时保存正常媒体、播放状态及授权。
 func legacyCatalogFixture(t *testing.T, unexpectedMedia bool) (string, int64) {
 	t.Helper()

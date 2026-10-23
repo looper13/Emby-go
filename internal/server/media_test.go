@@ -5,16 +5,115 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"emby-go/internal/cache"
 	"emby-go/internal/config"
 	"emby-go/internal/nfo"
 	"emby-go/internal/probe"
+	"emby-go/internal/store"
 )
+
+func TestRewriteLibrarySourceIP(t *testing.T) {
+	lib := store.Library{SourceIP: "192.168.1.4", TargetIP: "10.126.126.2"}
+	for _, tc := range []struct{ raw, want string }{
+		{"http://192.168.1.4:5244/d/video.mp4?x=1", "http://10.126.126.2:5244/d/video.mp4?x=1"},
+		{"http://192.168.1.40:5244/d/video.mp4", "http://192.168.1.40:5244/d/video.mp4"},
+		{"https://example.com/video.mp4", "https://example.com/video.mp4"},
+	} {
+		if got := rewriteLibrarySourceIP(tc.raw, lib); got != tc.want {
+			t.Errorf("rewriteLibrarySourceIP(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestStreamRedirectUsesLibraryIPRewrite(t *testing.T) {
+	app := accountApp(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "mapped.strm"), "http://192.168.1.4:5244/d/video.mp4?token=abc\n")
+	library, err := app.db.AddLibraryWithSettings("Mapped", root, false, "192.168.1.4", "10.126.126.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	movieID, err := app.db.UpsertMovie(store.Movie{LibraryID: library.ID, SourcePath: filepath.Join(root, "mapped.strm"), Title: "Mapped", Status: "success"}, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := accountRequest(app, http.MethodGet, "/Videos/"+strconv.FormatInt(movieID, 10)+"/stream", "", "")
+	if response.Code != http.StatusFound || response.Header().Get("Location") != "http://10.126.126.2:5244/d/video.mp4?token=abc" {
+		t.Fatalf("stream redirect: status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestProxyStreamUsesLibraryIPRewrite(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/d/video.mp4" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, "rewritten media")
+	}))
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := accountApp(t)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "mapped.strm"), "http://192.168.1.4:"+upstreamURL.Port()+"/d/video.mp4\n")
+	library, err := app.db.AddLibraryWithSettings("Mapped", root, true, "192.168.1.4", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	movieID, err := app.db.UpsertMovie(store.Movie{LibraryID: library.ID, SourcePath: filepath.Join(root, "mapped.strm"), Title: "Mapped", Status: "success"}, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := accountRequest(app, http.MethodGet, "/Videos/"+strconv.FormatInt(movieID, 10)+"/stream", "", "")
+	if response.Code != http.StatusOK || response.Body.String() != "rewritten media" {
+		t.Fatalf("proxied stream: status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminLibraryIPRewriteSettings(t *testing.T) {
+	app := accountApp(t)
+	token := accountLogin(t, app)
+	root := t.TempDir()
+	created, err := json.Marshal(map[string]any{"Name": "IP map", "Path": root, "ProxyEnabled": false, "SourceIP": "192.168.1.4", "TargetIP": "10.126.126.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := accountRequest(app, http.MethodPost, "/api/admin/libraries", token, string(created))
+	if response.Code != http.StatusOK {
+		t.Fatalf("create library: %d %s", response.Code, response.Body)
+	}
+	var library store.Library
+	if err := json.Unmarshal(response.Body.Bytes(), &library); err != nil {
+		t.Fatal(err)
+	}
+	if library.SourceIP != "192.168.1.4" || library.TargetIP != "10.126.126.2" {
+		t.Fatalf("created mapping not returned: %+v", library)
+	}
+	updated, err := json.Marshal(map[string]any{"ProxyEnabled": true, "SourceIP": "192.168.1.4", "TargetIP": "10.126.126.2", "Revision": library.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/admin/libraries/" + strconv.FormatInt(library.ID, 10)
+	response = accountRequest(app, http.MethodPut, path, token, string(updated))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"TargetIP":"10.126.126.2"`) {
+		t.Fatalf("update mapping: %d %s", response.Code, response.Body)
+	}
+	response = accountRequest(app, http.MethodPut, path, token, `{"ProxyEnabled":true,"SourceIP":"192.168.1.4","Revision":2}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("partial mapping should be rejected: %d %s", response.Code, response.Body)
+	}
+}
 
 // TestVideoRange 覆盖动态范围判定：必须以色彩传输特性为准，不能凭位深猜。
 func TestVideoRange(t *testing.T) {

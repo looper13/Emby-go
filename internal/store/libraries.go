@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"net"
+	"strings"
 )
 
 const SourceDirectory = "nfo_directory"
@@ -32,16 +34,45 @@ func (l Library) IsDirectory() bool {
 	return l.Path != "" && (l.SourceType == "" || l.SourceType == SourceDirectory)
 }
 
-const libraryColumns = `id,name,path,type,enabled,source_type,revision,COALESCE(proxy_enabled,0)`
+const libraryColumns = `id,name,path,type,enabled,source_type,revision,COALESCE(proxy_enabled,0),COALESCE(source_ip,''),COALESCE(target_ip,'')`
 
 func readLibrary(row interface{ Scan(...any) error }) (Library, error) {
 	var l Library
-	err := row.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Enabled, &l.SourceType, &l.Revision, &l.ProxyEnabled)
+	err := row.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Enabled, &l.SourceType, &l.Revision, &l.ProxyEnabled, &l.SourceIP, &l.TargetIP)
 	return l, err
 }
 
 func (s *Store) UpdateLibraryProxy(id int64, enabled bool, revision int64) (Library, error) {
-	result, err := s.db.Exec(`UPDATE libraries SET proxy_enabled=?,revision=revision+1 WHERE id=? AND enabled=1 AND source_type=? AND revision=?`, enabled, id, SourceDirectory, revision)
+	library, err := s.Library(id)
+	if err != nil {
+		return Library{}, err
+	}
+	return s.UpdateLibrarySettings(id, enabled, library.SourceIP, library.TargetIP, revision)
+}
+
+func NormalizeIPRewrite(sourceIP, targetIP string) (string, string, error) {
+	sourceIP, targetIP = strings.TrimSpace(sourceIP), strings.TrimSpace(targetIP)
+	if sourceIP == "" && targetIP == "" {
+		return "", "", nil
+	}
+	if sourceIP == "" || targetIP == "" {
+		return "", "", errors.New("原始 IP 和替换 IP 必须同时填写")
+	}
+	source := net.ParseIP(sourceIP)
+	target := net.ParseIP(targetIP)
+	if source == nil || target == nil {
+		return "", "", errors.New("原始 IP 和替换 IP 必须是有效的 IPv4 或 IPv6 地址")
+	}
+	return source.String(), target.String(), nil
+}
+
+func (s *Store) UpdateLibrarySettings(id int64, proxyEnabled bool, sourceIP, targetIP string, revision int64) (Library, error) {
+	var err error
+	sourceIP, targetIP, err = NormalizeIPRewrite(sourceIP, targetIP)
+	if err != nil {
+		return Library{}, err
+	}
+	result, err := s.db.Exec(`UPDATE libraries SET proxy_enabled=?,source_ip=?,target_ip=?,revision=revision+1 WHERE id=? AND enabled=1 AND source_type=? AND revision=?`, proxyEnabled, sourceIP, targetIP, id, SourceDirectory, revision)
 	if err != nil {
 		return Library{}, err
 	}

@@ -54,6 +54,8 @@ func (s *Store) migrateDirectoryLibraries() error {
 		{"source_type", "TEXT NOT NULL DEFAULT 'nfo_directory'"},
 		{"revision", "INTEGER NOT NULL DEFAULT 1"},
 		{"proxy_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1))"},
+		{"source_ip", "TEXT NOT NULL DEFAULT ''"},
+		{"target_ip", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if !columns[column.name] {
 			if _, err = tx.ExecContext(ctx, "ALTER TABLE libraries ADD COLUMN "+column.name+" "+column.definition); err != nil {

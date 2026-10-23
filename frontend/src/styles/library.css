@@ -3,4 +3,9 @@
 .checkbox-field small { grid-column: 2; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .proxy-toggle { display: inline-flex; align-items: center; gap: 7px; color: var(--dim); white-space: nowrap; }
 .proxy-toggle input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.library-ip-map td { background: color-mix(in srgb, var(--surface-raised, #f4f5f6) 70%, transparent); }
+.library-ip-map-form { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 12px 16px; align-items: end; padding: 4px 0; }
+.library-ip-map-form > small { grid-column: 1 / -1; color: var(--muted); }
+.library-ip-map-form .row-actions { grid-column: 1 / -1; }
+@media (max-width: 640px) { .library-ip-map-form { grid-template-columns: 1fr; } .library-ip-map-form > small, .library-ip-map-form .row-actions { grid-column: auto; } }
 .muted { color: var(--muted); }

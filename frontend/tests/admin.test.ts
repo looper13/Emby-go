@@ -50,7 +50,7 @@ describe('management interaction ownership', () => {
     const w = page(LibrariesPage); await flushPromises(); await w.get('#lib-name').setValue('new'); await w.get('#lib-path').setValue('/media');
     await w.get('#lib-type').setValue('tvshows');
     await w.get('#library-form').trigger('submit'); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('new');
-    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Path:'/media',Type:'tvshows',ProxyEnabled:false});
+    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Path:'/media',Type:'tvshows',ProxyEnabled:false,SourceIP:'',TargetIP:''});
     await w.get('#library-form').trigger('submit'); await w.get('#library-form').trigger('submit'); expect(create).toHaveBeenCalledTimes(2);
     pending.resolve(libraries.items[0]!); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('');
     expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('movies');
@@ -61,6 +61,14 @@ describe('management interaction ownership', () => {
     await w.get('[data-lib-delete]').trigger('click'); expect(remove).not.toHaveBeenCalled();
     await w.get('[data-lib-delete]').trigger('click'); await flushPromises(); expect(remove).toHaveBeenCalledTimes(1);
     expect(confirm).toHaveBeenLastCalledWith('删除该媒体库及其影片索引？不会删除磁盘文件，但该库影片的播放进度/收藏会一并清除。');
+  });
+  it('saves per-library STRM IP replacement without enabling the stream proxy', async () => {
+    vi.spyOn(adminApi, 'libraries').mockResolvedValue({ ...libraries, items: [{ ...libraries.items![0]!, Revision: 3, ProxyEnabled: false }] });
+    const update = vi.spyOn(adminApi, 'updateLibrary').mockResolvedValue({ ...libraries.items![0]!, Revision: 4, ProxyEnabled: false, SourceIP: '192.168.1.4', TargetIP: '10.126.126.2' });
+    const w = page(LibrariesPage); await flushPromises(); await w.get('[data-lib-ip-map]').trigger('click');
+    await w.get('input[id^="map-source-"]').setValue('192.168.1.4'); await w.get('input[id^="map-target-"]').setValue('10.126.126.2');
+    await w.get('.library-ip-map-form').trigger('submit'); await flushPromises();
+    expect(update).toHaveBeenCalledWith(1, { ProxyEnabled: false, SourceIP: '192.168.1.4', TargetIP: '10.126.126.2', Revision: 3 });
   });
   it('lets a short create finish after leaving, but cancels its GET and never refreshes the dead page', async () => {
     const read = vi.spyOn(adminApi, 'libraries').mockResolvedValue(libraries); const pending = deferred<(typeof libraries.items)[number]>();
