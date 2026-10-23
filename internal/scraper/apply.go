@@ -50,15 +50,16 @@ type ApplyOptions struct {
 
 // ApplyResult 一次刮削的结果。
 type ApplyResult struct {
-	MovieID    int64
-	Provider   string
-	ProviderID string
-	Number     string
-	Title      string
-	Translated bool
-	Images     []string // 落盘的图片路径（供上层失效 tag 缓存）
-	ImageCount int
-	ImageWarn  []string
+	MovieID     int64
+	Provider    string
+	ProviderID  string
+	Number      string
+	Title       string
+	Translated  bool
+	Images      []string // 落盘的图片路径（供上层失效 tag 缓存）
+	ImageCount  int
+	ImageWarn   []string // Resource warnings, including stills and trailers (legacy field name).
+	TrailerPath string
 	// RefreshError 记录「元数据已写入但索引刷新失败」，供上层提示（不算整体失败）。
 	RefreshError string
 }
@@ -132,6 +133,9 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 		}
 	}
 
+	if err := s.downloadExtras(ctx, movie, info, dir, opts.Overwrite, &result); err != nil {
+		return result, err
+	}
 	fields := buildFields(info, title, plot, opts.Overwrite, mark)
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -141,8 +145,8 @@ func (s *Scraper) Apply(ctx context.Context, movie store.Movie, info metatube.Mo
 	}
 	// The NFO is committed. Publish it even if cancellation races with this write.
 	if s.store != nil {
-		// 记录本次刮削结果；成功时清空上次的错误/待确认标记。
-		if err := s.store.SetScrapeResult(movie.ID, ""); err != nil {
+		// Preserve resource warnings for retry; a complete success clears older errors.
+		if err := s.store.SetScrapeResult(movie.ID, strings.Join(result.ImageWarn, "; ")); err != nil {
 			slog.Warn("写入刮削结果失败", "movie_id", movie.ID, "error", err)
 		}
 	}
@@ -227,6 +231,10 @@ func (s *Scraper) downloadImage(ctx context.Context, info metatube.MovieInfo, ki
 	if len(data) == 0 {
 		return "", errors.New("图片内容为空")
 	}
+	return saveImage(ctx, data, dest, overwrite)
+}
+
+func saveImage(ctx context.Context, data []byte, dest string, overwrite bool) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
@@ -250,6 +258,10 @@ func (s *Scraper) downloadImage(ctx context.Context, info metatube.MovieInfo, ki
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	return commitAsset(ctx, tmp, dest, overwrite)
+}
+
+func commitAsset(ctx context.Context, tmp, dest string, overwrite bool) (string, error) {
 	key, err := filepath.Abs(dest)
 	if err != nil {
 		return "", err
@@ -334,6 +346,7 @@ func buildFields(info metatube.MovieInfo, title, plot string, overwrite bool, ma
 		Number:        number,
 		Title:         displayTitle,
 		OriginalTitle: strings.TrimSpace(info.Title),
+		TrailerURL:    trailerURL(info),
 		SortTitle:     displayTitle,
 		Plot:          plot,
 		Year:          year,

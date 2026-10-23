@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"emby-go/internal/imageutil"
+	"emby-go/internal/mediaassets"
 	"emby-go/internal/nfo"
 	"emby-go/internal/scanner"
 	"emby-go/internal/store"
@@ -1106,8 +1107,8 @@ func (a *App) stream(c *gin.Context) {
 // streamClient 供网页播放器代理播放使用：不设超时（长连接），由请求 context 控制取消。
 var streamClient = &http.Client{}
 
-// trailer 代理影片 NFO 中的预告片地址。预告片不依赖媒体库的 ProxyEnabled
-// 开关，详情页始终通过本服务请求，避免浏览器直接访问外部源。
+// trailer serves the movie's local MP4 first, otherwise proxies its NFO URL.
+// Neither mode depends on the library's ProxyEnabled switch.
 func (a *App) trailer(c *gin.Context) {
 	movieID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -1120,6 +1121,11 @@ func (a *App) trailer(c *gin.Context) {
 		return
 	}
 	raw := strings.TrimSpace(movie.TrailerURL)
+	if local := mediaassets.LocalTrailer(movie.SourcePath, movie.OutputDir); local != "" {
+		c.Header("Cache-Control", "private, no-cache")
+		c.File(local)
+		return
+	}
 	if !scanner.ValidHTTP(raw) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "trailer not found"})
 		return

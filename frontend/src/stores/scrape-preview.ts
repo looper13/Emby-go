@@ -31,7 +31,8 @@ export const useScrapePreviewStore = defineStore('scrape-preview', () => {
     const owner = current.value, picked = inspect.value, force = overwrite.value; writing.value = true;
     try {
       const result = await scrapeApi.confirm(owner.movieId, picked.provider, picked.id, force);
-      toasts.show(`已写入「${result.title}」（图片 ${result.images} 张）`);
+      toasts.show(`已写入「${result.title}」（图片 ${result.images} 张${result.trailer_downloaded ? '，预告片已下载' : ''}）`);
+      if (result.warnings?.length) toasts.show(`部分资源未下载：${result.warnings.join('；')}`, 'error');
       if (current.value === owner) close();
       await owner.confirmed();
     } catch (cause) { toasts.show(cause instanceof Error ? cause.message : '写入失败', 'error'); }

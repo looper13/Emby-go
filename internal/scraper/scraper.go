@@ -29,17 +29,19 @@ const MaxConsecutiveFailures = 20
 
 // Config 刮削配置。与需求 A6 #43 的配置项一一对应，默认值见 DefaultConfig。
 type Config struct {
-	BaseURL        string
-	Token          string
-	TimeoutSeconds int
-	Concurrency    int
-	DownloadImages bool
-	ImageQuality   int
-	AvatarsDir     string
-	ActorsDir      string
-	AvatarSource   string
-	GFriends       gfriends.Config
-	Overwrite      bool // 覆盖策略：false=只补缺失（默认）
+	BaseURL         string
+	Token           string
+	TimeoutSeconds  int
+	Concurrency     int
+	DownloadImages  bool
+	DownloadStills  bool
+	DownloadTrailer bool
+	ImageQuality    int
+	AvatarsDir      string
+	ActorsDir       string
+	AvatarSource    string
+	GFriends        gfriends.Config
+	Overwrite       bool // 覆盖策略：false=只补缺失（默认）
 
 	TranslateTitle bool
 	TranslatePlot  bool
@@ -115,9 +117,9 @@ func New(cfg Config, st *store.Store) *Scraper {
 	}
 }
 
-// Configured 判断是否具备刮削条件（缺地址或 token 时调用方应给出明确提示）。
+// Configured permits backends with authentication disabled; token is optional.
 func (c Config) Configured() bool {
-	return strings.TrimSpace(c.BaseURL) != "" && strings.TrimSpace(c.Token) != ""
+	return strings.TrimSpace(c.BaseURL) != ""
 }
 
 func (c Config) AvatarMode() string {

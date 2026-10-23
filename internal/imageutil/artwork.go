@@ -220,6 +220,40 @@ func (catalog *ArtworkCatalog) findMovieImages(source, directory string, exists 
 			return left < right
 		})
 	}
+	// Append only this movie's numbered stills, even when several sources share a directory.
+	type still struct {
+		path  string
+		index int
+	}
+	var stills []still
+	for name, actual := range catalog.names {
+		if !strings.EqualFold(filepath.Dir(name), ".") {
+			continue
+		}
+		stem := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
+		prefix := strings.ToLower(base) + "-fanart"
+		if !strings.HasPrefix(stem, prefix) {
+			continue
+		}
+		number := strings.TrimPrefix(stem, prefix)
+		if number == "" || strings.Trim(number, "0123456789") != "" {
+			continue
+		}
+		index, err := strconv.Atoi(number)
+		path := filepath.Join(directory, actual)
+		if err == nil && index > 0 && exists(path) {
+			stills = append(stills, still{path, index})
+		}
+	}
+	sort.Slice(stills, func(i, j int) bool {
+		if stills[i].index != stills[j].index {
+			return stills[i].index < stills[j].index
+		}
+		return stills[i].path < stills[j].path
+	})
+	for _, item := range stills {
+		images.Backdrops = append(images.Backdrops, item.path)
+	}
 	if len(images.Backdrops) > 0 {
 		images.Backdrop = images.Backdrops[0]
 	}

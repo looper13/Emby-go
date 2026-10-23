@@ -408,7 +408,7 @@ func (a *App) runScheduledScrape(task scheduler.Task) error {
 	}
 	cfg := a.scrapeConfig()
 	if !cfg.Configured() {
-		return errors.New("未配置 MetaTube 地址或 token")
+		return errors.New("未配置 MetaTube 地址")
 	}
 	onlyMissing := true
 	if value, ok := task.Params["only_missing"]; ok {

@@ -13,6 +13,7 @@ const detail = computed(() => { const p = props.progress; return p ? [`成功 ${
     <div class="scan-progress-bar"><i :id="kind + '-progress-fill'" :class="{ 'is-indeterminate': !progress?.total && busy }" :style="{width: progress?.total ? Math.min(100, Math.round(progress.done / progress.total * 100)) + '%' : '100%'}"></i></div>
     <small :id="kind + '-progress-detail'">{{ detail }}{{ unavailable ? ' · 状态暂不可用，正在重试…' : '' }}</small>
     <small v-if="progress?.kind === 'scrape_avatars' || progress?.kind === 'actor_import'">部分完成 {{ progress.partial || 0 }} · 未命中 {{ progress.unmatched || 0 }} · 歧义 {{ progress.ambiguous || 0 }} · 来源不可用 {{ progress.unavailable || 0 }} · 下载失败 {{ progress.download_failed || 0 }}。部分完成可再次运行恢复。</small>
+    <small v-if="kind === 'scrape' && progress?.kind === 'scrape' && progress?.partial">元数据已保存，{{ progress.partial }} 部影片的部分资源未下载，可再次刮削补齐。</small>
     <details v-if="progress?.failures.length" class="scrape-fail-samples"><summary>失败/待确认样例（{{ progress.failures.length }}）</summary><ul><li v-for="(line, index) in progress.failures" :key="index" class="mono" data-private-path>{{ line }}</li></ul></details>
   </div>
 </template>

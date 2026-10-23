@@ -16,17 +16,19 @@ import (
 // 按需求 B5：**config.yaml 不设 scrape 段**，DB 只存用户改过的值，
 // 缺省一律走 scraper.DefaultConfig()——这样以后新增配置项，老库自动获得默认值，无需迁移。
 const (
-	settingAvatarSource   = "scrape.avatar_source"
-	settingGFriendsIndex  = "scrape.gfriends.index_url"
-	settingGFriendsBase   = "scrape.gfriends.base_url"
-	settingGFriendsHours  = "scrape.gfriends.refresh_hours"
-	settingMetatubeURL    = "scrape.metatube_url"
-	settingMetatubeToken  = "scrape.metatube_token"
-	settingTimeout        = "scrape.timeout_seconds"
-	settingConcurrency    = "scrape.concurrency"
-	settingDownloadImages = "scrape.download_images"
-	settingImageQuality   = "scrape.image_quality"
-	settingOverwrite      = "scrape.overwrite"
+	settingAvatarSource    = "scrape.avatar_source"
+	settingGFriendsIndex   = "scrape.gfriends.index_url"
+	settingGFriendsBase    = "scrape.gfriends.base_url"
+	settingGFriendsHours   = "scrape.gfriends.refresh_hours"
+	settingMetatubeURL     = "scrape.metatube_url"
+	settingMetatubeToken   = "scrape.metatube_token"
+	settingTimeout         = "scrape.timeout_seconds"
+	settingConcurrency     = "scrape.concurrency"
+	settingDownloadImages  = "scrape.download_images"
+	settingDownloadStills  = "scrape.download_stills"
+	settingDownloadTrailer = "scrape.download_trailer"
+	settingImageQuality    = "scrape.image_quality"
+	settingOverwrite       = "scrape.overwrite"
 
 	settingTranslateTitle   = "scrape.translate.title"
 	settingTranslateSummary = "scrape.translate.summary"
@@ -77,6 +79,8 @@ func (a *App) scrapeConfig() scraper.Config {
 	cfg.TimeoutSeconds = settingInt(values, settingTimeout, cfg.TimeoutSeconds)
 	cfg.Concurrency = settingInt(values, settingConcurrency, cfg.Concurrency)
 	cfg.DownloadImages = settingBool(values, settingDownloadImages, cfg.DownloadImages)
+	cfg.DownloadStills = settingBool(values, settingDownloadStills, cfg.DownloadStills)
+	cfg.DownloadTrailer = settingBool(values, settingDownloadTrailer, cfg.DownloadTrailer)
 	cfg.ImageQuality = settingInt(values, settingImageQuality, cfg.ImageQuality)
 	cfg.Overwrite = settingBool(values, settingOverwrite, cfg.Overwrite)
 	// 头像目录统一走 a.avatarsDir()：详情接口与头像任务必须落在同一个目录，
@@ -116,6 +120,8 @@ func (a *App) adminScrapeSettings(c *gin.Context) {
 		"timeout_seconds":   cfg.TimeoutSeconds,
 		"concurrency":       cfg.Concurrency,
 		"download_images":   cfg.DownloadImages,
+		"download_stills":   cfg.DownloadStills,
+		"download_trailer":  cfg.DownloadTrailer,
 		"image_quality":     cfg.ImageQuality,
 		"avatars_dir":       cfg.AvatarsDir,
 		"actor_storage_dir": cfg.ActorsDir,
@@ -146,15 +152,17 @@ type scrapeSettingsRequest struct {
 		BaseURL      *string `json:"base_url"`
 		RefreshHours *int    `json:"refresh_hours"`
 	} `json:"gfriends"`
-	MetatubeURL    *string `json:"metatube_url"`
-	MetatubeToken  *string `json:"metatube_token"`
-	TimeoutSeconds *int    `json:"timeout_seconds"`
-	Concurrency    *int    `json:"concurrency"`
-	DownloadImages *bool   `json:"download_images"`
-	ImageQuality   *int    `json:"image_quality"`
-	AvatarsDir     *string `json:"avatars_dir"`
-	Overwrite      *bool   `json:"overwrite"`
-	Translate      *struct {
+	MetatubeURL     *string `json:"metatube_url"`
+	MetatubeToken   *string `json:"metatube_token"`
+	TimeoutSeconds  *int    `json:"timeout_seconds"`
+	Concurrency     *int    `json:"concurrency"`
+	DownloadImages  *bool   `json:"download_images"`
+	DownloadStills  *bool   `json:"download_stills"`
+	DownloadTrailer *bool   `json:"download_trailer"`
+	ImageQuality    *int    `json:"image_quality"`
+	AvatarsDir      *string `json:"avatars_dir"`
+	Overwrite       *bool   `json:"overwrite"`
+	Translate       *struct {
 		Title          *bool   `json:"title"`
 		Summary        *bool   `json:"summary"`
 		TargetLang     *string `json:"target_lang"`
@@ -238,6 +246,8 @@ func (a *App) adminSaveScrapeSettings(c *gin.Context) {
 		return
 	}
 	putBool(settingDownloadImages, req.DownloadImages)
+	putBool(settingDownloadStills, req.DownloadStills)
+	putBool(settingDownloadTrailer, req.DownloadTrailer)
 	putBool(settingOverwrite, req.Overwrite)
 
 	if tr := req.Translate; tr != nil {

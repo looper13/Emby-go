@@ -38,6 +38,7 @@ type ItemResult struct {
 	Provider string
 	Number   string
 	Images   []string
+	Warnings []string
 	// Fatal 标记这次失败是否属于环境性故障（MetaTube 不可达/鉴权失败）。
 	// 只有它累加连续失败计数并参与熔断：源站元数据不全这类单条数据问题一批里可能
 	// 连续出现，算进去会把整批任务误判为「MetaTube 挂了」而中止（见 runMovies）。
@@ -71,7 +72,7 @@ type RunOptions struct {
 // 单部的失败记在 ItemResult 里，不影响其余影片。
 func (s *Scraper) Run(ctx context.Context, opts RunOptions) (Progress, error) {
 	if !s.cfg.Configured() {
-		return Progress{}, errors.New("未配置 MetaTube 地址或 token")
+		return Progress{}, errors.New("未配置 MetaTube 地址")
 	}
 	if s.store == nil {
 		return Progress{}, errors.New("缺少存储，无法读取刮削候选")
@@ -86,7 +87,7 @@ func (s *Scraper) Run(ctx context.Context, opts RunOptions) (Progress, error) {
 // RunMovies 对给定影片列表执行刮削（单条手动路径复用同一套并发与熔断逻辑）。
 func (s *Scraper) RunMovies(ctx context.Context, movies []store.Movie, opts RunOptions) (Progress, error) {
 	if !s.cfg.Configured() {
-		return Progress{}, errors.New("未配置 MetaTube 地址或 token")
+		return Progress{}, errors.New("未配置 MetaTube 地址")
 	}
 	return s.runMovies(ctx, movies, opts)
 }
@@ -107,6 +108,10 @@ func (s *Scraper) runMovies(ctx context.Context, movies []store.Movie, opts RunO
 		switch result.Status {
 		case StatusSuccess:
 			progress.Success++
+			if len(result.Warnings) > 0 {
+				progress.Partial++
+				progress.DownloadFailed++
+			}
 			progress.Consecutive = 0
 		case StatusSkipped:
 			progress.Skipped++
@@ -207,6 +212,8 @@ func (s *Scraper) scrapeOne(ctx context.Context, movie store.Movie, opts RunOpti
 		Provider: chosen.Provider, ID: chosen.ID, Overwrite: opts.Overwrite, Refresh: opts.RefreshPerMovie,
 	})
 	result.Images = applied.Images
+	result.Warnings = applied.ImageWarn
+	result.Reason = strings.Join(applied.ImageWarn, "; ")
 	if err != nil {
 		return s.recordFailure(movie, result, err, "写入失败")
 	}

@@ -1,6 +1,7 @@
 package metatube
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,43 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPublicMediaDownloadLimitsAndCredentials(t *testing.T) {
+	for _, chunked := range []bool{false, true} {
+		t.Run(fmt.Sprint(chunked), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "" {
+					t.Error("MetaTube token leaked to public source")
+				}
+				if chunked {
+					w.(http.Flusher).Flush()
+				}
+				w.Write([]byte("123456789"))
+			}))
+			defer ts.Close()
+			client := New(ts.URL, "private-token", time.Second)
+			var dst bytes.Buffer
+			_, err := client.DownloadTo(context.Background(), ts.URL, &dst, 5, time.Second)
+			if err == nil || dst.Len() > 6 {
+				t.Fatalf("size bound not enforced: n=%d err=%v", dst.Len(), err)
+			}
+			if _, err := client.Download(context.Background(), ts.URL, 5); err == nil {
+				t.Fatal("byte download silently truncated")
+			}
+		})
+	}
+}
+
+func TestDMMMediaHeaders(t *testing.T) {
+	for _, host := range []string{"dmm.co.jp", "awsimgsrc.dmm.co.jp", "cc3001.dmm.co.jp", "dmm.com", "example.org", "dmm.co.jp.example.org"} {
+		req, _ := http.NewRequest("GET", "https://"+host+"/media", nil)
+		setMediaHeaders(req)
+		want := host != "example.org" && host != "dmm.co.jp.example.org"
+		if (req.Header.Get("Referer") != "") != want {
+			t.Fatalf("incorrect DMM referer for %s", host)
+		}
+	}
+}
 
 // newTestServer 起一个假 MetaTube 后端，记录收到的请求以便断言鉴权与查询参数。
 func newTestServer(t *testing.T, handler func(w http.ResponseWriter, r *http.Request)) (*Client, *[]*http.Request) {

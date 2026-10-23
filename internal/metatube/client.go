@@ -12,6 +12,7 @@
 package metatube
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,27 +67,30 @@ type MovieSearchResult struct {
 	ReleaseDate string   `json:"release_date"`
 }
 
-// MovieInfo 影片详情（MetaTube 的 MovieInfo 子集，只保留写 NFO 需要的字段）。
+// MovieInfo contains the metadata and downloadable media returned by MetaTube.
 type MovieInfo struct {
-	ID          string   `json:"id"`
-	Number      string   `json:"number"`
-	Title       string   `json:"title"`
-	Summary     string   `json:"summary"`
-	Provider    string   `json:"provider"`
-	Homepage    string   `json:"homepage"`
-	Director    string   `json:"director"`
-	Actors      []string `json:"actors"`
-	ThumbURL    string   `json:"thumb_url"`
-	BigThumbURL string   `json:"big_thumb_url"`
-	CoverURL    string   `json:"cover_url"`
-	BigCoverURL string   `json:"big_cover_url"`
-	Maker       string   `json:"maker"`
-	Label       string   `json:"label"`
-	Series      string   `json:"series"`
-	Genres      []string `json:"genres"`
-	Score       float64  `json:"score"`
-	Runtime     int      `json:"runtime"`
-	ReleaseDate string   `json:"release_date"`
+	ID                 string   `json:"id"`
+	Number             string   `json:"number"`
+	Title              string   `json:"title"`
+	Summary            string   `json:"summary"`
+	Provider           string   `json:"provider"`
+	Homepage           string   `json:"homepage"`
+	Director           string   `json:"director"`
+	Actors             []string `json:"actors"`
+	ThumbURL           string   `json:"thumb_url"`
+	BigThumbURL        string   `json:"big_thumb_url"`
+	CoverURL           string   `json:"cover_url"`
+	BigCoverURL        string   `json:"big_cover_url"`
+	PreviewImages      []string `json:"preview_images"`
+	PreviewVideoURL    string   `json:"preview_video_url"`
+	PreviewVideoHLSURL string   `json:"preview_video_hls_url"`
+	Maker              string   `json:"maker"`
+	Label              string   `json:"label"`
+	Series             string   `json:"series"`
+	Genres             []string `json:"genres"`
+	Score              float64  `json:"score"`
+	Runtime            int      `json:"runtime"`
+	ReleaseDate        string   `json:"release_date"`
 }
 
 // ActorSearchResult 演员搜索结果（Images 首张即头像）。
@@ -213,24 +217,60 @@ func (c *Client) ImageURL(kind, provider, id string, quality int, remoteURL, bad
 
 // Download 拉取任意绝对 URL（用于下载图片）。limit 为读取上限，<=0 时不限。
 func (c *Client) Download(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	var out bytes.Buffer
+	_, err := c.DownloadTo(ctx, rawURL, &out, limit, c.http.Timeout)
+	return out.Bytes(), err
+}
+
+// DownloadTo streams public media without forwarding the MetaTube token.
+func (c *Client) DownloadTo(ctx context.Context, rawURL string, dst io.Writer, limit int64, timeout time.Duration) (int64, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return 0, errors.New("无效媒体下载地址")
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	response, err := c.http.Do(request)
+	setMediaHeaders(request)
+	client := &http.Client{Transport: c.http.Transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("媒体下载重定向过多")
+		}
+		req.Header.Del("Referer")
+		setMediaHeaders(req)
+		return nil
+	}}
+	response, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, &APIError{StatusCode: response.StatusCode, Code: response.StatusCode,
-			Message: "下载图片失败: " + response.Status}
+		return 0, &APIError{StatusCode: response.StatusCode, Code: response.StatusCode,
+			Message: "下载媒体失败: " + response.Status}
+	}
+	if limit > 0 && response.ContentLength > limit {
+		return 0, errors.New("媒体文件超过下载大小上限")
 	}
 	reader := io.Reader(response.Body)
 	if limit > 0 {
-		reader = io.LimitReader(response.Body, limit)
+		reader = io.LimitReader(response.Body, limit+1)
 	}
-	return io.ReadAll(reader)
+	n, err := io.Copy(dst, reader)
+	if err == nil && limit > 0 && n > limit {
+		err = errors.New("媒体文件超过下载大小上限")
+	}
+	return n, err
+}
+
+func setMediaHeaders(req *http.Request) {
+	host := strings.ToLower(req.URL.Hostname())
+	if host == "dmm.co.jp" || strings.HasSuffix(host, ".dmm.co.jp") || host == "dmm.com" || strings.HasSuffix(host, ".dmm.com") {
+		req.Header.Set("Referer", "https://www.dmm.co.jp/")
+	}
 }
 
 // Health 探测后端是否可达（GET / 返回应用信息，无需鉴权）。

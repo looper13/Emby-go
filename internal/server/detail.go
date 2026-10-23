@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"emby-go/internal/mediaassets"
 	"emby-go/internal/store"
 )
 
@@ -51,6 +52,9 @@ func (a *App) adminItemDetail(c *gin.Context) {
 	}
 
 	movie = a.movieArtwork(movie)
+	if mediaassets.LocalTrailer(movie.SourcePath, movie.OutputDir) != "" {
+		movie.TrailerURL = "/Videos/" + strconv.FormatInt(movie.ID, 10) + "/trailer.mp4"
+	}
 	movie, playable := currentMovieSource(movie, movie.SourcePath)
 	paths := append([]string{movie.SourcePath}, movie.AdditionalParts...)
 	files := make([]detailFile, 0, len(paths))

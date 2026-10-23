@@ -225,7 +225,7 @@ func (a *App) adminScrapeRun(c *gin.Context) {
 	}
 	cfg := a.scrapeConfig()
 	if !cfg.Configured() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址或 token"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址"})
 		return
 	}
 	if req.Overwrite != nil {
@@ -273,7 +273,7 @@ func (a *App) executeScrape(cfg scraper.Config, opts scraper.RunOptions) (err er
 		if len(item.Images) > 0 {
 			a.invalidateImageTag(item.Images...)
 		}
-		if item.Status != scraper.StatusSuccess {
+		if item.Status != scraper.StatusSuccess || len(item.Warnings) > 0 {
 			a.addScrapeFailure(displayItem(item))
 		}
 	}
@@ -468,7 +468,7 @@ func (a *App) adminScrapePreview(c *gin.Context) {
 	}
 	cfg := a.scrapeConfig()
 	if !cfg.Configured() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址或 token"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址"})
 		return
 	}
 	ctx, cancel := a.requestContext(c)
@@ -497,7 +497,7 @@ func (a *App) adminScrapeInspect(c *gin.Context) {
 	}
 	cfg := a.scrapeConfig()
 	if !cfg.Configured() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址或 token"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址"})
 		return
 	}
 	ctx, cancel := a.requestContext(c)
@@ -532,7 +532,7 @@ func (a *App) adminScrapeConfirm(c *gin.Context) {
 	}
 	cfg := a.scrapeConfig()
 	if !cfg.Configured() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址或 token"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置 MetaTube 地址"})
 		return
 	}
 	overwrite := cfg.Overwrite
@@ -560,6 +560,7 @@ func (a *App) adminScrapeConfirm(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "success", "provider": result.Provider, "number": result.Number,
 		"title": result.Title, "images": result.ImageCount, "warnings": result.ImageWarn,
+		"trailer_downloaded": result.TrailerPath != "",
 	})
 }
 

@@ -268,6 +268,13 @@ func FindMovieImages(source, directory string, exists func(string) bool) ImagePa
 // MovieImageSource returns the source stem for an image created by this service.
 func MovieImageSource(path string) (string, bool) {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	// Numbered stills also belong to one source, never to every movie in a shared directory.
+	if cut := strings.LastIndex(strings.ToLower(base), "-fanart"); cut > 0 {
+		number := base[cut+len("-fanart"):]
+		if number != "" && strings.Trim(number, "0123456789") == "" {
+			return filepath.Join(filepath.Dir(path), base[:cut]), true
+		}
+	}
 	for _, kind := range []string{"poster", "cover", "default", "movie", "fanart", "thumb", "landscape"} {
 		suffix := "-" + kind
 		if strings.HasSuffix(strings.ToLower(base), suffix) && len(base) > len(suffix) {

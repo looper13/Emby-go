@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +35,34 @@ func TestEmbyLocalArtworkNamesAndOrder(t *testing.T) {
 	images = FindMovieImages(filepath.Join(root, "Movie.strm"), root, imageExists)
 	if images.Poster != filepath.Join(root, "Movie-cover.jpg") || images.Landscape != filepath.Join(root, "Movie-thumb.tbn") || len(images.Backdrops) != 4 || filepath.Base(images.Backdrops[0]) != "Movie-fanart.webp" {
 		t.Fatalf("source art priority or extrafanart lost: %+v", images)
+	}
+}
+
+func TestMovieNumberedStillsAreOrderedAndIsolated(t *testing.T) {
+	root := t.TempDir()
+	names := []string{"Movie-fanart.webp", "Movie-fanart10.webp", "Movie-fanart2.webp", "Movie-fanart1.webp", "Other-fanart1.webp", "Movie-CD1-fanart1.webp"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	images := FindMovieImages(filepath.Join(root, "Movie.strm"), root, imageExists)
+	want := []string{"Movie-fanart.webp", "Movie-fanart1.webp", "Movie-fanart2.webp", "Movie-fanart10.webp"}
+	for i := range want {
+		want[i] = filepath.Join(root, want[i])
+	}
+	if !reflect.DeepEqual(images.Backdrops, want) {
+		t.Fatalf("wrong source stills or order: %+v", images.Backdrops)
+	}
+	for _, name := range names {
+		path := filepath.Join(root, name)
+		if !IsLocalArtwork(path) {
+			t.Fatalf("watcher does not recognize %s", name)
+		}
+		source, ok := MovieImageSource(path)
+		expected := filepath.Join(root, name[:strings.LastIndex(name, "-fanart")])
+		if !ok || source != expected {
+			t.Fatalf("wrong watcher source for %s: %s", name, source)
+		}
 	}
 }
