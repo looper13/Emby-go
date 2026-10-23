@@ -101,6 +101,13 @@ func (a *App) requireAuth(c *gin.Context) {
 	c.Next()
 }
 
+// Public media URLs may omit credentials; when a valid token is present, keep
+// its user context so library access still applies to that account.
+func (a *App) optionalAuth(c *gin.Context) {
+	a.authOK(c)
+	c.Next()
+}
+
 func (a *App) authStatus(c *gin.Context) {
 	initialized, err := a.db.HasAdministrator()
 	if err != nil {

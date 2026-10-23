@@ -447,8 +447,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Items/:id", true, a.item},
 		{"GET", "/Items/:id/Collections", true, a.itemCollections},
 		{"GET", "/Users/:uid/Items/:id/Collections", true, a.itemCollections},
-		{"GET", "/Items/:id/Images/:kind", true, a.image},
-		{"GET", "/Items/:id/Images/:kind/:index", true, a.image},
+		{"GET", "/Items/:id/Images/:kind", false, a.image},
+		{"GET", "/Items/:id/Images/:kind/:index", false, a.image},
 		{"GET", "/Items/:id/Images", true, a.imageInfo},
 		{"GET", "/Items/:id/ThumbnailSet", true, a.thumbnailSet},
 		{"GET", "/Items/:id/Similar", true, a.similar},
@@ -504,6 +504,8 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 		}
 		if route.auth {
 			handlers = append(handlers, a.requireAuth)
+		} else if strings.Contains(route.path, "/Images/:kind") {
+			handlers = append(handlers, a.optionalAuth)
 		}
 		if !strings.Contains(route.path, "/Authenticate") && !strings.Contains(route.path, "/Subtitles/") && route.path != "/Users/:uid/Policy" && route.path != "/Users/:uid" {
 			handlers = append(handlers, a.requireLibraryAccess)
@@ -514,7 +516,7 @@ func (a *App) registerEmby(g *gin.RouterGroup) {
 			g.Handle(route.method, lower, handlers...)
 		}
 	}
-	streams := g.Group("", a.requireAuth, a.requireLibraryAccess)
+	streams := g.Group("", a.optionalAuth, a.requireLibraryAccess)
 	registerStreamRoutes(streams, a.bind((*App).stream))
 	registerProxyRoutes(streams, a.bind((*App).proxyStream))
 	registerTrailerRoutes(streams, a.bind((*App).trailer))

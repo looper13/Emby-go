@@ -298,8 +298,11 @@ func TestAccountDeniedMediaAndCookie(t *testing.T) {
 	}
 	sid := strconv.FormatInt(id, 10)
 	imagePath := "/Items/" + sid + "/Images/Primary"
-	if w := accountRequest(a, "GET", imagePath, "", ""); w.Code != 401 {
+	if w := accountRequest(a, "GET", imagePath, "", ""); w.Code != 200 {
 		t.Fatal(w.Code)
+	}
+	if w := accountRequest(a, "GET", "/Videos/"+sid+"/stream", "", ""); w.Code != http.StatusFound || w.Header().Get("Location") != "https://media.test/private.mp4" {
+		t.Fatalf("anonymous stream: %d %s", w.Code, w.Header().Get("Location"))
 	}
 	r := httptest.NewRequest("GET", imagePath, nil)
 	r.AddCookie(cookies[0])
