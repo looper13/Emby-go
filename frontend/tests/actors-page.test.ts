@@ -28,7 +28,7 @@ describe('actor management', () => {
     expect(() => parseActors({...inventory,stats:{total:1,ready:0,missing:-1}})).toThrow();
   });
   it('saves only the fields owned by each page, preserving the other page settings', async () => {
-    for (const [component, keys] of [[ActorSettingsForm,['avatar_source','avatars_dir','gfriends']], [ScrapeSettingsForm,['metatube_url','metatube_token','timeout_seconds','concurrency','image_quality','download_images','overwrite','translate']]] as const) {
+    for (const [component, keys] of [[ActorSettingsForm,['avatar_source','avatars_dir','gfriends']], [ScrapeSettingsForm,['metatube_url','metatube_token','timeout_seconds','concurrency','image_quality','download_images','download_stills','download_trailer','overwrite','translate']]] as const) {
       const w=mount(component as typeof ActorSettingsForm,{props:{settings,saving:false,testing:new Set<string>()},global:{stubs:{RouterLink:true}}});
       await w.get('form').trigger('submit');
       expect(Object.keys(w.emitted('save')![0]![0] as object).sort()).toEqual([...keys].sort()); w.unmount();

@@ -13,3 +13,4 @@ created: 2026-10-23
 - 实测：`http://192.168.1.4:8080`、空 Token、`ALDN-001` 精确命中 FANZA/aldn00001；完整下载 20 张剧照和 42,783,977 字节 MP4，ffprobe 识别 H.264/AAC、720×404、114.948104 秒，重复只补缺失没有再次下载。样本保存在忽略目录 `.work-cache/metatube-aldn-001/`，没有写现有媒体库。
 - 网络边界：本机直连 DMM 最初出现连接重置，设置 `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:7890`、内网地址加入 `NO_PROXY` 后完整实测通过；未把代理或该 MetaTube 地址硬编码为默认配置。仅 HLS 的预告片继续代理在线播放，本期不合并 HLS 分片；未部署到现有服务，未做原生 Emby 客户端或完整人工播放验收。
 - codestable：没有 spec/epic 需同步；README 已更新。
+- 后续回归修复：`frontend/tests/actors-page.test.ts` 的页面字段归属断言遗漏新增的 `download_stills` / `download_trailer`，已更新影片刮削页的明确预期名单，保留演员页与影片页互不提交对方字段的检查。完整前端单测 28 个文件、290 项全部通过，`npm run typecheck` 通过。
