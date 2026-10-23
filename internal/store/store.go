@@ -50,16 +50,15 @@ type storeState struct {
 }
 
 type Library struct {
-	ID           int64  `json:"Id"`
-	Name         string `json:"Name"`
-	Path         string `json:"Path"`
-	Type         string `json:"Type"`
-	Enabled      bool   `json:"Enabled"`
-	ProxyEnabled bool   `json:"ProxyEnabled"`
-	SourceIP     string `json:"SourceIP"`
-	TargetIP     string `json:"TargetIP"`
-	SourceType   string `json:"SourceType"`
-	Revision     int64  `json:"Revision"`
+	ID               int64  `json:"Id"`
+	Name             string `json:"Name"`
+	Path             string `json:"Path"`
+	Type             string `json:"Type"`
+	Enabled          bool   `json:"Enabled"`
+	ProxyEnabled     bool   `json:"ProxyEnabled"`
+	ResolveRedirects bool   `json:"ResolveRedirects"`
+	SourceType       string `json:"SourceType"`
+	Revision         int64  `json:"Revision"`
 }
 
 type Movie struct {
@@ -263,7 +262,7 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) init() error {
 	_, err := s.db.Exec(`PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
-CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL CHECK(length(trim(path))>0), type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type='nfo_directory'), revision INTEGER NOT NULL DEFAULT 1, proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1)), source_ip TEXT NOT NULL DEFAULT '', target_ip TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL CHECK(length(trim(path))>0), type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type='nfo_directory'), revision INTEGER NOT NULL DEFAULT 1, proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1)), resolve_redirects INTEGER NOT NULL DEFAULT 0 CHECK(resolve_redirects IN (0,1)));
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, library_id INTEGER NOT NULL, source_path TEXT UNIQUE NOT NULL, file_size INTEGER DEFAULT 0, file_mtime TEXT, source_protocol TEXT, source_container TEXT, number TEXT, status TEXT NOT NULL, nfo_path TEXT, output_dir TEXT, title TEXT, original_title TEXT, plot TEXT, year INTEGER, premiered TEXT, rating REAL, director TEXT, series TEXT, maker TEXT, label TEXT, collection TEXT, official_rating TEXT, sortname TEXT, taglines TEXT, provider_id TEXT, genres TEXT, tags TEXT, studios TEXT, poster_path TEXT, backdrop_path TEXT, landscape_path TEXT, runtime_seconds INTEGER DEFAULT 0, additional_parts TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(library_id) REFERENCES libraries(id));
 CREATE TABLE IF NOT EXISTS userdata (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, position_ticks INTEGER DEFAULT 0, play_count INTEGER DEFAULT 0, played INTEGER DEFAULT 0, last_played_at TEXT, last_stopped_ticks INTEGER DEFAULT -1, is_favorite INTEGER NOT NULL DEFAULT 0, likes INTEGER NOT NULL DEFAULT 0, hide_from_resume INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS item_favorites (item_id TEXT PRIMARY KEY NOT NULL);
@@ -401,22 +400,17 @@ func (s *Store) AddLibrary(name, path string, contentType ...string) (Library, e
 }
 
 func (s *Store) AddLibraryWithProxy(name, path string, proxyEnabled bool, contentType ...string) (Library, error) {
-	var sourceIP, targetIP string
-	if err := s.db.QueryRow("SELECT COALESCE(source_ip,''),COALESCE(target_ip,'') FROM libraries WHERE path=?", strings.TrimSpace(path)).Scan(&sourceIP, &targetIP); err != nil && err != sql.ErrNoRows {
+	var resolveRedirects bool
+	if err := s.db.QueryRow("SELECT resolve_redirects FROM libraries WHERE path=?", strings.TrimSpace(path)).Scan(&resolveRedirects); err != nil && err != sql.ErrNoRows {
 		return Library{}, err
 	}
-	return s.AddLibraryWithSettings(name, path, proxyEnabled, sourceIP, targetIP, contentType...)
+	return s.AddLibraryWithPlaybackSettings(name, path, proxyEnabled, resolveRedirects, contentType...)
 }
 
-func (s *Store) AddLibraryWithSettings(name, path string, proxyEnabled bool, sourceIP, targetIP string, contentType ...string) (Library, error) {
+func (s *Store) AddLibraryWithPlaybackSettings(name, path string, proxyEnabled, resolveRedirects bool, contentType ...string) (Library, error) {
 	name, path = strings.TrimSpace(name), strings.TrimSpace(path)
 	if name == "" || path == "" {
 		return Library{}, errors.New("媒体库名称和路径不能为空")
-	}
-	var err error
-	sourceIP, targetIP, err = NormalizeIPRewrite(sourceIP, targetIP)
-	if err != nil {
-		return Library{}, err
 	}
 	typ := LibraryMovies
 	if len(contentType) > 0 {
@@ -434,7 +428,7 @@ func (s *Store) AddLibraryWithSettings(name, path string, proxyEnabled bool, sou
 		}
 	}
 	var id int64
-	err = s.db.QueryRow("INSERT INTO libraries(name,path,type,proxy_enabled,source_ip,target_ip) VALUES(?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,proxy_enabled=excluded.proxy_enabled,source_ip=excluded.source_ip,target_ip=excluded.target_ip,revision=libraries.revision+1 RETURNING id", name, path, typ, proxyEnabled, sourceIP, targetIP).Scan(&id)
+	err := s.db.QueryRow("INSERT INTO libraries(name,path,type,proxy_enabled,resolve_redirects) VALUES(?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,proxy_enabled=excluded.proxy_enabled,resolve_redirects=excluded.resolve_redirects,revision=libraries.revision+1 RETURNING id", name, path, typ, proxyEnabled, resolveRedirects).Scan(&id)
 	if err != nil {
 		return Library{}, err
 	}

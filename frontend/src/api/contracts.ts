@@ -21,7 +21,7 @@ export interface LoginDto {
 }
 
 export type LibraryContentType = 'movies' | 'tvshows' | 'mixed';
-export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory'; Enabled?: boolean; ProxyEnabled?: boolean; SourceIP?: string; TargetIP?: string; Revision?: number; Type?: LibraryContentType | '' }
+export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory'; Enabled?: boolean; ProxyEnabled?: boolean; ResolveRedirects?: boolean; Revision?: number; Type?: LibraryContentType | '' }
 export interface LibrariesDto { items: LibraryDto[] | null; total: number }
 export interface StatusDto { success: number; manual: number; pending: number; incompatible: number }
 
@@ -170,8 +170,7 @@ export function parseLibraries(value: unknown): LibrariesDto {
     if (item.SourceType !== undefined) { if (item.SourceType !== 'nfo_directory') return invalidDto(); library.SourceType = item.SourceType; }
     if (item.Enabled !== undefined) { if (typeof item.Enabled !== 'boolean') return invalidDto(); library.Enabled = item.Enabled; }
     if (item.ProxyEnabled !== undefined) { if (typeof item.ProxyEnabled !== 'boolean') return invalidDto(); library.ProxyEnabled = item.ProxyEnabled; }
-    if (item.SourceIP !== undefined) { if (typeof item.SourceIP !== 'string') return invalidDto(); library.SourceIP = item.SourceIP; }
-    if (item.TargetIP !== undefined) { if (typeof item.TargetIP !== 'string') return invalidDto(); library.TargetIP = item.TargetIP; }
+    if (item.ResolveRedirects !== undefined) { if (typeof item.ResolveRedirects !== 'boolean') return invalidDto(); library.ResolveRedirects = item.ResolveRedirects; }
     if (item.Revision !== undefined) { if (!isCount(item.Revision)) return invalidDto(); library.Revision = item.Revision; }
     if (item.Type !== undefined) { if (!['movies', 'tvshows', 'mixed', ''].includes(String(item.Type))) return invalidDto(); library.Type = item.Type as LibraryDto['Type']; }
     return library;

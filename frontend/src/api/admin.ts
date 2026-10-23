@@ -53,11 +53,11 @@ const read = (path: string, signal?: AbortSignal) => apiClient.request(`/api/adm
 const write = (path: string, method: string, json?: unknown) => apiClient.request(`/api/admin/${path}`, { auth: 'required', method, json });
 export const adminApi = {
   libraries: async (signal?: AbortSignal) => parseLibraries(await read('libraries', signal)),
-  async createLibrary(payload: { Name: string; Path: string; Type?: LibraryContentType; ProxyEnabled?: boolean; SourceIP?: string; TargetIP?: string }): Promise<LibraryDto> {
+  async createLibrary(payload: { Name: string; Path: string; Type?: LibraryContentType; ProxyEnabled?: boolean; ResolveRedirects?: boolean; }): Promise<LibraryDto> {
     const result = await write('libraries', 'POST', payload);
     return parseLibraries({ items: [result], total: 1 }).items![0]!;
   },
-  async updateLibrary(id: number, payload: { ProxyEnabled: boolean; SourceIP: string; TargetIP: string; Revision: number }): Promise<LibraryDto> {
+  async updateLibrary(id: number, payload: { ProxyEnabled: boolean; ResolveRedirects?: boolean; Revision: number }): Promise<LibraryDto> {
     const result = await write(`libraries/${id}`, 'PUT', payload);
     return parseLibraries({ items: [result], total: 1 }).items![0]!;
   },

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// migrateDirectoryLibraries 只补齐普通媒体库字段，旧动漫结构由用户手动清理。
+// migrateDirectoryLibraries 升级普通媒体库字段，旧动漫结构由用户手动清理。
 func (s *Store) migrateDirectoryLibraries() error {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
@@ -54,12 +54,18 @@ func (s *Store) migrateDirectoryLibraries() error {
 		{"source_type", "TEXT NOT NULL DEFAULT 'nfo_directory'"},
 		{"revision", "INTEGER NOT NULL DEFAULT 1"},
 		{"proxy_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1))"},
-		{"source_ip", "TEXT NOT NULL DEFAULT ''"},
-		{"target_ip", "TEXT NOT NULL DEFAULT ''"},
+		{"resolve_redirects", "INTEGER NOT NULL DEFAULT 0 CHECK(resolve_redirects IN (0,1))"},
 	} {
 		if !columns[column.name] {
 			if _, err = tx.ExecContext(ctx, "ALTER TABLE libraries ADD COLUMN "+column.name+" "+column.definition); err != nil {
 				return err
+			}
+		}
+	}
+	for _, column := range []string{"source_ip", "target_ip"} {
+		if columns[column] {
+			if _, err = tx.ExecContext(ctx, "ALTER TABLE libraries DROP COLUMN "+column); err != nil {
+				return fmt.Errorf("remove retired library column %s: %w", column, err)
 			}
 		}
 	}

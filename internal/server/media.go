@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -412,7 +411,15 @@ func (a *App) playback(c *gin.Context) {
 	source := a.mediaSourceWithURL(movie, id, sourcePath, raw, c)
 	// Native players cannot use the browser session cookie. This is the same
 	// authorized HTTP source exposed by /stream, without our account token.
-	source["ExternalStreamUrl"] = raw
+	externalRaw := raw
+	if library, err := a.db.Library(movie.LibraryID); err == nil {
+		externalRaw, err = libraryPlaybackURL(c, raw, library)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	source["ExternalStreamUrl"] = externalRaw
 	defaultAudio := source["DefaultAudioStreamIndex"]
 	explicitAudio := false
 	var selection struct {
@@ -1082,7 +1089,11 @@ func (a *App) stream(c *gin.Context) {
 		a.proxyStream(c)
 		return
 	} else if err == nil {
-		raw = rewriteLibrarySourceIP(raw, library)
+		raw, err = libraryPlaybackURL(c, raw, library)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	if c.Request.Method == http.MethodHead {
 		c.Header("Location", raw)
@@ -1116,25 +1127,6 @@ func (a *App) trailer(c *gin.Context) {
 	a.proxyRemote(c, raw)
 }
 
-func rewriteLibrarySourceIP(raw string, library store.Library) string {
-	sourceIP, targetIP := net.ParseIP(library.SourceIP), net.ParseIP(library.TargetIP)
-	if sourceIP == nil || targetIP == nil {
-		return raw
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || !sourceIP.Equal(net.ParseIP(parsed.Hostname())) {
-		return raw
-	}
-	if port := parsed.Port(); port != "" {
-		parsed.Host = net.JoinHostPort(targetIP.String(), port)
-	} else if strings.Contains(targetIP.String(), ":") {
-		parsed.Host = "[" + targetIP.String() + "]"
-	} else {
-		parsed.Host = targetIP.String()
-	}
-	return parsed.String()
-}
-
 // proxyStream 代理真实媒体地址：透传 Range/状态码/关键响应头。
 // 它既服务网页播放器的回退地址，也服务开启媒体库播放代理后的 /stream。
 func (a *App) proxyStream(c *gin.Context) {
@@ -1151,9 +1143,6 @@ func (a *App) proxyStream(c *gin.Context) {
 	if !scanner.ValidHTTP(raw) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported source"})
 		return
-	}
-	if library, err := a.db.Library(movie.LibraryID); err == nil {
-		raw = rewriteLibrarySourceIP(raw, library)
 	}
 	a.proxyRemote(c, raw)
 }
