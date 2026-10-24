@@ -4,6 +4,7 @@ import { Search } from '@lucide/vue';
 import type { LibraryDto } from '../../api/contracts';
 import { duplicatesApi, type DuplicateGroups, type DuplicateMembers, type DuplicateGroup, type DuplicateMovie } from '../../api/duplicates';
 import DuplicateDeleteDialog from './DuplicateDeleteDialog.vue';
+import DuplicateStrmContents from './DuplicateStrmContents.vue';
 import { usePageRequest } from '../../composables/usePageRequest';
 
 const props = defineProps<{ libraries: LibraryDto[] }>();
@@ -46,7 +47,7 @@ defineExpose({ scan });
       <div class="field"><label for="duplicate-library">查重范围</label><select id="duplicate-library" v-model.number="library" @change="reset"><option :value="0">全部媒体库（含跨库重复）</option><option v-for="lib in libraries" :key="lib.Id" :value="lib.Id">{{ lib.Name }}</option></select></div>
       <button id="duplicate-start" class="btn btn-accent" :disabled="loading || !libraries.length"><Search :size="16" aria-hidden="true" />{{ loading ? '正在查重…' : '开始查重' }}</button>
     </form>
-    <p class="hint">使用当前已入库番号，忽略大小写、空格和 - _ . 分隔差异；保留前导零及版本后缀。空番号和电视节目不参与，CD 分段算一部。磁盘有变化时，请先增量扫描；查重不会修改文件。展开分组可删除多余副本，删除前会显示远程与本地路径。</p>
+    <p class="hint">使用当前已入库番号，忽略大小写、空格和 - _ . 分隔差异；保留前导零及版本后缀。空番号和电视节目不参与，CD 分段算一部。磁盘有变化时，请先增量扫描；查重不会修改文件。“查看位置”会自动读取主 STRM 和分段内容，不访问远程链接。展开分组可删除多余副本，删除前会显示远程与本地路径。</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <p v-if="error" class="auth-error" role="alert">{{ error }} <button class="btn btn-sm" @click="loadGroups(retryOffset)">重试</button></p>
     <p v-if="loading" role="status">正在统计所选范围内的重复番号…</p>
@@ -63,8 +64,7 @@ defineExpose({ scan });
             <article v-for="movie in members.items" :key="movie.id" class="duplicate-movie">
               <div class="duplicate-movie-head"><RouterLink :to="`/item/${movie.id}`">{{ movie.title || movie.number }}</RouterLink><span class="hint">{{ statusLabel(movie.status) }}</span><button class="btn btn-sm danger" :data-duplicate-delete="movie.id" :disabled="!!deletingMovie || loading || memberLoading || members.total < 2" @click="deleteMovie(movie, group)">删除此副本</button></div>
               <p class="duplicate-location"><span>{{ movie.library_name }}</span><span class="mono">{{ movie.number }}</span></p>
-              <p class="mono duplicate-path" data-private-path>{{ movie.source_path }}</p>
-              <p v-for="part in movie.additional_parts" :key="part" class="mono duplicate-path" data-private-path>分段：{{ part }}</p>
+              <DuplicateStrmContents :movie="movie" :library-id="library" :group-key="group.key" />
             </article>
             <div v-if="members.total > memberLimit" class="duplicate-pagination"><button class="btn btn-sm" :disabled="memberLoading || !memberOffset" @click="openGroup(group, memberOffset - memberLimit)">上一页影片</button><span>{{ memberOffset + 1 }}–{{ Math.min(memberOffset + memberLimit, members.total) }} / {{ members.total }}</span><button class="btn btn-sm" :disabled="memberLoading || memberOffset + memberLimit >= members.total" @click="openGroup(group, memberOffset + memberLimit)">下一页影片</button></div>
           </template>
@@ -72,7 +72,7 @@ defineExpose({ scan });
       </div>
       <div v-if="groups.total > groupLimit" class="duplicate-pagination"><button class="btn btn-sm" :disabled="loading || !offset" @click="loadGroups(offset - groupLimit)">上一页分组</button><span>{{ offset + 1 }}–{{ Math.min(offset + groupLimit, groups.total) }} / {{ groups.total }}</span><button class="btn btn-sm" :disabled="loading || offset + groupLimit >= groups.total" @click="loadGroups(offset + groupLimit)">下一页分组</button></div>
     </template>
-    <p v-else-if="!loading && !error" class="hint">选择范围后点击“开始查重”，可展开每组查看影片所在媒体库和文件路径。</p>
+    <p v-else-if="!loading && !error" class="hint">选择范围后点击“开始查重”，可展开每组查看影片所在媒体库、文件路径和 STRM 内容。</p>
   </section>
   <DuplicateDeleteDialog v-if="deletingMovie" :movie="deletingMovie" :group-key="deletionGroupKey" :library-id="deletionLibrary" @close="deletingMovie=null" @deleted="deleted" />
 </template>

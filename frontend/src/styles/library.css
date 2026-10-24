@@ -16,6 +16,10 @@
 .duplicate-movie-head a { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .duplicate-location { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim); margin: 8px 0; }
 .duplicate-path { overflow-wrap: anywhere; white-space: normal; font-size: 12px; margin: 6px 0; }
+.duplicate-strm-file + .duplicate-strm-file { margin-top: 12px; }
+.duplicate-strm-label { margin: 6px 0; font-size: 12px; }
+.duplicate-strm-content { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.duplicate-strm-error { margin: 6px 0; color: var(--danger); }
 .duplicate-pagination { justify-content: center; margin-top: 16px; font-size: 12px; }
 .duplicate-delete-dialog { position: fixed; inset: 0; margin: auto; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; padding: 20px; color: var(--text); background: var(--panel); }
 .duplicate-delete-dialog::backdrop { background: rgb(0 0 0 / 65%); }

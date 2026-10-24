@@ -6,6 +6,14 @@ export interface DuplicateGroup { key: string; number: string; count: number }
 export interface DuplicateGroups { items: DuplicateGroup[]; total: number; total_movies: number; extra_copies: number }
 export interface DuplicateMovie { id: number; library_id: number; library_name: string; number: string; title: string; source_path: string; status: string; additional_parts: string[] }
 export interface DuplicateMembers { items: DuplicateMovie[]; total: number }
+export interface DuplicateStrmFile { local_path: string; content: string; error: string }
+export interface DuplicateStrmContents { movie_id: number; files: DuplicateStrmFile[] }
+export function parseDuplicateStrmContents(value: unknown): DuplicateStrmContents {
+  const v = record(value);
+  return { movie_id:count(v.movie_id),files:list(v.files).map(item => {
+    const f = record(item); return { local_path:string(f.local_path),content:string(f.content),error:string(f.error) };
+  }) };
+}
 export interface DuplicateDeletePreview {
   movie_id: number; alist_url: string; preview_token: string; expires_at: number;
   files: { local_path: string; remote_path: string; removed: boolean; remote: {size:number} }[];
@@ -27,6 +35,7 @@ const read = (path: string, params: Record<string,string|number>, signal: AbortS
 export const duplicatesApi = {
   groups: async (library_id:number,limit:number,offset:number,signal:AbortSignal) => parseDuplicateGroups(await read('',{library_id,limit,offset},signal)),
   members: async (library_id:number,key:string,limit:number,offset:number,signal:AbortSignal) => parseDuplicateMembers(await read('/items',{library_id,key,limit,offset},signal)),
+  strm: async (id:number,library_id:number,key:string,signal:AbortSignal) => parseDuplicateStrmContents(await apiClient.request(`/api/admin/duplicates/items/${id}/strm?${new URLSearchParams({library_id:String(library_id),key})}`,{auth:'required',signal,timeoutMs:30000})),
   previewDelete: async (id:number,library_id:number,key:string,signal:AbortSignal) => parseDuplicateDeletePreview(await read(`/items/${id}/delete-preview`,{library_id,key},signal)),
   deleteCopy: async (id:number,library_id:number,key:string,preview:DuplicateDeletePreview) => apiClient.request(`/api/admin/duplicates/items/${id}`,{
     auth:'required',method:'DELETE',json:{library_id,key,preview_token:preview.preview_token,expires_at:preview.expires_at},

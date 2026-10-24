@@ -324,6 +324,7 @@ func (a *App) routes() {
 	admin.GET("/libraries", a.bind((*App).adminLibraries))
 	admin.GET("/duplicates", a.bind((*App).adminDuplicates))
 	admin.GET("/duplicates/items", a.bind((*App).adminDuplicates))
+	admin.GET("/duplicates/items/:id/strm", a.bind((*App).adminDuplicateSTRM))
 	admin.GET("/duplicates/items/:id/delete-preview", a.bind((*App).adminDuplicateDeletePreview))
 	admin.DELETE("/duplicates/items/:id", a.bind((*App).adminDuplicateDelete))
 	admin.POST("/libraries", a.bind((*App).adminAddLibrary))
