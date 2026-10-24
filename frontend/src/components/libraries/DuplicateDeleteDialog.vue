@@ -12,7 +12,7 @@ let active = true;
 async function load() {
   const current = scope.begin(); loading.value = true; preview.value = null; error.value = ''; confirmed.value = false;
   try { const result = await duplicatesApi.previewDelete(props.movie.id,props.libraryId,props.groupKey,current.signal); if(current.isCurrent()) preview.value = result; }
-  catch(cause) { if(current.isCurrent()) error.value = cause instanceof Error ? cause.message : '无法定位文件'; }
+  catch(cause) { if(current.isCurrent()) error.value = (cause instanceof Error || cause instanceof DOMException) && cause.name === 'TimeoutError' ? '核验请求超时，请检查当前影片的 STRM 与 AList 连接后重新预览。' : cause instanceof Error || cause instanceof DOMException ? cause.message : '无法定位文件'; }
   finally { if(current.isCurrent()) loading.value = false; }
 }
 async function remove() {
@@ -37,7 +37,7 @@ onScopeDispose(()=>{active=false;shell.value?.close?.();});
     <div class="duplicate-delete-head"><h3 id="duplicate-delete-title">删除此副本</h3><button ref="closeButton" class="btn btn-sm" :disabled="deleting" @click="close">取消</button></div>
     <p><strong>{{ movie.title || movie.number }}</strong> · {{ movie.library_name }}</p>
     <p class="hint">将删除该副本的远程原文件、本地 STRM（含 CD 分段）和影片索引。请确认保留的副本可以播放。NFO、封面和其他目录文件保留。</p>
-    <p v-if="loading" role="status">正在核验 STRM 与 AList 文件…</p>
+    <p v-if="loading" role="status">正在读取当前副本的 STRM，并按路径查询 AList 文件信息…（最多等待约 60 秒）</p>
     <p v-if="error" class="auth-error" role="alert">{{ error }} <RouterLink to="/settings#alist-config">AList 设置</RouterLink> <button class="btn btn-sm" :disabled="loading || deleting" @click="load">重新预览</button></p>
     <p v-for="file in removed" :key="file" class="duplicate-path">远程已删除：{{ file }}</p>
     <template v-if="preview">

@@ -119,4 +119,11 @@ describe('number-based duplicate movie scan',()=>{
     const w=mount(DuplicateDeleteDialog,{props:{movie:members.items[0]!,libraryId:0,groupKey:'ALDN001'},global:{stubs:{RouterLink:true}}});
     await flushPromises();w.unmount();expect(read.mock.calls[0]![3].aborted).toBe(true);late.resolve(preview);await flushPromises();expect(remove).not.toHaveBeenCalled();
   });
+  it('ends the loading state on preview timeout and allows retry without deleting',async()=>{
+    vi.spyOn(duplicatesApi,'previewDelete').mockRejectedValueOnce(new DOMException('request timeout','TimeoutError')).mockResolvedValue(preview);
+    const remove=vi.spyOn(duplicatesApi,'deleteCopy');
+    const w=mount(DuplicateDeleteDialog,{props:{movie:members.items[0]!,libraryId:0,groupKey:'ALDN001'},global:{stubs:{RouterLink:true}}});wrappers.push(w);await flushPromises();
+    expect(w.find('[role=status]').exists()).toBe(false);expect(w.get('[role=alert]').text()).toContain('核验请求超时');expect(remove).not.toHaveBeenCalled();
+    await w.get('[role=alert] button').trigger('click');await flushPromises();expect(w.find('[role=alert]').exists()).toBe(false);expect(w.get('#duplicate-delete-confirm').attributes('disabled')).toBeDefined();
+  });
 });

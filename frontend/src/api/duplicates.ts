@@ -36,7 +36,7 @@ export const duplicatesApi = {
   groups: async (library_id:number,limit:number,offset:number,signal:AbortSignal) => parseDuplicateGroups(await read('',{library_id,limit,offset},signal)),
   members: async (library_id:number,key:string,limit:number,offset:number,signal:AbortSignal) => parseDuplicateMembers(await read('/items',{library_id,key,limit,offset},signal)),
   strm: async (id:number,library_id:number,key:string,signal:AbortSignal) => parseDuplicateStrmContents(await apiClient.request(`/api/admin/duplicates/items/${id}/strm?${new URLSearchParams({library_id:String(library_id),key})}`,{auth:'required',signal,timeoutMs:30000})),
-  previewDelete: async (id:number,library_id:number,key:string,signal:AbortSignal) => parseDuplicateDeletePreview(await read(`/items/${id}/delete-preview`,{library_id,key},signal)),
+  previewDelete: async (id:number,library_id:number,key:string,signal:AbortSignal) => parseDuplicateDeletePreview(await apiClient.request(`/api/admin/duplicates/items/${id}/delete-preview?${new URLSearchParams({library_id:String(library_id),key})}`,{auth:'required',signal,timeoutMs:65000})),
   deleteCopy: async (id:number,library_id:number,key:string,preview:DuplicateDeletePreview) => apiClient.request(`/api/admin/duplicates/items/${id}`,{
     auth:'required',method:'DELETE',json:{library_id,key,preview_token:preview.preview_token,expires_at:preview.expires_at},
   }),

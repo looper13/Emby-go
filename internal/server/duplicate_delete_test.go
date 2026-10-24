@@ -24,6 +24,7 @@ type remoteDeleteFixture struct {
 	failed    map[string]bool
 	lostReply bool
 	removed   []string
+	readPaths []string
 }
 
 func (f *remoteDeleteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -39,14 +40,14 @@ func (f *remoteDeleteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		Names []string `json:"names"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	if strings.HasSuffix(r.URL.Path, "/list") {
-		files := []alist.File{}
-		for p, file := range f.files {
-			if path.Dir(p) == req.Path {
-				files = append(files, file)
-			}
+	if strings.HasSuffix(r.URL.Path, "/get") {
+		f.readPaths = append(f.readPaths, req.Path)
+		file, found := f.files[req.Path]
+		if !found {
+			_, _ = w.Write([]byte(`{"code":500,"message":"object not found"}`))
+			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "data": map[string]any{"total": len(files), "content": files}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "data": file})
 		return
 	}
 	if !strings.HasSuffix(r.URL.Path, "/remove") || len(req.Names) != 1 {
@@ -156,10 +157,10 @@ func TestDuplicateDeleteRemovesRemoteSTRMsAndIndexOnlyAfterConfirmation(t *testi
 	}
 }
 
-func TestDuplicateDeleteRejectsChangedPreviewAndSharedRemote(t *testing.T) {
-	for _, change := range []string{"strm", "remote", "shared", "shared-cross-library", "token"} {
+func TestDuplicateDeleteRejectsChangedPreview(t *testing.T) {
+	for _, change := range []string{"strm", "remote", "token"} {
 		t.Run(change, func(t *testing.T) {
-			a, token, id, keepID, f, sources := deletionFixture(t, 1)
+			a, token, id, _, f, sources := deletionFixture(t, 1)
 			preview := previewDeletion(t, a, token, id)
 			switch change {
 			case "strm":
@@ -170,22 +171,6 @@ func TestDuplicateDeleteRejectsChangedPreviewAndSharedRemote(t *testing.T) {
 				file.Size++
 				f.files["/115/ALDN-001-CD1.mp4"] = file
 				f.mu.Unlock()
-			case "shared":
-				keep, _ := a.db.Movie(keepID)
-				data, _ := os.ReadFile(sources[0])
-				writeFile(t, keep.SourcePath, string(data))
-			case "shared-cross-library":
-				lib, err := a.db.AddLibrary("Other number", t.TempDir())
-				if err != nil {
-					t.Fatal(err)
-				}
-				primary, part := filepath.Join(lib.Path, "other.strm"), filepath.Join(lib.Path, "other-CD2.strm")
-				writeFile(t, primary, a.cfg.AListURL+"/d/115/other.mp4")
-				data, _ := os.ReadFile(sources[0])
-				writeFile(t, part, string(data))
-				if _, err := a.db.UpsertMovie(store.Movie{LibraryID: lib.ID, SourcePath: primary, AdditionalParts: []string{part}, Number: "OTHER-001", Status: "success"}, 0, time.Now()); err != nil {
-					t.Fatal(err)
-				}
 			case "token":
 				preview["preview_token"] = "invalid"
 			}
@@ -198,6 +183,49 @@ func TestDuplicateDeleteRejectsChangedPreviewAndSharedRemote(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDuplicateDeletePreviewDoesNotReadOtherMovies(t *testing.T) {
+	a, token, id, keepID, f, sources := deletionFixture(t, 1)
+	keep, err := a.db.Movie(keepID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory cannot be read as a STRM. It must not affect this preview.
+	if err := os.Remove(keep.SourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(keep.SourcePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	preview := previewDeletion(t, a, token, id)
+	if len(preview["files"].([]any)) != 1 || len(f.readPaths) != 1 || f.readPaths[0] != "/115/ALDN-001-CD1.mp4" {
+		t.Fatal("preview visited unrelated files", f.readPaths)
+	}
+	resp := accountRequest(a, "DELETE", fmt.Sprintf("/api/admin/duplicates/items/%d", id), token, deleteBody(preview))
+	if resp.Code != 204 {
+		t.Fatalf("delete with unrelated unreadable STRM: %d %s", resp.Code, resp.Body)
+	}
+	if _, err := os.Stat(sources[0]); !os.IsNotExist(err) {
+		t.Fatal("selected STRM not removed")
+	}
+	if _, err := os.Stat(keep.SourcePath); err != nil {
+		t.Fatal("unrelated source touched")
+	}
+}
+
+func TestDuplicateDeletePreviewRejectsBusyConfigurationWithoutWaiting(t *testing.T) {
+	a, token, id, _, f, _ := deletionFixture(t, 1)
+	a.configEditMu.Lock()
+	resp := accountRequest(a, "GET", fmt.Sprintf("/api/admin/duplicates/items/%d/delete-preview?key=ALDN001", id), token, "")
+	a.configEditMu.Unlock()
+	if resp.Code != 409 || len(f.readPaths) != 0 || !strings.Contains(resp.Body.String(), "保存配置") {
+		t.Fatalf("busy config: %d %s", resp.Code, resp.Body)
+	}
+	if !a.claimNFO("scan") {
+		t.Fatal("busy preview did not release write gate")
+	}
+	a.releaseNFO("scan")
 }
 
 func TestDuplicateDeletePersistsPartialProgressAcrossRestart(t *testing.T) {

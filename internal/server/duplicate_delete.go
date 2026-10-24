@@ -137,6 +137,9 @@ func (a *App) deletionPlan(ctx context.Context, id, libraryID int64, key string)
 		plan = movieDeletion{MovieID: id, Key: key, LibraryID: movie.LibraryID, LibraryPath: lib.Path, AListURL: cfg.AListURL, Sources: sources, Files: []deletionFile{}}
 	}
 	for i, source := range sources {
+		if err := ctx.Err(); err != nil {
+			return plan, nil, err
+		}
 		var file deletionFile
 		if state != "" {
 			file = plan.Files[i]
@@ -177,33 +180,7 @@ func (a *App) deletionPlan(ctx context.Context, id, libraryID int64, key string)
 			plan.Files[i] = file
 		}
 	}
-	locals, remotes := map[string]bool{}, map[string]bool{}
-	for _, file := range plan.Files {
-		resolved, err := filepath.EvalSymlinks(file.LocalPath)
-		if err == nil {
-			locals[cachePathKey(resolved)] = true
-		}
-		remotes[file.RemotePath] = true
-	}
-	err = a.db.VisitOtherMovieSources(ctx, id, func(otherID int64, source string) error {
-		resolved, err := filepath.EvalSymlinks(source)
-		if err == nil && locals[cachePathKey(resolved)] {
-			return fmt.Errorf("本地 STRM 也被影片 %d 引用，不能删除", otherID)
-		}
-		data, err := readDeletionSTRM(source)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("无法核验影片 %d 的 STRM 引用，请修复文件后重试", otherID)
-		}
-		remote, err := client.Resolve(strmLink(data))
-		if err == nil && remotes[remote] {
-			return fmt.Errorf("远程文件 %s 也被影片 %d 引用，不能删除该片源", remote, otherID)
-		}
-		return nil
-	})
-	return plan, client, err
+	return plan, client, ctx.Err()
 }
 
 func (a *App) deletionToken(plan movieDeletion, libraryID, expires int64) string {
@@ -225,10 +202,19 @@ func (a *App) adminDuplicateDeletePreview(c *gin.Context) {
 		return
 	}
 	defer a.releaseNFO("delete")
-	a.configEditMu.Lock()
+	if !a.configEditMu.TryLock() {
+		c.JSON(409, gin.H{"error": "正在保存配置，请稍后重新预览"})
+		return
+	}
 	defer a.configEditMu.Unlock()
-	plan, _, err := a.deletionPlan(c.Request.Context(), id, libraryID, c.Query("key"))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
+	defer cancel()
+	plan, _, err := a.deletionPlan(ctx, id, libraryID, c.Query("key"))
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "核验超过 60 秒，请检查当前影片的 STRM 与 AList 连接后重新预览"})
+			return
+		}
 		c.JSON(409, gin.H{"error": err.Error()})
 		return
 	}
@@ -253,7 +239,10 @@ func (a *App) adminDuplicateDelete(c *gin.Context) {
 		return
 	}
 	defer a.releaseNFO("delete")
-	a.configEditMu.Lock()
+	if !a.configEditMu.TryLock() {
+		c.JSON(409, gin.H{"error": "正在保存配置，请稍后重试删除"})
+		return
+	}
 	defer a.configEditMu.Unlock()
 	// Once confirmed, finish bookkeeping even if the browser disconnects.
 	ctx, cancel := context.WithTimeout(a.rootCtx, 3*time.Minute)

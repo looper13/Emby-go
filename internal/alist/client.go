@@ -91,13 +91,19 @@ func (c *Client) call(ctx context.Context, endpoint string, input, output any) e
 		return fmt.Errorf("AList 接口 HTTP %d，请检查地址与权限", resp.StatusCode)
 	}
 	var envelope struct {
-		Code int             `json:"code"`
-		Data json.RawMessage `json:"data"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&envelope); err != nil {
 		return errors.New("AList 返回格式不正确")
 	}
 	if envelope.Code != 200 {
+		message := strings.ToLower(strings.TrimSpace(envelope.Message))
+		if endpoint == "get" && (envelope.Code == 404 || envelope.Code == 500) &&
+			(strings.Contains(message, "object not found") || message == "file not found") {
+			return ErrNotFound
+		}
 		// Upstream messages can contain credentials/URLs. Report the code only.
 		return fmt.Errorf("AList 接口返回 %d，请检查 Token、路径与删除权限", envelope.Code)
 	}
@@ -109,34 +115,17 @@ func (c *Client) call(ctx context.Context, endpoint string, input, output any) e
 	return nil
 }
 
-// Refresh directory metadata before comparing identities, so a cached object
-// cannot authorize removal of a replacement file with the same name.
+// Ask AList for this exact path. Directory listing and pagination are not
+// needed to locate a file whose path already comes from the STRM.
 func (c *Client) Stat(ctx context.Context, filePath string) (File, error) {
-	for page := 1; page <= 5000; page++ {
-		var listing struct {
-			Content []File `json:"content"`
-			Total   *int   `json:"total"`
-		}
-		err := c.call(ctx, "list", map[string]any{"path": path.Dir(filePath), "password": "", "refresh": page == 1, "page": page, "per_page": 200}, &listing)
-		if err != nil {
-			return File{}, err
-		}
-		if listing.Total == nil || *listing.Total < 0 || len(listing.Content) > *listing.Total || (*listing.Total > 0 && len(listing.Content) == 0) {
-			return File{}, errors.New("AList 目录信息不完整，无法核验目标文件")
-		}
-		for _, file := range listing.Content {
-			if file.Name == path.Base(filePath) {
-				if file.IsDir || file.Size < 0 || file.Modified == "" {
-					return File{}, errors.New("AList 目标不是可核验的普通文件")
-				}
-				return file, nil
-			}
-		}
-		if len(listing.Content) == 0 || page*200 >= *listing.Total {
-			return File{}, ErrNotFound
-		}
+	var file File
+	if err := c.call(ctx, "get", map[string]any{"path": filePath, "password": ""}, &file); err != nil {
+		return File{}, err
 	}
-	return File{}, errors.New("AList 目录过大，请整理目录后重试")
+	if file.Name != path.Base(filePath) || file.IsDir || file.Size < 0 || file.Modified == "" {
+		return File{}, errors.New("AList 目标不是可核验的普通文件")
+	}
+	return file, nil
 }
 
 func (c *Client) Remove(ctx context.Context, filePath string) error {
