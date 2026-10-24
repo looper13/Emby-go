@@ -6,12 +6,14 @@ import { useAdminRead } from '../composables/useAdminRead';
 import { useTasksStore } from '../stores/tasks';
 import { useToastStore } from '../stores/toasts';
 import LibraryForm from '../components/libraries/LibraryForm.vue';
+import DuplicateMoviesPanel from '../components/libraries/DuplicateMoviesPanel.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import ReadState from '../components/common/ReadState.vue';
 import type { LibraryContentType, LibraryDto } from '../api/contracts';
 function contentLabel(lib: LibraryDto) { return lib.Type === 'tvshows' ? '电视节目' : lib.Type === 'mixed' ? '混合内容' : '影片'; }
 const { data, loading, error, load, active } = useAdminRead(adminApi.libraries);
 const tasks = useTasksStore(); const toasts = useToastStore();
+const duplicates = ref<InstanceType<typeof DuplicateMoviesPanel>>();
 const submitting = ref(false); const formKey = ref(0); const deleting = ref(new Set<number>()); const updatingProxy = ref(new Set<number>());
 watch(() => tasks.revision, () => { void load(); });
 async function create(payload: { Name: string; Path: string; Type: LibraryContentType; ProxyEnabled: boolean; ResolveRedirects: boolean; }) {
@@ -55,9 +57,10 @@ async function remove(id: number) {
       <tbody><tr v-for="lib in data.items" :key="lib.Id">
         <td><strong class="title">{{ lib.Name }}</strong></td><td>{{ contentLabel(lib) }}</td><td class="mono"><span class="lib-path">{{ lib.Path }}</span></td><td><label class="proxy-toggle"><input type="checkbox" :checked="lib.ProxyEnabled===true" :disabled="updatingProxy.has(lib.Id)" :aria-label="`${lib.Name} 播放代理`" @change="toggleProxy(lib, $event)"><span>播放代理</span></label><label class="proxy-toggle"><input type="checkbox" :checked="lib.ResolveRedirects===true" :disabled="updatingProxy.has(lib.Id)" :aria-label="`${lib.Name} 解析直链`" @change="toggleProxy(lib, $event, 'ResolveRedirects')"><span>解析直链</span></label></td><td class="num lib-id">{{ lib.Id }}</td>
         <td><div class="row-actions"><RouterLink class="btn btn-sm" :to="{path:'/items',query:{library_id:lib.Id}}">浏览</RouterLink><button class="btn btn-sm" :data-lib-scan="lib.Id" title="更新该媒体库中新增或变化的媒体" :disabled="tasks.mutationBusy" @click="tasks.run('scan', lib.Id)"><RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" /><span>增量扫描</span></button>
-          <button class="icon-btn danger" :data-lib-delete="lib.Id" title="删除媒体库索引（不删文件）" :disabled="deleting.has(lib.Id)" @click="remove(lib.Id)"><Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" /></button></div></td>
+          <button class="btn btn-sm" :data-lib-duplicates="lib.Id" @click="duplicates?.scan(lib.Id)">查重</button><button class="icon-btn danger" :data-lib-delete="lib.Id" title="删除媒体库索引（不删文件）" :disabled="deleting.has(lib.Id)" @click="remove(lib.Id)"><Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" /></button></div></td>
       </tr></tbody></table></div>
     <EmptyState v-else-if="data" title="还没有媒体库" hint="先在下方登记一个存放 .strm 的目录。" />
   </section>
+  <DuplicateMoviesPanel ref="duplicates" :libraries="data?.items || []" />
   <section class="panel"><h2>添加媒体库</h2><LibraryForm :key="formKey" :submitting="submitting" @submit="create" /></section>
 </template>

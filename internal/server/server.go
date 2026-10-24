@@ -322,6 +322,8 @@ func (a *App) routes() {
 	admin.PUT("/users/:uid", a.bind((*App).editUser))
 	admin.DELETE("/users/:uid", a.bind((*App).deleteUser))
 	admin.GET("/libraries", a.bind((*App).adminLibraries))
+	admin.GET("/duplicates", a.bind((*App).adminDuplicates))
+	admin.GET("/duplicates/items", a.bind((*App).adminDuplicates))
 	admin.POST("/libraries", a.bind((*App).adminAddLibrary))
 	admin.PUT("/libraries/:id", a.bind((*App).adminUpdateLibrary))
 	admin.GET("/shows", a.bind((*App).adminTelevision))
