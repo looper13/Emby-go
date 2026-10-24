@@ -194,7 +194,8 @@ func (a *App) deletionToken(plan movieDeletion, libraryID, expires int64) string
 func (a *App) adminDuplicateDeletePreview(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	libraryID, libErr := strconv.ParseInt(c.DefaultQuery("library_id", "0"), 10, 64)
-	if err != nil || id <= 0 || libErr != nil || libraryID < 0 {
+	keepID, keepErr := strconv.ParseInt(c.DefaultQuery("keep_id", "0"), 10, 64)
+	if err != nil || id <= 0 || libErr != nil || libraryID < 0 || keepErr != nil || keepID < 0 {
 		c.JSON(400, gin.H{"error": "无效的影片或媒体库参数"})
 		return
 	}
@@ -209,6 +210,10 @@ func (a *App) adminDuplicateDeletePreview(c *gin.Context) {
 	defer a.configEditMu.Unlock()
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Minute)
 	defer cancel()
+	if err := a.validateDuplicateSelection(id, libraryID, c.Query("key"), keepID, c.Query("selection_token")); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 	plan, _, err := a.deletionPlan(ctx, id, libraryID, c.Query("key"))
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -229,6 +234,8 @@ func (a *App) adminDuplicateDelete(c *gin.Context) {
 		LibraryID int64  `json:"library_id"`
 		Expires   int64  `json:"expires_at"`
 		Token     string `json:"preview_token"`
+		KeepID    int64  `json:"keep_id"`
+		Selection string `json:"selection_token"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
 	if err != nil || id <= 0 || c.ShouldBindJSON(&req) != nil || req.LibraryID < 0 || req.Expires < time.Now().Unix() || req.Expires > time.Now().Add(10*time.Minute).Unix() || req.Token == "" {
@@ -247,6 +254,10 @@ func (a *App) adminDuplicateDelete(c *gin.Context) {
 	// Once confirmed, finish bookkeeping even if the browser disconnects.
 	ctx, cancel := context.WithTimeout(a.rootCtx, 3*time.Minute)
 	defer cancel()
+	if err := a.validateDuplicateSelection(id, req.LibraryID, req.Key, req.KeepID, req.Selection); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 	plan, client, err := a.deletionPlan(ctx, id, req.LibraryID, req.Key)
 	if err != nil {
 		c.JSON(409, gin.H{"error": err.Error()})
