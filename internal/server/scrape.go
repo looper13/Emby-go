@@ -104,7 +104,7 @@ func (a *App) nfoBusyOwner() string {
 		return "演员头像任务"
 	case "actor_import":
 		return "旧头像导入"
-	case "edit", "manual", "image", "reread":
+	case "edit", "manual", "image", "reread", "delete":
 		return "媒体库编辑"
 	}
 	return ""

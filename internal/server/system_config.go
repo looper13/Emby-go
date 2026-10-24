@@ -35,6 +35,7 @@ func publicConfig(cfg config.Config) gin.H {
 		"disable_library_monitor": cfg.DisableLibraryMonitor, "library_monitor_mode": cfg.MonitorMode(),
 		"db_path": cfg.DBPath, "actors_dir": cfg.ActorsDir,
 		"redis_addr": cfg.RedisAddr, "redis_db": cfg.RedisDB, "redis_password_configured": cfg.RedisPassword != "",
+		"alist_url": cfg.AListURL, "alist_token_configured": cfg.AListToken != "",
 		"ffprobe_path": cfg.FFProbePath, "probe_timeout_seconds": int(cfg.ProbeTimeout().Seconds()),
 		"probe_concurrency": cfg.ProbeWorkers(), "server_domains": domains,
 		"ffmpeg_enabled": cfg.FFmpegEnabled, "ffmpeg_path": cfg.FFmpegPath, "playback_concurrency": playbackWorkers(cfg),
@@ -126,6 +127,7 @@ func (a *App) adminSaveConfig(c *gin.Context) {
 	a.cfg.FFProbePath, a.cfg.ProbeTimeoutSec, a.cfg.ProbeConcurrency = saved.FFProbePath, saved.ProbeTimeoutSec, saved.ProbeConcurrency
 	a.cfg.FFmpegEnabled, a.cfg.FFmpegPath, a.cfg.PlaybackConcurrency = saved.FFmpegEnabled, saved.FFmpegPath, saved.PlaybackConcurrency
 	a.cfg.PlaybackCacheMB = saved.PlaybackCacheMB
+	a.cfg.AListURL, a.cfg.AListToken = saved.AListURL, saved.AListToken
 	a.cfgMu.Unlock()
 	if before.DisableLibraryMonitor != saved.DisableLibraryMonitor || before.MonitorMode() != saved.MonitorMode() {
 		a.closeLibraryMonitors()

@@ -31,6 +31,8 @@ type Config struct {
 	RedisAddr        string         `yaml:"redis_addr"`
 	RedisPassword    string         `yaml:"redis_password"`
 	RedisDB          int            `yaml:"redis_db"`
+	AListURL         string         `yaml:"alist_url"`
+	AListToken       string         `yaml:"alist_token"`
 	ServerDomains    []ServerDomain `yaml:"server_domains"`
 
 	// 媒体信息探测（独立于扫库）：调用系统 ffprobe 读取真实技术参数并写回 NFO。

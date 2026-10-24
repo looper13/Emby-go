@@ -39,6 +39,12 @@ redis_addr: "127.0.0.1:6379"
 redis_password: ""
 redis_db: 0
 
+# 影片查重删除：从 STRM 的 /d/、/p/、/dav/ 链接定位远程原文件。
+# 服务地址需与 STRM 中的 AList 地址一致，支持反向代理子路径；留空停用。
+# Token 使用 AList 管理后台 API Token，需要文件删除权限。设置页可保存，无需重启。
+alist_url: ""
+alist_token: ""
+
 # 前端“服务器域名切换”候选列表（供 Web 客户端在多个入口间切换；可选）
 # server_domains:
 #   - name: "内网"

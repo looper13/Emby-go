@@ -43,6 +43,10 @@ func (a *App) adminLibraries(c *gin.Context) {
 
 // adminDeleteLibrary 删除媒体库及其影片索引（不删磁盘文件），随后清缓存。
 func (a *App) adminDeleteLibrary(c *gin.Context) {
+	if !a.claimNFORequest(c, "delete") {
+		return
+	}
+	defer a.releaseNFO("delete")
 	a.configEditMu.Lock()
 	defer a.configEditMu.Unlock()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -514,6 +518,10 @@ func (a *App) adminItems(c *gin.Context) {
 }
 
 func (a *App) adminDelete(c *gin.Context) {
+	if !a.claimNFORequest(c, "delete") {
+		return
+	}
+	defer a.releaseNFO("delete")
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(404, gin.H{"error": "not found"})

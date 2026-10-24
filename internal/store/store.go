@@ -267,6 +267,7 @@ CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, library
 CREATE TABLE IF NOT EXISTS userdata (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, position_ticks INTEGER DEFAULT 0, play_count INTEGER DEFAULT 0, played INTEGER DEFAULT 0, last_played_at TEXT, last_stopped_ticks INTEGER DEFAULT -1, is_favorite INTEGER NOT NULL DEFAULT 0, likes INTEGER NOT NULL DEFAULT 0, hide_from_resume INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS item_favorites (item_id TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS scan_fingerprints (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS movie_deletions (movie_id INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE, state TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_movies_library_directory ON movies(library_id,output_dir);
 CREATE TABLE IF NOT EXISTS api_probe (id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT, path TEXT, query TEXT, body_preview TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS actors (name TEXT PRIMARY KEY, avatar_url TEXT, avatar_tag TEXT, updated_at TEXT);

@@ -111,6 +111,34 @@ func TestSystemConfigSaveHotAndRestartFields(t *testing.T) {
 	}
 }
 
+func TestSystemConfigAListTokenIsPrivatePersistentAndLive(t *testing.T) {
+	app, ts, token := newConfigTestApp(t)
+	state := configRequest(t, ts, token, "GET", "", 200)
+	state = configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"alist_url": "http://alist.test/proxy", "alist_token": "alist-fixture-secret"}), 200)
+	if state.Config["alist_token_configured"] != true || state.Effective["alist_token_configured"] != true || len(state.RestartFields) != 0 {
+		t.Fatal("AList not applied live")
+	}
+	for _, endpoint := range []string{"/api/admin/config", "/api/admin/settings"} {
+		_, raw := embyRaw(t, ts, "GET", endpoint, token, "")
+		if strings.Contains(string(raw), "alist-fixture-secret") || strings.Contains(string(raw), `"alist_token":`) {
+			t.Fatal("token exposed")
+		}
+	}
+	loaded, err := config.Load(app.configSnapshot().ConfigPath())
+	if err != nil || loaded.AListToken != "alist-fixture-secret" {
+		t.Fatal("token not persisted")
+	}
+	state = configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"alist_token": ""}), 200)
+	if app.configSnapshot().AListToken != "alist-fixture-secret" {
+		t.Fatal("blank token cleared secret")
+	}
+	configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"alist_url": "http://user:pass@alist.test"}), 400)
+	state = configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"clear_alist_token": true}), 200)
+	if app.configSnapshot().AListToken != "" || state.Config["alist_token_configured"] != false {
+		t.Fatal("token not cleared")
+	}
+}
+
 func TestSystemConfigRejectsUnauthenticatedInvalidConflictAndWriteFailure(t *testing.T) {
 	app, ts, token := newConfigTestApp(t)
 	configRequest(t, ts, "", "GET", "", 401)

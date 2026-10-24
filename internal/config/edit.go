@@ -38,6 +38,9 @@ type Patch struct {
 	RedisPassword         *string         `json:"redis_password" yaml:"redis_password"`
 	ClearRedisPassword    bool            `json:"clear_redis_password" yaml:"-"`
 	RedisDB               *int            `json:"redis_db" yaml:"redis_db"`
+	AListURL              *string         `json:"alist_url" yaml:"alist_url"`
+	AListToken            *string         `json:"alist_token" yaml:"alist_token"`
+	ClearAListToken       bool            `json:"clear_alist_token" yaml:"-"`
 	FFProbePath           *string         `json:"ffprobe_path" yaml:"ffprobe_path"`
 	FFmpegEnabled         *bool           `json:"ffmpeg_enabled" yaml:"ffmpeg_enabled"`
 	FFmpegPath            *string         `json:"ffmpeg_path" yaml:"ffmpeg_path"`
@@ -150,6 +153,16 @@ func (c Config) UpdateFile(patch Patch, expectedRevision string) (Config, string
 		empty := ""
 		patch.RedisPassword = &empty
 	}
+	if patch.ClearAListToken && patch.AListToken != nil && *patch.AListToken != "" {
+		return Config{}, "", invalid("不能同时设置和清除 AList Token")
+	}
+	if patch.AListToken != nil && *patch.AListToken == "" {
+		patch.AListToken = nil
+	}
+	if patch.ClearAListToken {
+		empty := ""
+		patch.AListToken = &empty
+	}
 	v := reflect.ValueOf(patch)
 	for i := 0; i < v.NumField(); i++ {
 		key := v.Type().Field(i).Tag.Get("yaml")
@@ -191,6 +204,15 @@ func (c Config) UpdateFile(patch Patch, expectedRevision string) (Config, string
 }
 
 func (c Config) validateEdit() error {
+	if c.AListURL != "" {
+		u, err := url.Parse(c.AListURL)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(u.Path, "\\\x00\r\n") {
+			return invalid("AList 地址须为 HTTP/HTTPS 服务地址，不能包含账号密码、查询参数或片段")
+		}
+	}
+	if strings.ContainsAny(c.AListToken, "\x00\r\n") {
+		return invalid("AList Token 不能包含换行或空字符")
+	}
 	if c.Port < 1 || c.Port > 65535 {
 		return invalid("端口必须为 1–65535")
 	}

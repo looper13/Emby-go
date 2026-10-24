@@ -51,6 +51,12 @@ describe('instance configuration', () => {
     await w.get('form').trigger('submit');
     expect(w.emitted('save')).toHaveLength(1);
   });
+  it('saves AList credentials explicitly without sending configuration flags and clears them on restore', async()=>{
+    const w=form();await w.get('#cfg-alist-url').setValue('http://alist.test');await w.get('#cfg-alist-token').setValue('secret');await w.get('form').trigger('submit');
+    expect(w.emitted('save')?.[0]).toEqual([{alist_url:'http://alist.test',alist_token:'secret'}]);
+    await w.get('#cfg-restore').trigger('click');expect(w.get<HTMLInputElement>('#cfg-alist-token').element.value).toBe('');
+    await w.get('#cfg-clear-alist-token').setValue(true);await w.get('form').trigger('submit');expect(w.emitted('save')?.[1]).toEqual([{clear_alist_token:true}]);
+  });
   it('retains failed drafts, prevents duplicate saves, and reports saved versus effective values', async () => {
     let resolve!: (state: ConfigState) => void;
     const pending = new Promise<ConfigState>(r => { resolve = r; });

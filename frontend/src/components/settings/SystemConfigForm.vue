@@ -6,15 +6,18 @@ const emit = defineEmits<{ save: [patch: ConfigPatch]; dirty: [dirty: boolean]; 
 const clone = () => ({ ...props.state.config, server_domains: props.state.config.server_domains.map(d => ({ ...d })) });
 const draft = ref(clone());
 const password = ref(''), clearPassword = ref(false);
-function restore() { draft.value = clone(); password.value = ''; clearPassword.value = false; }
+const alistToken = ref(''), clearAListToken = ref(false);
+function restore() { draft.value = clone(); password.value = ''; clearPassword.value = false; alistToken.value = ''; clearAListToken.value = false; }
 watch(() => props.state, restore);
 const patch = computed(() => {
   const values: Record<string, unknown> = {};
   for (const key of Object.keys(draft.value) as (keyof typeof draft.value)[]) {
-    if (key !== 'redis_password_configured' && JSON.stringify(draft.value[key]) !== JSON.stringify(props.state.config[key])) values[key] = draft.value[key];
+    if (key !== 'redis_password_configured' && key !== 'alist_token_configured' && JSON.stringify(draft.value[key]) !== JSON.stringify(props.state.config[key])) values[key] = draft.value[key];
   }
   if (clearPassword.value) values.clear_redis_password = true;
   else if (password.value) values.redis_password = password.value;
+  if (clearAListToken.value) values.clear_alist_token = true;
+  else if (alistToken.value) values.alist_token = alistToken.value;
   return values as ConfigPatch;
 });
 const dirty = computed(() => Object.keys(patch.value).length > 0);
@@ -69,6 +72,16 @@ function submit() { if (dirty.value && !props.saving && props.state.writable) em
           <div class="field"><label for="cfg-redis-db">数据库编号</label><input id="cfg-redis-db" v-model.number="draft.redis_db" type="number" min="0" required></div>
           <div class="field"><label for="cfg-password">连接密码</label><input id="cfg-password" v-model="password" :disabled="clearPassword" type="password" autocomplete="new-password" data-secret :placeholder="state.config.redis_password_configured ? '已配置（留空保持不变）' : '未配置（留空保持不变）'"></div>
           <div class="field"><label class="check"><input id="cfg-clear-password" v-model="clearPassword" type="checkbox">清除已保存的 Redis 密码</label><small class="hint">仅在 Redis 不再需要密码时勾选。</small></div>
+        </div>
+      </section>
+
+      <section class="panel" id="alist-config">
+        <div class="panel-head"><h3>AList 远程文件管理</h3><span class="config-tag live">无需重启</span></div>
+        <p class="hint">用于“媒体库 → 影片查重 → 删除此副本”。地址须与 STRM 中 AList 链接的服务地址一致；Token 使用 AList 管理后台的 API Token，需要文件删除权限。</p>
+        <div class="field-grid">
+          <div class="field full"><label for="cfg-alist-url">AList 服务地址</label><input id="cfg-alist-url" v-model="draft.alist_url" type="url" class="mono" placeholder="http://192.168.1.4:5244"><small class="hint">支持 /d/、/p/、/dav/ 链接和反向代理子路径。已转成网盘直链的 STRM 无法定位；留空停用远程删除。</small></div>
+          <div class="field"><label for="cfg-alist-token">AList API Token</label><input id="cfg-alist-token" v-model="alistToken" :disabled="clearAListToken" type="password" autocomplete="new-password" data-secret :placeholder="state.config.alist_token_configured ? '已配置（留空保持不变）' : '未配置'"></div>
+          <div class="field"><label class="check"><input id="cfg-clear-alist-token" v-model="clearAListToken" type="checkbox">清除已保存的 AList Token</label><small class="hint">Token 仅保存在服务端；清除后使用 AList 访客权限。</small></div>
         </div>
       </section>
 

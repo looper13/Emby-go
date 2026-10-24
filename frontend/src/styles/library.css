@@ -17,4 +17,13 @@
 .duplicate-location { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim); margin: 8px 0; }
 .duplicate-path { overflow-wrap: anywhere; white-space: normal; font-size: 12px; margin: 6px 0; }
 .duplicate-pagination { justify-content: center; margin-top: 16px; font-size: 12px; }
+.duplicate-delete-dialog { position: fixed; inset: 0; margin: auto; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; padding: 20px; color: var(--text); background: var(--panel); }
+.duplicate-delete-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.duplicate-delete-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.duplicate-delete-head h3 { margin: 0; }
+.duplicate-delete-files > div { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.duplicate-delete-check { margin: 16px 0; align-items: start; }
+.duplicate-delete-dialog .danger { color: var(--danger); border-color: var(--danger); }
+.duplicate-delete-check input { flex-shrink: 0; }
+.duplicate-panel .duplicate-movie-head .danger { color: var(--danger); }
 @media (max-width: 600px) { .duplicate-controls .field { min-width: 0; width: 100%; } .duplicate-group-head, .duplicate-members { padding-inline: 12px; } }
