@@ -6,6 +6,8 @@ const props = defineProps<{ query: Record<string, unknown>; libraries: LibraryDt
 const emit = defineEmits<{ filter: [key: string, value: string, toggle?: boolean]; search: [value: string]; clearEntity: []; shuffle: [] }>();
 const value = (key: string) => typeof props.query[key] === 'string' ? props.query[key] : '';
 const entity = computed(() => entityParams.map(([key, label]) => [key, label, value(key)]).find(row => row[2]));
+const sort = computed(() => value('sort') || 'datecreated');
+const order = computed(() => value('order') || (sort.value === 'title' ? 'asc' : 'desc'));
 const pills = [['', '全部'], ['success', '已入库'], ['manual', '手动'], ['pending', '待补录'], ['incompatible', '不兼容']];
 const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '年份'], ['communityrating', '评分'], ['date', '首映日期'], ['random', '随机']];
 </script>
@@ -20,7 +22,8 @@ const sorts = [['datecreated', '最近入库'], ['title', '标题'], ['year', '�
     <template v-if="canManage"><button v-for="[v, label] in pills" :key="v" class="pill" :class="{ 'is-active': value('status') === v }" :data-status="v" @click="emit('filter', 'status', v!)">{{ label }}</button>
     <button v-for="[v, label] in [['failed', '刮削失败'], ['confirm', '待人工确认']]" :key="v" class="pill" :class="{ 'is-active': value('scrape') === v }" :data-scrape="v" @click="emit('filter', 'scrape', v!, true)">{{ label }}</button></template>
     <input id="item-search" :value="search" placeholder="搜索标题 / 番号 / 原名" aria-label="搜索标题 / 番号 / 原名" style="min-width:200px" @input="emit('search', ($event.target as HTMLInputElement).value)">
-    <select id="item-sort" aria-label="排序" :value="value('sort') || 'datecreated'" @change="emit('filter', 'sort', ($event.target as HTMLSelectElement).value)"><option v-for="[v, label] in sorts" :key="v" :value="v">{{ label }}</option></select>
+    <select id="item-sort" aria-label="排序" :value="sort" @change="emit('filter', 'sort', ($event.target as HTMLSelectElement).value)"><option v-for="[v, label] in sorts" :key="v" :value="v">{{ label }}</option></select>
+    <select v-if="sort !== 'random'" id="item-order" aria-label="排序方向" :value="order" @change="emit('filter', 'order', ($event.target as HTMLSelectElement).value)"><option value="asc">正序</option><option value="desc">倒序</option></select>
     <label class="favorite-filter"><input type="checkbox" :checked="value('favorite') === 'true'" @change="emit('filter','favorite',($event.target as HTMLInputElement).checked ? 'true' : '')">仅收藏</label>
     <button v-if="value('sort') === 'random'" id="wall-shuffle" class="btn" @click="emit('shuffle')">换一批</button>
   </div>

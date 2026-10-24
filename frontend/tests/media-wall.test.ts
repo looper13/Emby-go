@@ -132,6 +132,24 @@ describe('media wall state and request ownership', () => {
     const q = api.mock.calls[0]![0]; expect(q.get('limit')).toBe('100'); expect(q.get('offset')).toBe('0'); expect(q.get('order')).toBe('asc');
     expect(wall.done).toBe(true);
   });
+  it.each(['datecreated', 'title', 'year', 'communityrating', 'date'])('keeps explicit %s directions across pagination and restored refreshes', async sort => {
+    const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
+    const wall = useMediaWallStore(), signal = new AbortController().signal;
+    for (const order of ['asc', 'desc']) {
+      const query = new URLSearchParams({ sort, order, tag: 'keep' });
+      expect(wall.prepare(query, true)).toBe(false);
+      expect(wall.items).toEqual([]);
+      api.mockClear();
+      await wall.loadMore(signal); await wall.loadMore(signal);
+      expect(wall.prepare(query, true)).toBe(true);
+      await wall.refresh(signal);
+      expect(api.mock.calls.map(([q]) => q.get('offset'))).toEqual(['0', '100', '0', '100']);
+      for (const [q] of api.mock.calls) {
+        expect(q.get('sort')).toBe(sort); expect(q.get('order')).toBe(order); expect(q.get('tag')).toBe('keep');
+        expect(q.has('seed')).toBe(false);
+      }
+    }
+  });
   it('keeps random pagination and restored snapshots on the same seed, and reshuffles on a fresh browse', async () => {
     vi.spyOn(crypto, 'getRandomValues').mockReturnValueOnce(new Uint32Array([12345])).mockReturnValueOnce(new Uint32Array([98765]));
     const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));

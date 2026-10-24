@@ -41,10 +41,30 @@ describe('media controls', () => {
     expect(select.find('option[value=date]').text()).toBe('首映日期');
     expect(select.find('option[value=random]').text()).toBe('随机');
     expect(w.find('#wall-shuffle').exists()).toBe(false);
+    expect(w.find('#item-order').exists()).toBe(true);
     await select.setValue('random'); expect(w.emitted('filter')).toEqual([['sort', 'random']]);
     await w.setProps({ query: { sort: 'random' } });
+    expect(w.find('#item-order').exists()).toBe(false);
     await w.find('#wall-shuffle').trigger('click'); expect(w.emitted('shuffle')).toHaveLength(1);
     await w.setProps({ query: { sort: 'date' } }); expect(w.find('#wall-shuffle').exists()).toBe(false);
+    expect(w.find('#item-order').exists()).toBe(true);
+  });
+  it('offers both sort directions and displays URL overrides or the existing defaults', async () => {
+    const w = mount(WallFilters, { props: { query: {}, libraries: [], search: '' } }); cleanups.push(() => w.unmount());
+    expect(w.get('#item-order').attributes('aria-label')).toBe('排序方向');
+    expect(w.get('#item-order option[value=asc]').text()).toBe('正序');
+    expect(w.get('#item-order option[value=desc]').text()).toBe('倒序');
+    for (const sort of ['', 'datecreated', 'title', 'year', 'communityrating', 'date']) {
+      await w.setProps({ query: { sort } });
+      expect((w.get('#item-order').element as HTMLSelectElement).value).toBe(sort === 'title' ? 'asc' : 'desc');
+      for (const order of ['asc', 'desc']) {
+        await w.setProps({ query: { sort, order } });
+        expect((w.get('#item-order').element as HTMLSelectElement).value).toBe(order);
+      }
+    }
+    await w.get('#item-order').setValue('asc');
+    await w.get('#item-order').setValue('desc');
+    expect(w.emitted('filter')).toEqual([['order', 'asc'], ['order', 'desc']]);
   });
   it('separates metadata values and emits each entity without merging their labels', async () => {
     const w = mount(MetadataRow, { props: { label: '标签', value: ['Tag-A', 'Rare series'], entityKey: 'tag' } }); cleanups.push(() => w.unmount());

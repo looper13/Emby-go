@@ -41,6 +41,53 @@ async function restoredWall() {
   return { api, wall, open };
 }
 
+it('changes sort direction through the URL, resets pagination, and retains it after detail navigation', async () => {
+  const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/items', name: 'items', component: MediaWallPage },
+    { path: '/item/:id', name: 'item', component: { template: '<p>detail</p>' } },
+  ] });
+  await router.push('/items?sort=title&library_id=1&tag=keep&search=Movie');
+  vi.mocked(catalogApi.libraries).mockResolvedValue({ items: [{ Id: 1, Name: 'Library', Path: '' }], total: 1 });
+  let restore = false;
+  wrapper = mount(MediaWallPage, { global: {
+    plugins: [pinia, router],
+    provide: { [viewHistoryKey as symbol]: { target: () => restore ? { scrollY: 0, wallCount: 100, focusID: '1' } : null } },
+    stubs: { BackgroundTaskProgress: true, MediaGrid: true },
+  } });
+  await flushPromises();
+  const wall = useMediaWallStore();
+  expect((wrapper.get('#item-order').element as HTMLSelectElement).value).toBe('asc');
+  await wall.loadMore(new AbortController().signal);
+  expect(wall.items).toHaveLength(200);
+
+  await wrapper.get('#item-order').setValue('desc'); await flushPromises();
+  expect(router.currentRoute.value.query).toEqual({ sort: 'title', order: 'desc', library_id: '1', tag: 'keep', search: 'Movie' });
+  expect(api.mock.lastCall![0].get('order')).toBe('desc'); expect(api.mock.lastCall![0].get('offset')).toBe('0');
+  expect(wall.items).toHaveLength(100);
+
+  wrapper.getComponent({ name: 'MediaGrid' }).vm.$emit('open', 1); await flushPromises();
+  expect(router.currentRoute.value.path).toBe('/item/1'); expect(router.currentRoute.value.query.order).toBe('desc');
+  const calls = api.mock.calls.length;
+  restore = true; router.back(); await flushPromises();
+  expect(router.currentRoute.value.path).toBe('/items');
+  expect((wrapper.get('#item-order').element as HTMLSelectElement).value).toBe('desc');
+  expect(api).toHaveBeenCalledTimes(calls);
+
+  restore = false;
+  await wrapper.get('#item-order').setValue('asc'); await flushPromises();
+  expect(router.currentRoute.value.query.order).toBe('asc'); expect(api.mock.lastCall![0].get('order')).toBe('asc');
+  await wrapper.get('#item-sort').setValue('year'); await flushPromises();
+  expect(router.currentRoute.value.query.order).toBeUndefined();
+  expect((wrapper.get('#item-order').element as HTMLSelectElement).value).toBe('desc');
+  expect(api.mock.lastCall![0].get('order')).toBe('desc');
+  await wrapper.get('#item-sort').setValue('random'); await flushPromises();
+  expect(wrapper.find('#item-order').exists()).toBe(false); expect(wrapper.find('#wall-shuffle').exists()).toBe(true);
+  await wrapper.get('#item-sort').setValue('title'); await flushPromises();
+  expect((wrapper.get('#item-order').element as HTMLSelectElement).value).toBe('asc');
+  expect(api.mock.lastCall![0].get('order')).toBe('asc');
+});
+
 it('restores count, focus and position before the background page request completes', async () => {
   const { api, open } = await restoredWall();
   let finish!: (value: WallDto) => void;
