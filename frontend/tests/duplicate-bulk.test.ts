@@ -15,7 +15,7 @@ const preview:DuplicateDeletePreview={movie_id:1,alist_url:'http://alist.test',p
 const wrappers:VueWrapper[]=[];
 function dialog(value=selection()) {const w=mount(DuplicateBulkDeleteDialog,{props:{selection:value,libraryName:'All libraries'}});wrappers.push(w);return w;}
 function panel() {const w=mount(DuplicateMoviesPanel,{props:{libraries},global:{stubs:{RouterLink:{props:['to'],template:'<a :href="to"><slot /></a>'}}}});wrappers.push(w);return w;}
-function deferred<T>() {let resolve!:(value:T)=>void;const promise=new Promise<T>(r=>{resolve=r;});return {promise,resolve};}
+function deferred<T>() {let resolve!:(value:T)=>void,reject!:(reason:unknown)=>void;const promise=new Promise<T>((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};}
 beforeEach(()=>{vi.spyOn(duplicatesApi,'strm').mockResolvedValue({movie_id:1,files:[]});});
 afterEach(()=>{wrappers.splice(0).forEach(w=>w.unmount());vi.restoreAllMocks();});
 
@@ -52,21 +52,71 @@ describe('full duplicate selection and serial batch deletion',()=>{
     const remove=vi.spyOn(duplicatesApi,'deleteCopy').mockReturnValueOnce(pending.promise).mockResolvedValue(null);
     const w=dialog();await flushPromises();expect(checked).not.toHaveBeenCalled();expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();
     await w.get('#duplicate-bulk-confirmed').setValue(true);const confirm=w.get('#duplicate-bulk-confirm');await confirm.trigger('click');await confirm.trigger('click');await flushPromises();expect(checked).toHaveBeenCalledTimes(1);expect(remove).toHaveBeenCalledTimes(1);
-    expect(remove).toHaveBeenCalledWith(1,0,'ALDN001',preview,{keep_id:500,selection_token:'signed-1'});expect(w.get('dialog').text()).toContain('正在删除第 1 份');await w.get('dialog').trigger('cancel');expect(w.emitted('close')).toBeUndefined();
-    await w.findAll('button').find(button=>button.text()==='停止队列')!.trigger('click');pending.resolve(null);await flushPromises();expect(checked).toHaveBeenCalledTimes(1);expect(w.text()).toContain('已完成 1 / 3');expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();
+    expect(remove).toHaveBeenCalledWith(1,0,'ALDN001',preview,{keep_id:500,selection_token:'signed-1'});expect(w.get('dialog').text()).toContain('正在删除当前副本');await w.get('dialog').trigger('cancel');expect(w.emitted('close')).toBeUndefined();
+    await w.findAll('button').find(button=>button.text()==='停止队列')!.trigger('click');pending.resolve(null);await flushPromises();expect(checked).toHaveBeenCalledTimes(1);expect(w.text()).toContain('已处理 1 / 3 份（成功 1，失败 0）');expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();
     await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,3]);expect(remove).toHaveBeenCalledTimes(3);expect(w.text()).toContain('批量删除完成');
   });
   it('cancels a pending preview before any deletion and starts no later copies on unmount',async()=>{
     const late=deferred<DuplicateDeletePreview>(),checked=vi.spyOn(duplicatesApi,'previewDelete').mockReturnValue(late.promise),remove=vi.spyOn(duplicatesApi,'deleteCopy');
     const w=dialog();await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
-    await w.findAll('button').find(button=>button.text()==='停止队列')!.trigger('click');expect(checked.mock.calls[0]![3].aborted).toBe(true);late.resolve(preview);await flushPromises();expect(remove).not.toHaveBeenCalled();expect(w.text()).toContain('已完成 0 / 3');
+    await w.findAll('button').find(button=>button.text()==='停止队列')!.trigger('click');expect(checked.mock.calls[0]![3].aborted).toBe(true);late.resolve(preview);await flushPromises();expect(remove).not.toHaveBeenCalled();expect(w.text()).toContain('已处理 0 / 3 份（成功 0，失败 0）');
     await w.get('dialog').trigger('cancel');expect(w.emitted('close')).toEqual([[0]]);
   });
-  it('stops on a partial failure, shows removed paths and requires fresh confirmation and preview',async()=>{
+  it('continues past a partial failure, keeps its removed paths and retries only failures after confirmation',async()=>{
     const checked=vi.spyOn(duplicatesApi,'previewDelete').mockResolvedValue(preview);
     const remove=vi.spyOn(duplicatesApi,'deleteCopy').mockRejectedValueOnce(new ApiError('remote denied',502,{removed_remote_paths:['/115/CD1.mp4']})).mockResolvedValue(null);
-    const w=dialog(selection(2));await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();expect(checked).toHaveBeenCalledTimes(1);expect(w.get('[role=alert]').text()).toContain('remote denied');expect(w.text()).toContain('/115/CD1.mp4');expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();
-    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();expect(checked.mock.calls.map(call=>call[0])).toEqual([1,1,2]);expect(remove).toHaveBeenCalledTimes(3);expect(w.text()).toContain('已完成 2 / 2');
+    const w=dialog(selection(2));await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();expect(checked).toHaveBeenCalledTimes(2);expect(w.get('[data-duplicate-result="1"]').text()).toContain('remote denied');expect(w.get('[data-duplicate-result="1"]').text()).toContain('/115/CD1.mp4');expect(w.get('[data-duplicate-result="2"]').text()).not.toContain('/115/CD1.mp4');expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();expect(w.text()).toContain('已处理 2 / 2 份（成功 1，失败 1）');
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,1]);expect(remove).toHaveBeenCalledTimes(3);expect(w.text()).toContain('已处理 2 / 2 份（成功 2，失败 0）');expect(w.text()).not.toContain('/115/CD1.mp4');
+  });
+  it('records a missing AList file and deletes later copies without marking the missing copy successful',async()=>{
+    const missing='检查远程文件 /115/missing.mkv 失败：AList 文件不存在';
+    const checked=vi.spyOn(duplicatesApi,'previewDelete').mockRejectedValueOnce(new ApiError(missing,409)).mockResolvedValue(preview);
+    const remove=vi.spyOn(duplicatesApi,'deleteCopy').mockResolvedValue(null),w=dialog();
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,3]);expect(remove.mock.calls.map(call=>call[0])).toEqual([2,3]);
+    expect(w.text()).toContain('已处理 3 / 3 份（成功 2，失败 1）');expect(w.text()).not.toContain('批量删除完成');
+    expect(w.get('[data-duplicate-result="1"]').text()).toContain(missing);expect(w.get('[data-duplicate-result="1"]').text()).toContain('失败，待重试');
+    w.get('.duplicate-bulk-list').element.scrollTop=200;await w.get('#duplicate-bulk-filter-failed').trigger('click');expect(w.findAll('[data-duplicate-result]')).toHaveLength(1);expect(w.get('.duplicate-bulk-list').element.scrollTop).toBe(0);
+    expect(w.get('#duplicate-bulk-confirm').text()).toContain('重试失败 1 份');expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,3,1]);expect(remove.mock.calls.map(call=>call[0])).toEqual([2,3,1]);expect(w.text()).toContain('批量删除完成');
+  });
+  it('attempts each copy only once per pass even when every preview fails',async()=>{
+    const checked=vi.spyOn(duplicatesApi,'previewDelete').mockRejectedValue(new DOMException('请求超时','TimeoutError'));
+    const remove=vi.spyOn(duplicatesApi,'deleteCopy'),w=dialog();
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,3]);expect(remove).not.toHaveBeenCalled();expect(w.text()).toContain('已处理 3 / 3 份（成功 0，失败 3）');expect(w.text()).toContain('当前副本核验超时');
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,3,1,2,3]);expect(w.text()).toContain('失败 3');expect(w.get('#duplicate-bulk-confirm').attributes('disabled')).toBeDefined();
+    await w.get('dialog').trigger('cancel');expect(w.emitted('close')).toEqual([[0]]);
+  });
+  it('preserves failures when a later preview is stopped, then continues only unprocessed copies',async()=>{
+    const late=deferred<DuplicateDeletePreview>();
+    const checked=vi.spyOn(duplicatesApi,'previewDelete').mockRejectedValueOnce(new ApiError('missing',502)).mockReturnValueOnce(late.promise).mockResolvedValue(preview);
+    const remove=vi.spyOn(duplicatesApi,'deleteCopy').mockResolvedValue(null),w=dialog();
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2]);expect(w.get('[role=alert]').text()).toContain('继续处理本轮后续副本');
+    await w.findAll('button').find(button=>button.text()==='停止队列')!.trigger('click');expect(checked.mock.calls[1]![3].aborted).toBe(true);late.resolve(preview);await flushPromises();
+    expect(remove).not.toHaveBeenCalled();expect(w.text()).toContain('已处理 1 / 3 份（成功 0，失败 1），未处理 2');
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(checked.mock.calls.map(call=>call[0])).toEqual([1,2,2,3]);expect(remove.mock.calls.map(call=>call[0])).toEqual([2,3]);expect(w.get('#duplicate-bulk-confirm').text()).toContain('重试失败 1 份');
+  });
+  it('stops after a failed in-flight deletion and does not count that copy as completed on close',async()=>{
+    const checked=vi.spyOn(duplicatesApi,'previewDelete').mockResolvedValue(preview),pending=deferred<unknown>();
+    vi.spyOn(duplicatesApi,'deleteCopy').mockReturnValue(pending.promise);const w=dialog();
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    await w.findAll('button').find(button=>button.text()==='停止队列')!.trigger('click');pending.reject(new ApiError('remote denied',502));await flushPromises();
+    expect(checked).toHaveBeenCalledTimes(1);expect(w.text()).toContain('已处理 1 / 3 份（成功 0，失败 1），未处理 2');
+    await w.get('dialog').trigger('cancel');expect(w.emitted('close')).toEqual([[0]]);
+  });
+  it('paginates the failure list and keeps its page in range as retries resolve failures',async()=>{
+    const checked=vi.spyOn(duplicatesApi,'previewDelete').mockRejectedValue(new ApiError('missing',502));vi.spyOn(duplicatesApi,'deleteCopy').mockResolvedValue(null);const w=dialog(selection(23));
+    await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    await w.get('#duplicate-bulk-filter-failed').trigger('click');expect(w.findAll('[data-duplicate-result]')).toHaveLength(20);
+    w.get('.duplicate-bulk-list').element.scrollTop=200;await w.findAll('button').find(button=>button.text()==='下一页清单')!.trigger('click');expect(w.findAll('[data-duplicate-result]')).toHaveLength(3);expect(w.get('.duplicate-bulk-list').element.scrollTop).toBe(0);
+    checked.mockResolvedValue(preview);await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(w.text()).toContain('成功 23，失败 0');expect(w.text()).toContain('暂无失败副本');
+    await w.get('#duplicate-bulk-filter-failed').trigger('click');expect(w.findAll('[data-duplicate-result]')).toHaveLength(20);expect(w.get('[data-duplicate-result="1"]').text()).toContain('已成功');
   });
   it('does not advance to another copy when the page closes during a deletion',async()=>{
     const checked=vi.spyOn(duplicatesApi,'previewDelete').mockResolvedValue(preview),pending=deferred<unknown>(),remove=vi.spyOn(duplicatesApi,'deleteCopy').mockReturnValue(pending.promise);
@@ -75,6 +125,12 @@ describe('full duplicate selection and serial batch deletion',()=>{
   it('refreshes duplicate groups when a finished batch closes',async()=>{
     const list=vi.spyOn(duplicatesApi,'groups').mockResolvedValue({items:[{key:'ALDN001',number:'ALDN-001',count:2}],total:1,total_movies:2,extra_copies:1});vi.spyOn(duplicatesApi,'selection').mockResolvedValue(selection(1));vi.spyOn(duplicatesApi,'previewDelete').mockResolvedValue(preview);vi.spyOn(duplicatesApi,'deleteCopy').mockResolvedValue(null);
     const w=panel();await w.get('form').trigger('submit');await flushPromises();await w.get('#duplicate-select-all').trigger('click');await flushPromises();await w.get('#duplicate-bulk-delete').trigger('click');await flushPromises();await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();await w.findAll('dialog button').find(button=>button.text()==='关闭')!.trigger('click');await flushPromises();expect(list).toHaveBeenCalledTimes(2);expect(w.text()).toContain('批量删除已完成 1 份');expect(w.find('dialog').exists()).toBe(false);
+  });
+  it('refreshes groups using the successful count rather than the number of processed copies',async()=>{
+    const list=vi.spyOn(duplicatesApi,'groups').mockResolvedValue({items:[{key:'ALDN001',number:'ALDN-001',count:3}],total:1,total_movies:3,extra_copies:2});vi.spyOn(duplicatesApi,'selection').mockResolvedValue(selection(2));vi.spyOn(duplicatesApi,'previewDelete').mockRejectedValueOnce(new ApiError('missing',502)).mockResolvedValue(preview);vi.spyOn(duplicatesApi,'deleteCopy').mockResolvedValue(null);
+    const w=panel();await w.get('form').trigger('submit');await flushPromises();await w.get('#duplicate-select-all').trigger('click');await flushPromises();await w.get('#duplicate-bulk-delete').trigger('click');await flushPromises();await w.get('#duplicate-bulk-confirmed').setValue(true);await w.get('#duplicate-bulk-confirm').trigger('click');await flushPromises();
+    expect(w.get('dialog').text()).toContain('成功 1，失败 1');await w.findAll('dialog button').find(button=>button.text()==='关闭')!.trigger('click');await flushPromises();
+    expect(list).toHaveBeenCalledTimes(2);expect(w.text()).toContain('批量删除已完成 1 份');expect(w.text()).not.toContain('批量删除已完成 2 份');
   });
   it('sends batch identity proofs on both preview and delete while keeping selection read-only',async()=>{
     const request=vi.spyOn(apiClient,'request').mockResolvedValueOnce({...selection(1),rule:'shortest'}).mockResolvedValueOnce(preview).mockResolvedValueOnce(null),signal=new AbortController().signal,proof={keep_id:500,selection_token:'signed-1'};
