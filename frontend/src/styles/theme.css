@@ -1268,3 +1268,163 @@ details summary {
 [data-hide-media="true"] .favorite-art img {
   display: none !important;
 }
+
+/* ------------------------------------------------------------------ 播放器模态框 (Video Player Modal) */
+.player-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(4, 5, 8, 0.86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.player-shell {
+  width: min(1160px, 100%);
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  background: #141517;
+  color: #f8f9fa;
+  color-scheme: dark;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.player-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  background: #18191d;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.player-head strong,
+#player-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff !important;
+  letter-spacing: 0.2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 覆盖浅色主题下 .icon-btn 的深色字与白色 hover 样式，确保播放器内始终是暗色影院级高反差按钮 */
+[data-theme="light"] .player-head .icon-btn,
+[data-theme="light"] #player-close,
+.player-head .icon-btn,
+#player-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.75) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+[data-theme="light"] .player-head .icon-btn:hover,
+[data-theme="light"] #player-close:hover,
+.player-head .icon-btn:hover,
+#player-close:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.18) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  transform: translateY(-1px);
+}
+
+.player-head .icon-btn:active,
+#player-close:active {
+  transform: translateY(0);
+}
+
+.player-head .icon-btn svg,
+#player-close svg {
+  pointer-events: none;
+}
+
+.player-stage {
+  aspect-ratio: 16 / 9;
+  max-height: calc(100vh - 140px);
+  max-height: calc(100dvh - 140px);
+  background: #000;
+  position: relative;
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .player-overlay {
+    padding: 10px;
+  }
+  .player-shell {
+    border-radius: 10px;
+    max-height: calc(100dvh - 20px);
+  }
+  .player-head {
+    padding: 10px 14px;
+    gap: 12px;
+  }
+  .player-head strong,
+  #player-title {
+    font-size: 13.5px;
+  }
+  .player-stage {
+    max-height: calc(100dvh - 90px);
+  }
+}
+
+/* ------------------------------------------------------------------ 剧照灯箱深色模态高反差修正 */
+.artwork-overlay {
+  background: rgba(4, 5, 8, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.artwork-head strong,
+#artwork-title {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .artwork-head .icon-btn,
+[data-theme="light"] #artwork-close,
+.artwork-head .icon-btn,
+#artwork-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.75) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+[data-theme="light"] .artwork-head .icon-btn:hover,
+[data-theme="light"] #artwork-close:hover,
+.artwork-head .icon-btn:hover,
+#artwork-close:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.18) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  transform: translateY(-1px);
+}

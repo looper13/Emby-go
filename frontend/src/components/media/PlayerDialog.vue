@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, shallowRef } from 'vue';
+import { Film, Loader2, X } from '@lucide/vue';
 import {
   loadPlayerFactory,
   managePlayer,
@@ -268,18 +269,25 @@ onScopeDispose(() => {
       aria-labelledby="player-title"
     >
       <div class="player-head">
-        <strong id="player-title">{{ options.title }}</strong
-        ><button
+        <div class="player-title-wrap">
+          <Film :size="16" class="player-title-icon" aria-hidden="true" />
+          <strong id="player-title" :title="options.title">{{ options.title }}</strong>
+        </div>
+        <button
           id="player-close"
           ref="closeButton"
-          class="icon-btn"
+          class="icon-btn player-close-btn"
           title="关闭 (Esc)"
+          aria-label="关闭 (Esc)"
           @click="emit('close')"
         >
-          ✕
+          <X :size="18" aria-hidden="true" />
         </button>
       </div>
-      <p v-if="!trackHost" class="player-loading" role="status">{{ changingAudio ? '正在准备所选音轨…' : '正在加载播放器…' }}</p>
+      <div v-if="!trackHost" class="player-loading" role="status">
+        <Loader2 :size="20" class="player-loading-spinner" aria-hidden="true" />
+        <span>{{ changingAudio ? '正在准备所选音轨…' : '正在加载播放器…' }}</span>
+      </div>
       <div id="player-stage" ref="stage" class="player-stage"></div>
       <Teleport v-if="trackHost && options.itemId && (changingAudio || trackError || remuxSession)" :to="trackHost">
         <div class="player-track-toolbar" @keydown.stop @click.stop @dblclick.stop>
@@ -295,12 +303,143 @@ onScopeDispose(() => {
   </div>
 </template>
 <style scoped>
-.player-loading { position: absolute; top: 50%; left: 16px; right: 16px; text-align: center; color: #fff; font-size: 14px; }
-.player-track-toolbar { position: absolute; z-index: 30; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; background: rgb(0 0 0 / 75%); border-radius: 6px; color: #fff; font-size: 12px; }
-.player-track-toolbar label { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1 1 120px; white-space: nowrap; }
-.player-track-error { flex-basis: 100%; color: #ffb6ac; }
-.player-track-toolbar .player-track-seek { flex-basis: 100%; }
-.player-track-seek input { flex: 1; min-width: 30px; }
-.player-track-seek span { white-space: nowrap; }
-.player-stage :deep(video::cue) { font-size: clamp(12px, 2vw, 22px); }
+.player-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.player-title-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.player-head strong,
+#player-title {
+  color: #f8f9fa;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.player-close-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.28);
+  transform: translateY(-1px);
+}
+
+.player-close-btn:active {
+  transform: translateY(0);
+}
+
+.player-close-btn svg {
+  pointer-events: none;
+}
+
+.player-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  background: rgba(18, 19, 22, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  color: #ffffff;
+  font-size: 13.5px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.player-loading-spinner {
+  animation: player-spin 1s linear infinite;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+@keyframes player-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.player-track-toolbar {
+  position: absolute;
+  z-index: 30;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(18, 19, 22, 0.9);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f8f9fa;
+  font-size: 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+}
+
+.player-track-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 120px;
+  white-space: nowrap;
+}
+
+.player-track-error {
+  flex-basis: 100%;
+  color: #ff8787;
+  font-weight: 500;
+}
+
+.player-track-toolbar .player-track-seek {
+  flex-basis: 100%;
+}
+
+.player-track-seek input {
+  flex: 1;
+  min-width: 30px;
+  accent-color: var(--accent);
+}
+
+.player-track-seek span {
+  white-space: nowrap;
+}
+
+.player-stage :deep(video::cue) {
+  font-size: clamp(12px, 2vw, 22px);
+}
 </style>

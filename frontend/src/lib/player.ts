@@ -45,7 +45,7 @@ export async function loadPlayerFactory(type = 'mp4'): Promise<PlayerFactory> {
     const player = new Constructor({ container: stage, url: options.url, type: options.type, title: options.title,
     customType: hls ? { m3u8: hls.createHlsPlayback(options.onTracks, options.hlsStartPosition) } : {},
     autoplay: true, volume: 1, playbackRate: true, aspectRatio: true, fullscreen: true, fullscreenWeb: true,
-    setting: true, hotkey: true, pip: true, theme: '#e0a44b', lang: 'zh-cn' });
+    setting: true, hotkey: true, pip: true, theme: '#2b7afe', lang: 'zh-cn' });
     if (!hls && player.video && options.onTracks) player.on('destroy', bindNativeTracks(player.video, options.onTracks));
     return player;
   };
