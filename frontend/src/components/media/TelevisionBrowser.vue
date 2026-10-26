@@ -163,7 +163,7 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
           <small>{{ selected ? item.SeriesName : [item.ProductionYear || '', `${item.ChildCount} 季`, `${item.RecursiveItemCount} 集`].filter(Boolean).join(' · ') }}</small>
         </button>
         <div class="television-favorite">
-          <FavoriteButton :item-id="item.Id" :favorite="item.Favorite" :label="item.Name" />
+          <FavoriteButton :item-id="item.Id" :favorite="item.Favorite" :label="item.Name" @changed="item.Favorite = $event" />
         </div>
       </article>
     </div>
@@ -182,15 +182,70 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
   min-width: 0;
 }
 .television-entry {
+  position: relative;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+.television-entry:hover {
+  transform: translateY(-4px);
 }
 .television-entry .television-card {
   width: 100%;
 }
 .television-favorite {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
   display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
+.television-favorite :deep(.favorite-button) {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.68);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: all 0.18s cubic-bezier(0.2, 0, 0, 1);
+  opacity: 0;
+  transform: scale(0.9);
+}
+.television-favorite :deep(.favorite-button svg) {
+  width: 15px;
+  height: 15px;
+}
+.television-entry:hover .television-favorite :deep(.favorite-button),
+.television-entry:focus-within .television-favorite :deep(.favorite-button),
+.television-favorite :deep(.favorite-button.selected) {
+  opacity: 1;
+  transform: scale(1);
+}
+.television-favorite :deep(.favorite-button:hover) {
+  background: rgba(15, 23, 42, 0.88);
+  color: #ff5c7c;
+  border-color: rgba(255, 92, 124, 0.45);
+  transform: scale(1.08);
+}
+.television-favorite :deep(.favorite-button.selected) {
+  background: rgba(15, 23, 42, 0.82);
+  color: #ff5c7c;
+  border-color: rgba(255, 92, 124, 0.4);
+  box-shadow: 0 2px 10px rgba(255, 92, 124, 0.35);
+}
+@media (hover: none) {
+  .television-favorite :deep(.favorite-button) {
+    opacity: 0.85;
+    transform: scale(1);
+  }
 }
 .season-favorite {
   display: flex;
@@ -265,10 +320,6 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
   display: grid;
   align-content: start;
   gap: 6px;
-  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
-}
-.television-card:hover {
-  transform: translateY(-4px);
 }
 .television-card:focus-visible {
   outline: 2px solid var(--accent);
@@ -290,7 +341,8 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
 .episode-grid .television-cover {
   aspect-ratio: 16 / 9;
 }
-.television-card:hover .television-cover {
+.television-entry:hover .television-cover,
+.television-card:focus-visible .television-cover {
   border-color: var(--accent);
   box-shadow: 0 10px 24px rgba(26, 113, 255, 0.25);
 }
@@ -300,7 +352,7 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
   object-fit: cover;
   transition: transform 0.25s ease, filter 0.25s ease;
 }
-.television-card:hover .television-cover img {
+.television-entry:hover .television-cover img {
   transform: scale(1.04);
   filter: brightness(0.9);
 }
@@ -318,7 +370,7 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
   overflow-wrap: anywhere;
   transition: color 0.15s ease;
 }
-.television-card:hover strong {
+.television-entry:hover strong {
   color: var(--accent);
 }
 .television-card small {
