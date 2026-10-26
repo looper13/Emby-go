@@ -178,6 +178,10 @@ func (a *App) resolveMovieArtwork(movie store.Movie, backdrops bool) store.Movie
 			}
 		}
 	}
+	// Episodes commonly have only a thumbnail; expose it to Primary-only clients.
+	if movie.ItemType() == "Episode" && images.Poster == "" {
+		images.Poster = images.Landscape
+	}
 	movie.PosterPath, movie.LandscapePath = images.Poster, images.Landscape
 	movie.BackdropPath, movie.BackdropPaths = images.Backdrop, images.Backdrops
 	return movie

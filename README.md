@@ -92,10 +92,13 @@ Show/
 └── Season 2/
     ├── poster.jpg             # 可选：季海报
     ├── Show.S02E01.strm
-    └── Show.S02E01.nfo         # <episodedetails>，season=2、episode=1
+    ├── Show.S02E01.nfo         # <episodedetails>，season=2、episode=1
+    └── Show.S02E01-thumb.jpg   # 可选：单集缩略图
 ```
 
 单集的 `<season>` / `<episode>` 优先于文件名；缺少时可从 `S02E01` 形式推断。季号允许 0（特别篇），集号从 1 开始。存在 `tvshow.nfo` 时据其目录归属剧集；否则识别 `Season N` / `SNN` / `Specials` 目录，并回退到 `<showtitle>` 或目录名。剧集资料 NFO 损坏时保留原索引并重试，不把损坏当作删除。
+
+单集没有主海报时，同名 `-thumb` / `-landscape` 缩略图（以及既有的目录宽图回退）同时提供为 Emby `Primary` 和 `Thumb`，网页单集列表也支持仅有 `Thumb` 的返回。已有主海报优先，电影、剧集和季的封面规则不变；无需重命名单集图片，图片仍在请求时按需读取，无需重新扫描。
 
 媒体墙默认分层浏览；混合库的影片区不重复展示单集。“全部媒体索引”可平铺检查影片与单集。所选剧集和季写入 URL，详情返回与刷新可恢复；首次进入优先选择正片季，特别篇仍可手动选择。播放及进度复用已有接口，STRM 失效不删除元数据，修复有效 HTTP/HTTPS 地址后无需重扫即可恢复播放。客户端兼容范围与本地验证结果见 [剧集与混合库验证记录](codestable/issues/024-o-ff-television-mixed-validation.md)；真实 Emby 客户端及网络挂载尚未验收。
 
@@ -106,6 +109,8 @@ NFO 的 `<runtime>` 与视频 `<duration>` 按分钟读取，兼容纯整数及 
 影片本地图片参考 [Emby 电影图片命名规则](https://emby.media/support/articles/Movie-Naming.html#video-images)：海报支持影片同名图及 `-poster`/`-cover`/`-default`/`-movie`，也认目录公共海报；宽图依次识别影片名 `-thumb`/`-landscape`、`thumb`/`landscape`。背景图识别 `backdrop`/`backdropX`、`fanart`/`fanart-X`、`background`/`background-X`、`art`/`art-X`，以及 `extrafanart/fanartX`（X 为数字）。保留服务生成的影片专属海报和背景图优先级；专属背景图不会混入目录公共背景，但仍包含 `extrafanart`。
 
 多张背景图通过 `BackdropImageTags`、`GET /Items/{id}/Images` 的 `ImageIndex` 及 `GET /Items/{id}/Images/Backdrop/{index}` 提供给客户端，编号从 0 开始；管理端影片详情页也展示剧照网格，可点击查看原图。封面在列表/图片请求时发现，剧照在详情/背景图请求时发现；同目录请求共享短期目录清单缓存。图片与 `extrafanart` 目录的增删只使图片和响应缓存失效，不重读 NFO 或写影片索引。无需通过扫描补齐图片。
+
+`HEAD /Items/{id}/Images/{type}` 及带 `/{index}` 的图片地址与 GET 共用取图、权限和缓存逻辑，只返回响应头、不返回图片正文；同时支持根路径、`/emby` 前缀和全小写路径。图片文件允许匿名读取，有有效凭据时仍检查该用户的媒体库权限。电影与虚拟剧集/季提供 Primary、Thumb、Backdrop 等既有图片类型，未提供 Logo、Banner、Art 的独立图片识别；这些条目的缺失或不支持图片返回 404，不以普通海报冒充。媒体库、合集及虚拟实体沿用原 GET 的封面回退规则。
 
 管理员可在“媒体库 → 影片查重”按已入库番号寻找重复影片，选择全部媒体库（包含跨库重复）或单个媒体库后点击“开始查重”；每行媒体库也有“查重”快捷入口。忽略番号大小写、空格/制表符及 `-`、`_`、`.` 分隔差异，保留前导零和版本后缀，不从标题或文件名猜测番号。空番号与电视节目不参与；同一索引记录的 CD 分段只计一部，有番号的未就绪影片也参与。结果显示重复组数、涉及影片数、多出的副本数，点击“查看位置”后可查看原始番号、媒体库、主文件/分段路径、状态并进入详情，同时自动读取每个副本的主 STRM 与 CD 分段内容。内容按纯文本展示，不访问其中的远程链接；缺失、不可读或非 STRM 文件单独提示，读取失败可重试，收起或翻页取消旧请求，再展开读取磁盘当前内容。只允许媒体库目录内的普通 STRM（单文件最多 64 KiB、每部最多 64 个文件），不缓存包含签名链接的响应；分组和组内影片分别分页。统计及成员查询只读数据库，内容读取只读本地文件，不修改索引或删除文件；磁盘路径或番号变化需要先增量扫描。接口为管理员专用 `GET /api/admin/duplicates`、`/api/admin/duplicates/items?key=...` 与 `/api/admin/duplicates/items/:id/strm?key=...`，遵循媒体库访问范围；分组和成员接口支持 `library_id`、`limit`（1–100）、`offset`，内容接口支持 `library_id` 与 `key`。
 
@@ -273,6 +278,8 @@ Split/
 - `GET /Users` 返回当前管理员的 UserDto 数组，需要访问令牌；支持 `IsHidden`、`IsDisabled`、`IsGuest`。`POST /Users/{uid}/Authenticate` 接收 JSON 或表单 `Pw`，校验密码并返回登录令牌；用户 ID 使用本服务返回的 `1`，不接受其它 Emby 服务器的旧用户 ID。
 - `GET /Library/VirtualFolders` 返回实际配置的媒体库数组，含 `Name`、`Locations`、`ItemId`、`Id`、`CollectionType`、`LibraryOptions`。库 ID 与 Views 一致；自动生成的合集视图不作为实际配置目录返回。
 - `GET /Library/VirtualFolders/Query` 返回同一批配置目录的分页对象，包含 `Items`、`TotalRecordCount`、`StartIndex`，支持 `StartIndex`、`Limit`；空页返回 `Items: []`。
+- `GET /Library/MediaFolders` 返回当前用户可访问、已启用媒体库的 `CollectionFolder` 项，包含 `Items`、`TotalRecordCount`；库 ID、类型和封面与 Views 一致，不包含自动生成的合集视图，也不返回 VirtualFolders 的目录配置结构。当前没有隐藏库模型，`IsHidden=true` 返回空列表，不将禁用库作为隐藏库暴露。
+- `GET /Users/{uid}/Items/{id}/SpecialFeatures` 校验当前用户、媒体库权限和条目存在性；有效电影、单集、分段及虚拟剧集/季返回 `[]`，表示当前未提供花絮。未知、不可见或越权条目返回 404；不新增花絮扫描、关联或播放功能，Season 0 特别篇仍通过原电视节目层级浏览。
 - `GET /Persons` 返回可见影片关联的演员 Person 项，使用现有演员 ID；支持上述媒体库/合集范围、搜索、名称范围、排序和分页。图片优先使用本地演员头像，没有头像时回退到参演影片海报；`EnableImages=false` 可关闭图片标识。演员名来自 SQLite 索引，暂不支持导演等其它人物类型或全部 Emby 高级查询参数。
 - `GET /Items/{id}/ThumbnailSet` 返回 `{AspectRatio: 0, Thumbnails: []}`；当前未生成播放进度预览帧，空集合表示无预览。它与海报缩略图、剧照无关，也不会触发下载或抽帧。未知或不可见影片返回 404。
 - 上述接口同时提供根路径、`/emby` 前缀和全小写路径；除密码登录外均需鉴权。

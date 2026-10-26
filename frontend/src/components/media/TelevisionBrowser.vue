@@ -152,8 +152,8 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
         <button class="television-card" :data-tv-id="item.Id" @click="select(item)">
           <div class="television-cover">
             <MediaImage
-              v-if="!hideImages && item.ImageTags.Primary"
-              :src="imageURL(item.Id, 'Primary', 320, item.ImageTags.Primary)"
+              v-if="!hideImages && (item.ImageTags.Primary || (item.Type === 'Episode' && item.ImageTags.Thumb))"
+              :src="imageURL(item.Id, item.ImageTags.Primary ? 'Primary' : 'Thumb', 320, item.ImageTags.Primary || item.ImageTags.Thumb)"
               alt=""
               loading="lazy"
             />

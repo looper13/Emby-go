@@ -182,6 +182,12 @@ func (a *App) serveImage(c *gin.Context, path string) {
 		return
 	}
 	if data, ok := a.thumbnail(c, path, tag); ok {
+		if c.Request.Method == http.MethodHead {
+			c.Header("Content-Type", "image/webp")
+			c.Header("Content-Length", strconv.Itoa(len(data)))
+			c.Status(http.StatusOK)
+			return
+		}
 		c.Data(http.StatusOK, "image/webp", data)
 		return
 	}
