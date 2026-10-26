@@ -39,6 +39,13 @@ type detailActor struct {
 	Favorite  bool   `json:"favorite"`
 }
 
+type episodeVersion struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Container string `json:"container"`
+	Playable  bool   `json:"playable"`
+}
+
 func (a *App) adminItemDetail(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -56,6 +63,15 @@ func (a *App) adminItemDetail(c *gin.Context) {
 		movie.TrailerURL = "/Videos/" + strconv.FormatInt(movie.ID, 10) + "/trailer.mp4"
 	}
 	movie, playable := currentMovieSource(movie, movie.SourcePath)
+	versions := []episodeVersion{}
+	if movie.Television != nil {
+		if siblings, err := a.db.TVEpisodeVersions(movie.ID); err == nil {
+			for _, sibling := range siblings {
+				current, available := currentMovieSource(sibling, sibling.SourcePath)
+				versions = append(versions, episodeVersion{ID: sibling.ID, Name: filepath.Base(sibling.SourcePath), Container: current.SourceContainer, Playable: available})
+			}
+		}
+	}
 	paths := append([]string{movie.SourcePath}, movie.AdditionalParts...)
 	files := make([]detailFile, 0, len(paths))
 	for i, path := range paths {
@@ -121,7 +137,8 @@ func (a *App) adminItemDetail(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"movie":        movie,
-		"playable":     playable && movie.IsVisible(),
+		"versions":     versions,
+		"playable":     movie.IsVisible() && (playable || hasPlayableEpisodeVersion(versions)),
 		"images":       a.movieImageInfo(movie),
 		"library_name": libraryName,
 		"userdata":     userData,
@@ -130,6 +147,15 @@ func (a *App) adminItemDetail(c *gin.Context) {
 		"actors":       actors,
 		"modified_at":  modifiedAt(movie.SourcePath),
 	})
+}
+
+func hasPlayableEpisodeVersion(versions []episodeVersion) bool {
+	for _, version := range versions {
+		if version.Playable {
+			return true
+		}
+	}
+	return false
 }
 
 func fileSize(path string) int64 {

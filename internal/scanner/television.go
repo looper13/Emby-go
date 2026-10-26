@@ -53,10 +53,10 @@ func applyTelevision(movie *store.Movie, meta nfo.MovieMeta, lib store.Library, 
 		season, _ = strconv.Atoi(match[1])
 		number, _ = strconv.Atoi(match[2])
 	}
-	if meta.Season != nil {
+	if meta.Season != nil && *meta.Season >= 0 && *meta.Season <= 1000 {
 		season = *meta.Season
 	}
-	if meta.Episode != nil {
+	if meta.Episode != nil && *meta.Episode >= 1 && *meta.Episode <= 10000 {
 		number = *meta.Episode
 	}
 	if season < 0 || season > 1000 || number < 1 || number > 10000 {

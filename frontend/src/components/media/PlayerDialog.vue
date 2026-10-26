@@ -46,7 +46,7 @@ let began = false,
   resumed = false;
 function reportProgress(stopped = false) {
   if (auth.token !== playbackToken) return;
-  if (!stopped && remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'PATCH', readOnly: true }).catch(() => {});
+  if (!stopped && remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.sourceItemId || props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'PATCH', readOnly: true }).catch(() => {});
   const video = session?.player.video;
   if (
     !began ||
@@ -202,7 +202,7 @@ async function chooseAudio(value: string, seek?: number) {
   const state = playbackState();
   const start = seek ?? offset.value + (state?.time ?? 0);
   try {
-    const result = await apiClient.request(`/Videos/${encodeURIComponent(props.options.itemId)}/Playback`, {
+    const result = await apiClient.request(`/Videos/${encodeURIComponent(props.options.sourceItemId || props.options.itemId)}/Playback`, {
       auth: 'required', method: 'POST', readOnly: true, signal: controller.signal,
       json: { AudioStreamIndex: Number(value.slice(7)), StartTimeTicks: Math.round(start * 1e7), PreviousSession: remuxSession.value },
     }) as { SessionId: string; Url: string; StartTimeTicks: number };
@@ -224,7 +224,7 @@ onMounted(async () => {
   try {
     if (props.options.itemId) {
       try {
-        source.value = parsePlaybackSource(await apiClient.request(`/Items/${encodeURIComponent(props.options.itemId)}/PlaybackInfo`, { auth: 'required', method: 'POST', readOnly: true, signal: controller.signal }));
+        source.value = parsePlaybackSource(await apiClient.request(`/Items/${encodeURIComponent(props.options.sourceItemId || props.options.itemId)}/PlaybackInfo`, { auth: 'required', method: 'POST', readOnly: true, signal: controller.signal }));
         baseOptions = { ...baseOptions, type: playbackType(source.value.Container) };
         if (baseOptions.resumeTicks == null && source.value.ResumePositionTicks) baseOptions.resumeTicks = source.value.ResumePositionTicks;
         const selected = resolveTrackSelection(source.value, props.options.selection, supportsNativeAudio(source.value));
@@ -251,7 +251,7 @@ onMounted(async () => {
 onScopeDispose(() => {
   active = false;
   generation++; controller.abort(); subtitleRequest?.abort(); clearSubtitle();
-  if (auth.token === playbackToken && remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'DELETE', readOnly: true }).catch(() => {});
+  if (auth.token === playbackToken && remuxSession.value && props.options.itemId) void apiClient.request(`/Videos/${encodeURIComponent(props.options.sourceItemId || props.options.itemId)}/Playback/${encodeURIComponent(remuxSession.value)}`, { auth: 'required', method: 'DELETE', readOnly: true }).catch(() => {});
   clearInterval(progressTimer);
   reportProgress(true);
   session?.destroy();

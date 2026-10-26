@@ -124,12 +124,43 @@ func (s *Store) TVEpisodes(libraryID int64, seriesPath string) ([]Movie, error) 
 	}
 	defer rows.Close()
 	out := []Movie{}
+	var previousLibrary int64
+	previousPath := ""
+	previousSeason, previousEpisode := -1, -1
 	for rows.Next() {
 		m, err := movieScan(rows)
 		if err != nil {
 			return nil, err
 		}
+		if m.LibraryID == previousLibrary && m.Television.SeriesPath == previousPath && m.Television.Season == previousSeason && m.Television.Episode == previousEpisode {
+			continue
+		}
 		out = append(out, m)
+		previousLibrary, previousPath = m.LibraryID, m.Television.SeriesPath
+		previousSeason, previousEpisode = m.Television.Season, m.Television.Episode
+	}
+	return out, rows.Err()
+}
+
+// TVEpisodeVersions returns every playable source for the same logical episode.
+// The earliest item remains the stable episode id in television listings.
+func (s *Store) TVEpisodeVersions(id int64) ([]Movie, error) {
+	m, err := s.Movie(id)
+	if err != nil || m.Television == nil || !m.IsVisible() || !s.CanAccessLibrary(m.LibraryID) {
+		return nil, sql.ErrNoRows
+	}
+	rows, err := s.db.Query("SELECT "+movieCols+` FROM movies WHERE library_id=? AND status IN ('success','manual') AND json_extract(television,'$.series_path')=? AND json_extract(television,'$.season')=? AND json_extract(television,'$.episode')=? ORDER BY id`, m.LibraryID, m.Television.SeriesPath, m.Television.Season, m.Television.Episode)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Movie{}
+	for rows.Next() {
+		version, err := movieScan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, version)
 	}
 	return out, rows.Err()
 }

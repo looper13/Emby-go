@@ -40,6 +40,33 @@ func TestReadRuntimeWithMinuteUnits(t *testing.T) {
 	}
 }
 
+func TestReadRuntimeWithClock(t *testing.T) {
+	for _, tc := range []struct {
+		value   string
+		minutes int64
+		seconds int64
+	}{
+		{"1:21:00", 81, 4860},
+		{" 01:21:37 ", 81, 4897},
+		{"0:00:45", 0, 45},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "movie.nfo")
+			body := `<movie><title>Keep title</title><runtime>` + tc.value + `</runtime><actor><name>Keep actor</name></actor></movie>`
+			if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			meta, err := Read(path)
+			if err != nil || meta.Runtime != tc.minutes || meta.RuntimeSeconds() != tc.seconds || meta.Title != "Keep title" || len(meta.Actors) != 1 {
+				t.Fatalf("metadata = %+v, error = %v", meta, err)
+			}
+			if raw, err := os.ReadFile(path); err != nil || string(raw) != body {
+				t.Fatalf("Read changed original NFO: %v", err)
+			}
+		})
+	}
+}
+
 func TestReadVideoDurationWithMinuteUnits(t *testing.T) {
 	for _, value := range []string{"87", "87分", "87分钟", "87 min"} {
 		t.Run(value, func(t *testing.T) {
@@ -60,8 +87,23 @@ func TestReadVideoDurationWithMinuteUnits(t *testing.T) {
 	}
 }
 
+func TestReadVideoDurationWithClock(t *testing.T) {
+	var meta MovieMeta
+	if err := xml.Unmarshal([]byte(`<movie><fileinfo><streamdetails><video><codec>h264</codec><duration>1:21:37</duration></video></streamdetails></fileinfo></movie>`), &meta); err != nil {
+		t.Fatal(err)
+	}
+	video := meta.FileInfo.StreamDetails.Video
+	if video.DurationMinutes != 81 || meta.RuntimeSeconds() != 4897 || video.Codec != "h264" {
+		t.Fatalf("metadata = %+v, video = %+v", meta, video)
+	}
+	video.DurationSeconds = 4900
+	if meta.RuntimeSeconds() != 4900 {
+		t.Fatal("durationinseconds precedence changed")
+	}
+}
+
 func TestReadRuntimeRejectsInvalidValues(t *testing.T) {
-	for _, value := range []string{"分", "94分unknown", "unknown", "1小时", "1:34", "94.5分", "9223372036854775808分"} {
+	for _, value := range []string{"分", "94分unknown", "unknown", "1小时", "1:34", "1:2:00", "1:21:0", "1:60:00", "1:21:60", "-1:21:00", "1:21:00分", "2562047788015216:00:00", "94.5分", "9223372036854775808分"} {
 		t.Run(value, func(t *testing.T) {
 			for _, body := range []string{
 				`<movie><runtime>` + value + `</runtime></movie>`,

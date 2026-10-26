@@ -1,6 +1,6 @@
 import type { TrackEngine, TrackSelection } from './player-tracks';
 import { bindNativeTracks } from './player-tracks';
-export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; resumeTicks?: number; selection?: TrackSelection; onTracks?: (engine: TrackEngine) => void; hlsStartPosition?: number }
+export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; sourceItemId?: string; resumeTicks?: number; selection?: TrackSelection; onTracks?: (engine: TrackEngine) => void; hlsStartPosition?: number }
 export interface PlayerHandle { url: string; muted: boolean; video?: HTMLVideoElement; on: (name: string, callback: () => void) => void; play: () => Promise<unknown>; destroy: () => void }
 export type PlayerFactory = (stage: HTMLElement, options: PlayerOptions) => PlayerHandle;
 export function playbackType(containerOrURL: unknown = '') {

@@ -409,6 +409,42 @@ func (a *App) playback(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	var selection struct {
+		MediaSourceId       string
+		AudioStreamIndex    *int
+		SubtitleStreamIndex *int
+	}
+	if c.Request.Method == http.MethodPost && c.Request.ContentLength != 0 && c.Request.Body != nil {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+		if err := json.NewDecoder(c.Request.Body).Decode(&selection); err != nil && err != io.EOF {
+			c.JSON(400, gin.H{"error": "无效的播放请求"})
+			return
+		}
+	}
+	versions := []store.Movie{movie}
+	if movie.Television != nil {
+		if siblings, err := a.db.TVEpisodeVersions(movie.ID); err == nil {
+			versions = siblings
+		}
+	}
+	selectedSourceID := c.Query("MediaSourceId")
+	if selectedSourceID == "" {
+		selectedSourceID = selection.MediaSourceId
+	}
+	if selectedSourceID != "" && selectedSourceID != "mediasource_"+id {
+		found := false
+		for _, version := range versions {
+			if selectedSourceID == "mediasource_"+strconv.FormatInt(version.ID, 10) {
+				movie, sourcePath, id = version, version.SourcePath, strconv.FormatInt(version.ID, 10)
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"error": "media source not found"})
+			return
+		}
+	}
 	raw, err := scanner.ReadSource(sourcePath)
 	if err != nil || !scanner.ValidHTTP(raw) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "invalid or unavailable media source"})
@@ -427,19 +463,11 @@ func (a *App) playback(c *gin.Context) {
 		}
 	}
 	source["ExternalStreamUrl"] = externalRaw
+	if len(versions) > 1 {
+		source["Name"] = filepath.Base(sourcePath)
+	}
 	defaultAudio := source["DefaultAudioStreamIndex"]
 	explicitAudio := false
-	var selection struct {
-		AudioStreamIndex    *int
-		SubtitleStreamIndex *int
-	}
-	if c.Request.Method == http.MethodPost && c.Request.ContentLength != 0 && c.Request.Body != nil {
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
-		if err := json.NewDecoder(c.Request.Body).Decode(&selection); err != nil && err != io.EOF {
-			c.JSON(400, gin.H{"error": "无效的播放请求"})
-			return
-		}
-	}
 	for key, selected := range map[string]*int{"AudioStreamIndex": selection.AudioStreamIndex, "SubtitleStreamIndex": selection.SubtitleStreamIndex} {
 		if value, exists, err := streamSelection(c, key); exists {
 			if err != nil {
@@ -471,7 +499,11 @@ func (a *App) playback(c *gin.Context) {
 		source["Default"+key] = *selected
 	}
 	playSessionID := randomSessionID()
-	if data, err := a.db.Data(movie.ID); err == nil && !data.Played {
+	progressID := movie.ID
+	if len(versions) > 1 {
+		progressID = versions[0].ID
+	}
+	if data, err := a.db.Data(progressID); err == nil && !data.Played {
 		source["ResumePositionTicks"] = data.PositionTicks
 	}
 	if a.configSnapshot().FFmpegEnabled && explicitAudio && source["DefaultAudioStreamIndex"] != defaultAudio {
@@ -486,8 +518,26 @@ func (a *App) playback(c *gin.Context) {
 			}
 		}
 	}
+	sources := []gin.H{source}
+	for _, version := range versions {
+		if strconv.FormatInt(version.ID, 10) == id {
+			continue
+		}
+		otherRaw, err := scanner.ReadSource(version.SourcePath)
+		if err != nil || !scanner.ValidHTTP(otherRaw) {
+			continue
+		}
+		other := a.mediaSourceWithURL(version, strconv.FormatInt(version.ID, 10), version.SourcePath, otherRaw, c)
+		other["Name"] = filepath.Base(version.SourcePath)
+		if library, err := a.db.Library(version.LibraryID); err == nil {
+			if external, err := libraryPlaybackURL(c, otherRaw, library); err == nil {
+				other["ExternalStreamUrl"] = external
+			}
+		}
+		sources = append(sources, other)
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"MediaSources":  []gin.H{source},
+		"MediaSources":  sources,
 		"PlaySessionId": playSessionID,
 	})
 }
@@ -509,6 +559,28 @@ func (a *App) resolvePlaybackTarget(rawID string) (store.Movie, string, string, 
 		return store.Movie{}, "", "", false
 	}
 	return movie, movie.SourcePath, rawID, true
+}
+
+func (a *App) resolveStreamSource(c *gin.Context) (store.Movie, string, bool) {
+	movie, sourcePath, id, ok := a.resolvePlaybackTarget(c.Param("id"))
+	if !ok {
+		return store.Movie{}, "", false
+	}
+	selected := c.Query("MediaSourceId")
+	if selected == "" || selected == "mediasource_"+id {
+		return movie, sourcePath, true
+	}
+	if movie.Television != nil {
+		versions, err := a.db.TVEpisodeVersions(movie.ID)
+		if err == nil {
+			for _, version := range versions {
+				if selected == "mediasource_"+strconv.FormatInt(version.ID, 10) {
+					return version, version.SourcePath, true
+				}
+			}
+		}
+	}
+	return store.Movie{}, "", false
 }
 
 // mediaSource 构造 Emby 契约下的 MediaSource。
@@ -1078,7 +1150,7 @@ func randomSessionID() string {
 }
 
 func (a *App) stream(c *gin.Context) {
-	movie, sourcePath, _, ok := a.resolvePlaybackTarget(c.Param("id"))
+	movie, sourcePath, ok := a.resolveStreamSource(c)
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
@@ -1142,7 +1214,7 @@ func (a *App) trailer(c *gin.Context) {
 // proxyStream 代理真实媒体地址：透传 Range/状态码/关键响应头。
 // 它既服务网页播放器的回退地址，也服务开启媒体库播放代理后的 /stream。
 func (a *App) proxyStream(c *gin.Context) {
-	movie, sourcePath, _, ok := a.resolvePlaybackTarget(c.Param("id"))
+	movie, sourcePath, ok := a.resolveStreamSource(c)
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return

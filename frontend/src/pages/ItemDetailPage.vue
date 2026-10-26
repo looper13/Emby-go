@@ -32,6 +32,9 @@ const tasks = useTasksStore(); const toasts = useToastStore();
 const auth = useAuthStore();
 const player = usePlayerStore(); const actions = useMediaActions(() => enter(true), () => route.fullPath);
 const playbackSelection = shallowRef<TrackSelection>();
+const selectedVersionId = ref<number>();
+const selectedVersion = computed(() => data.value?.versions?.find(version => version.id === selectedVersionId.value));
+function play() { if (data.value) player.media(data.value.movie, playbackSelection.value, selectedVersion.value); }
 const scrapePreview = useScrapePreviewStore(); let mounted = true; onScopeDispose(() => { mounted = false; });
 function scrape() { if (!data.value || tasks.mutationBusy) return; const path = route.fullPath, id = data.value.movie.id; void scrapePreview.open(id, () => { if (route.fullPath === path && data.value?.movie.id === id && mounted) return enter(true); }); }
 const plotExpanded = ref(false); const filesExpanded = ref(false); const similar = shallowRef<SimilarDto[]>([]); let similarLoaded = false;
@@ -62,6 +65,10 @@ async function enter(preserve = false) {
     const detail = await catalogApi.detail(id, current.signal);
     if (!current.isCurrent()) return;
     data.value = detail;
+    if (!preserve || !detail.versions?.some(version => version.id === selectedVersionId.value && version.playable)) {
+      selectedVersionId.value = detail.versions?.find(version => version.id === detail.movie.id && version.playable)?.id
+        ?? detail.versions?.find(version => version.playable)?.id ?? detail.movie.id;
+    }
     await nextTick();
     if (!current.isCurrent()) return;
     emit('title', detail.movie.Title || id);
@@ -75,8 +82,13 @@ watch(() => tasks.revision, () => { void enter(true); });
 </script>
 <template>
   <article v-if="data" class="item-page" style="grid-template-columns:minmax(0,1fr)">
-    <ItemHero :can-manage="auth.isAdministrator" :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="player.media(data.movie, playbackSelection)" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity">
-      <template #playback><DetailPlaybackControls v-if="data.playable" :key="data.movie.id" :item-id="data.movie.id" :refresh-key="data" @selection="playbackSelection = $event" /></template>
+    <ItemHero :can-manage="auth.isAdministrator" :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="play" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity">
+      <template #playback>
+        <label v-if="(data.versions?.length ?? 0) > 1" class="version-choice"><span>播放版本</span><select v-model.number="selectedVersionId" aria-label="播放版本">
+          <option v-for="version in data.versions" :key="version.id" :value="version.id" :disabled="!version.playable">{{ version.name }}{{ version.playable ? '' : ' · 不可播放' }}</option>
+        </select></label>
+        <DetailPlaybackControls v-if="data.playable" :key="selectedVersionId" :item-id="selectedVersionId ?? data.movie.id" :refresh-key="data" @selection="playbackSelection = $event" />
+      </template>
     </ItemHero>
     <div class="item-sections" style="grid-template-columns:minmax(0,1fr)">
       <PlotSection :plot="data.movie.Plot" :expanded="plotExpanded" @toggle="plotExpanded = !plotExpanded" />
@@ -93,4 +105,6 @@ watch(() => tasks.revision, () => { void enter(true); });
 </template>
 <style scoped>
 .item-sections { min-width: 0; max-width: none; }
+.version-choice { display: flex; flex-direction: column; gap: 6px; max-width: min(100%, 560px); margin-top: 16px; color: var(--muted); font-size: 12px; }
+.version-choice select { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: inherit; font-size: 13px; }
 </style>

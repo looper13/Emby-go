@@ -1374,7 +1374,19 @@ func (a *App) item(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(a.embyItemDetail(m, d, c))
+		item := a.embyItemDetail(m, d, c)
+		if m.Television != nil {
+			if versions, err := a.db.TVEpisodeVersions(m.ID); err == nil && len(versions) > 1 {
+				sources := make([]gin.H, 0, len(versions))
+				for _, version := range versions {
+					source := a.mediaSource(version, c)
+					source["Name"] = filepath.Base(version.SourcePath)
+					sources = append(sources, source)
+				}
+				item["MediaSources"] = sources
+			}
+		}
+		return json.Marshal(item)
 	})
 }
 

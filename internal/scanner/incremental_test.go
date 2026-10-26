@@ -105,6 +105,20 @@ func TestIncrementalRuntimeUnitStopsRepeatedFailures(t *testing.T) {
 	requireScan(t, database, library, Result{Skipped: 1})
 }
 
+func TestIncrementalRuntimeClockRecoversFailedItem(t *testing.T) {
+	root := t.TempDir()
+	writeScanFile(t, root, "GAREA-412-破解.strm", "http://media.test/movie.mp4\n")
+	writeScanFile(t, root, "GAREA-412-破解.nfo", `<movie><title>Original</title><runtime>invalid</runtime></movie>`)
+	database, library := scanLibrary(t, root)
+	requireScan(t, database, library, Result{Failed: 1})
+	writeScanFile(t, root, "GAREA-412-破解.nfo", `<movie><title>Recovered</title><runtime>1:21:00</runtime></movie>`)
+	requireScan(t, database, library, Result{Added: 1, Success: 1})
+	if movie := visible(t, database)[0]; movie.Title != "Recovered" || movie.RuntimeSeconds != 4860 {
+		t.Fatalf("clock runtime did not reach index: %+v", movie)
+	}
+	requireScan(t, database, library, Result{Skipped: 1})
+}
+
 func TestIncrementalReconcilesChanges(t *testing.T) {
 	root := t.TempDir()
 	writeScanFile(t, root, "a.strm", "http://media.test/a.mp4\n")

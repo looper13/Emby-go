@@ -218,6 +218,83 @@ func TestTelevisionLibraryAPIHierarchyMixedTypesAndPlayback(t *testing.T) {
 	}
 }
 
+func TestTelevisionVersionsShareEpisodeAndSelectSource(t *testing.T) {
+	a, _, token := newProbeTestApp(t, t.TempDir())
+	root := t.TempDir()
+	show := filepath.Join(root, "Show")
+	if err := os.MkdirAll(filepath.Join(show, "Season 1"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Show.S01E01.1080p", "Show - S01E01 - Pilot"} {
+		writeFile(t, filepath.Join(show, "Season 1", name+".strm"), "https://media.test/"+url.PathEscape(name)+".mkv")
+		writeFile(t, filepath.Join(show, "Season 1", name+".nfo"), `<episodedetails><title>Pilot</title><season>1</season><episode>1</episode></episodedetails>`)
+	}
+	lib, err := a.db.AddLibrary("Show", root, store.LibraryTVShows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := scanner.Scan(context.Background(), a.db, lib); err != nil || result.Success != 2 {
+		t.Fatal(result, err)
+	}
+	episodes, err := a.db.TVEpisodes(lib.ID, show)
+	if err != nil || len(episodes) != 1 {
+		t.Fatal(episodes, err)
+	}
+	versions, err := a.db.TVEpisodeVersions(episodes[0].ID)
+	if err != nil || len(versions) != 2 {
+		t.Fatal(versions, err)
+	}
+	get := func(path string, want int) map[string]any {
+		t.Helper()
+		w := accountRequest(a, "GET", path, token, "")
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	series := url.PathEscape(store.TVSeriesID(lib.ID, show))
+	list := get("/Shows/"+series+"/Episodes", 200)
+	if list["TotalRecordCount"] != float64(1) || len(list["Items"].([]any)) != 1 {
+		t.Fatal(list)
+	}
+	canonical := strconv.FormatInt(episodes[0].ID, 10)
+	item := get("/Items/"+canonical, 200)
+	if len(item["MediaSources"].([]any)) != 2 {
+		t.Fatal(item)
+	}
+	detail := get("/api/admin/items/"+canonical+"/detail", 200)
+	if len(detail["versions"].([]any)) != 2 {
+		t.Fatal(detail)
+	}
+	selected := "mediasource_" + strconv.FormatInt(versions[1].ID, 10)
+	if err := a.db.SavePlayback(episodes[0].ID, 120000000, 1, "", -1); err != nil {
+		t.Fatal(err)
+	}
+	w := accountRequest(a, "POST", "/Items/"+canonical+"/PlaybackInfo", token, `{"MediaSourceId":"`+selected+`"}`)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var playback map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &playback); err != nil {
+		t.Fatal(err)
+	}
+	sources := playback["MediaSources"].([]any)
+	if len(sources) != 2 || sources[0].(map[string]any)["Id"] != selected || sources[0].(map[string]any)["ResumePositionTicks"] != float64(120000000) {
+		t.Fatal(playback)
+	}
+	w = accountRequest(a, "GET", "/Videos/"+canonical+"/stream?MediaSourceId="+selected, token, "")
+	if w.Code != 302 || w.Header().Get("Location") != "https://media.test/"+url.PathEscape(filepath.Base(strings.TrimSuffix(versions[1].SourcePath, ".strm")))+".mkv" {
+		t.Fatal(w.Code, w.Header().Get("Location"))
+	}
+	if w := accountRequest(a, "GET", "/Videos/"+canonical+"/stream?MediaSourceId=mediasource_999999", token, ""); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+}
+
 func ginBody(name, path, typ string) map[string]string {
 	return map[string]string{"Name": name, "Path": path, "Type": typ}
 }

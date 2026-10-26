@@ -55,6 +55,32 @@ func TestTelevisionAndMixedLibrariesIdentifyEpisodes(t *testing.T) {
 	}
 }
 
+func TestTelevisionInvalidNFOEpisodeNumbersFallBackToFilenameAndGroupVersions(t *testing.T) {
+	root := t.TempDir()
+	s := newStore(t, root)
+	lib, err := s.AddLibrary("Anime", root, store.LibraryTVShows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	season := "中二病也要谈恋爱！ (2012)/Season 1/"
+	for _, name := range []string{
+		"中二病也要谈恋爱！.2012.S01E01.第1集.1080p.SDR.H.264.23.976fps.FLAC 2.0.mkv",
+		"中二病也要谈恋爱！ - S01E01 - 邂逅的…邪王真眼",
+	} {
+		writeScanFile(t, root, season+name+".strm", "https://media.test/"+name+".mkv")
+		writeScanFile(t, root, season+name+".nfo", `<episodedetails><title>第一集</title><season>-1</season><episode>0</episode></episodedetails>`)
+	}
+	requireScan(t, s, lib, Result{Success: 2, Added: 2})
+	eps, err := s.TVEpisodes(lib.ID, "")
+	if err != nil || len(eps) != 1 || eps[0].Television.Season != 1 || eps[0].Television.Episode != 1 {
+		t.Fatal(eps, err)
+	}
+	versions, err := s.TVEpisodeVersions(eps[0].ID)
+	if err != nil || len(versions) != 2 || versions[0].ID != eps[0].ID || versions[0].SourcePath == versions[1].SourcePath {
+		t.Fatal(versions, err)
+	}
+}
+
 func TestSharedTVShowMetadataRefreshAndFailurePreserveEpisodes(t *testing.T) {
 	root := t.TempDir()
 	s := newStore(t, root)

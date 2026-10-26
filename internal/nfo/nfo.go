@@ -57,6 +57,7 @@ type VideoStream struct {
 	Language        string  `xml:"language"`
 	DurationMinutes int     `xml:"duration"`
 	DurationSeconds int64   `xml:"durationinseconds"`
+	clockSeconds    int64   `xml:"-"`
 	ScanType        string  `xml:"scantype"`
 	Default         string  `xml:"default"`
 	Forced          string  `xml:"forced"`
@@ -197,6 +198,7 @@ type MovieMeta struct {
 	Taglines      []string   `xml:"tagline,omitempty"`
 	UniqueIDs     []UniqueID `xml:"uniqueid,omitempty"`
 	Runtime       int64      `xml:"runtime,omitempty"`
+	clockSeconds  int64      `xml:"-"`
 	FileInfo      *FileInfo  `xml:"fileinfo,omitempty"`
 	Actors        []Actor    `xml:"actor,omitempty"`
 }
@@ -257,16 +259,23 @@ func (m MovieMeta) TaglineList() []string {
 }
 
 // RuntimeSeconds 返回秒为单位的片长：
-// <runtime>（分钟）→ fileinfo 的 durationinseconds → video duration（分钟）。
+// <runtime>（分钟或时:分:秒）→ fileinfo 的 durationinseconds → video duration。
 func (m MovieMeta) RuntimeSeconds() int64 {
+	if m.clockSeconds > 0 && m.Runtime == m.clockSeconds/60 {
+		return m.clockSeconds
+	}
 	if m.Runtime > 0 {
 		return m.Runtime * 60
 	}
 	if m.FileInfo != nil && m.FileInfo.StreamDetails != nil && m.FileInfo.StreamDetails.Video != nil {
-		if v := m.FileInfo.StreamDetails.Video.DurationSeconds; v > 0 {
+		video := m.FileInfo.StreamDetails.Video
+		if v := video.DurationSeconds; v > 0 {
 			return v
 		}
-		if v := int64(m.FileInfo.StreamDetails.Video.DurationMinutes); v > 0 {
+		if v := video.clockSeconds; v > 0 && int64(video.DurationMinutes) == v/60 {
+			return v
+		}
+		if v := int64(video.DurationMinutes); v > 0 {
 			return v * 60
 		}
 	}

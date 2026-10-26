@@ -47,7 +47,8 @@ export interface ActorDto { name: string; has_image: boolean; image_tag?: string
 export interface StreamDto { Index?: number; Type?: string; Codec?: string; Width?: number; Height?: number; BitRate?: number; Profile?: string; BitDepth?: number; ChannelLayout?: string; Channels?: number; Language?: string; SampleRate?: number; IsDefault?: boolean; IsForced?: boolean; IsExternal?: boolean }
 export interface FileDto { index: number; role: string; name: string; path: string; size: number; probed: boolean; streams: StreamDto[] }
 export interface SimilarDto { Id: string; Name: string; ImageTags?: Record<string, string>; ProductionYear?: number; RunTimeTicks?: number; CommunityRating?: number }
-export interface DetailDto { movie: MovieDto; library_name: string; playable: boolean; favorite?: boolean; images?: ImageDto[]; actors?: ActorDto[]; files?: FileDto[]; modified_at?: string }
+export interface EpisodeVersionDto { id: number; name: string; container: string; playable: boolean }
+export interface DetailDto { movie: MovieDto; library_name: string; playable: boolean; favorite?: boolean; images?: ImageDto[]; actors?: ActorDto[]; files?: FileDto[]; versions?: EpisodeVersionDto[]; modified_at?: string }
 
 export function parseMovie(value: unknown): MovieDto {
   if (!isRecord(value) || !isCount(value.id) || value.id === 0 || !isCount(value.library_id)
@@ -104,6 +105,8 @@ export function parseDetail(value: unknown): DetailDto {
     actors: array(value.actors).map(v => { const r = obj(v); if (typeof r.has_image !== 'boolean' || (r.favorite != null && typeof r.favorite !== 'boolean')) return invalidDto(); return { name: str(r.name), has_image: r.has_image, image_tag: optionalString(r.image_tag), favorite: r.favorite === true }; }),
     files: array(value.files).map(v => { const r = obj(v); if (!isCount(r.index) || !isCount(r.size) || typeof r.probed !== 'boolean') return invalidDto();
       return { index: r.index, size: r.size, probed: r.probed, name: str(r.name), path: str(r.path), role: str(r.role), streams: array(r.streams).map(parseStream) }; }),
+    versions: array(value.versions).map(v => { const r = obj(v); if (!isCount(r.id) || r.id === 0 || typeof r.playable !== 'boolean') return invalidDto();
+      return { id: r.id, name: str(r.name), container: str(r.container), playable: r.playable }; }),
     modified_at: optionalString(value.modified_at) };
 }
 function obj(v: unknown) { return isRecord(v) ? v : invalidDto(); }
