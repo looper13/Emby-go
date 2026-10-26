@@ -1,6 +1,40 @@
 package metatube
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestNormalizeMovieID(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{" aege-0015 ", "AEGE-015"},
+		{"AEGE-015", "AEGE-015"},
+		{"109IENFH-29503", "IENFH-29503"},
+		{"259LUXU-0001234", "LUXU-1234"},
+		{"T28-00036", "T28-036"},
+		{"FC2-0001234567", "FC2-1234567"},
+		{"A1B2-7", "A1B2-007"},
+		{"ABF-000", "ABF-000"},
+		{"ABF-0", "ABF-000"},
+		{"SSIS-00123", "SSIS-123"},
+		{"ABF-" + strings.Repeat("0", 30) + strings.Repeat("9", 30), "ABF-" + strings.Repeat("9", 30)},
+		{" fc2-ppv-0012345 ", "FC2-PPV-0012345"},
+		{" abf_0015 ", "ABF_0015"},
+		{" abf 0015 ", "ABF 0015"},
+		{"AEGE-0015-CD1", "AEGE-0015-CD1"},
+		{"AEGE0015", "AEGE0015"},
+		{"123456-00015", "123456-00015"},
+		{"H4610", "H4610"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := NormalizeMovieID(tc.in); got != tc.want {
+			t.Errorf("NormalizeMovieID(%q) = %q, want %q", tc.in, got, tc.want)
+		} else if twice := NormalizeMovieID(got); twice != got {
+			t.Errorf("NormalizeMovieID is not idempotent: %q -> %q", got, twice)
+		}
+	}
+}
 
 // Ported 行为的回归用例：覆盖常见文件名噪声，确保归一化后能命中真实番号。
 func TestTrimNormalizesFilenames(t *testing.T) {
@@ -39,6 +73,24 @@ func TestNormalizeAndSameNumber(t *testing.T) {
 		{"NHDTB-944-mosaic", "NHDTB-944", true},
 		{"NHDTB-944-mosaic", "NHDTB-945", false},
 		{"ABF018-mosaic", "ABF-018", true},
+		{"AEGE-0015", "AEGE-015", true},
+		{"AEGE-15", "AEGE-000015", true},
+		{"AEGE0015", "AEGE-015", true},
+		{"AEGE-0015-mosaic", "AEGE-015", true},
+		{"AEGE0015-mosaic", "AEGE-015", true},
+		{"109IENFH-29503", "IENFH-29503", true},
+		{"109IENFH29503", "IENFH-29503", true},
+		{"T28-00036", "T28-036", true},
+		{"AEGE-0015", "AEGE-016", false},
+		{"AEGE-0015", "AEGE-00150", false},
+		{"AEGE-0015", "OTHER-015", false},
+		{"AEGE-0015-UC", "AEGE-015", false},
+		{"AEGE-0015X", "AEGE-015", false},
+		{"123456-00015", "123456-015", false},
+		{"FC2-PPV-0012345", "FC2-PPV-12345", false},
+		{"H004610", "H-004610", true},
+		{"H004610", "H4610", false},
+		{"N00123", "N-00123", true},
 		{"", "ABF-018", false},
 		{"", "", false},
 	}

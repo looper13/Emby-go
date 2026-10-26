@@ -9,12 +9,12 @@ import (
 // 番号归一化。
 //
 // 本文件移植自 MetaTube SDK 的 common/number（Apache License 2.0，
-// https://github.com/metatube-community/metatube-sdk-go），按原逻辑逐条保留：
+// https://github.com/metatube-community/metatube-sdk-go），保留文件名提取与兼容比较：
 // 文件名里混着分辨率、来源站名、版本后缀等噪声，只有归一化后才能做「番号精确命中」
 // 的判断（对应需求 A5 #27 的搜索选结果策略）。
 //
 // 本包内只用于搜索与比对；刮削器写入 NFO <num> 时会先过一遍 Normalize
-// （番号强制大写、分隔符统一），见 internal/scraper/apply.go 的 buildFields。
+// （标准番号规则与既有分隔符兼容），见 internal/scraper/apply.go 的 buildFields。
 
 // Trim 从文件名/标题里提取归一化番号。取不到时返回空串或原文的裁剪结果。
 func Trim(s string) string {
@@ -47,11 +47,32 @@ var (
 	reMakers        = regexp.MustCompile(`(?i)(^|[-_\s]+)(carib(b?ean)?(com)?(pr)?|1?Pond?o?|10mu(sume)?|paco(paco)?(mama)?|mura(mura)?|Tokyo[-_\s]?Hot)([-_\s]+(?P<pattern>\d{4,}[-_]\d{2,}|[a-z]{1,4}\d{2,4})|$)`)
 	reFC2Prefix     = regexp.MustCompile(`^(?i)\s*(FC2[-_]?PPV)[-_]`)
 	reSuffix        = regexp.MustCompile(`(?i)([-_](c|uc|ch|cd\d{1,2})|hhb\d*|ch|A|B|C|D)\s*$`)
+	reMovieID       = regexp.MustCompile(`^\d*([A-Z][A-Z0-9]*)-(\d+)$`)
+	reCompactID     = regexp.MustCompile(`^(\d*[A-Z]{2,})(\d+)$`)
 )
 
-// Normalize 把番号归一化为比较用的形式：去空白、大写、统一分隔符。
-// 例：abf 018 / ABF_018 / ABF-018-c → ABF-018
+// NormalizeMovieID applies the standard PREFIX-NUMBER rule; unknown formats
+// are only trimmed and uppercased. String operations avoid integer overflow.
+func NormalizeMovieID(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	match := reMovieID.FindStringSubmatch(s)
+	if match == nil {
+		return s
+	}
+	number := strings.TrimLeft(match[2], "0")
+	if len(number) < 3 {
+		number = strings.Repeat("0", 3-len(number)) + number
+	}
+	return match[1] + "-" + number
+}
+
+// Normalize adds existing separator compatibility to the standard ID rule.
+// For example, abf 0018 / ABF_0018 -> ABF-018, AEGE-0015 -> AEGE-015.
 func Normalize(s string) string {
+	return NormalizeMovieID(normalizeSeparators(s))
+}
+
+func normalizeSeparators(s string) string {
 	s = strings.ToUpper(strings.TrimSpace(s))
 	s = strings.ReplaceAll(s, "_", "-")
 	s = strings.ReplaceAll(s, " ", "-")
@@ -86,7 +107,7 @@ func stripProviderSuffix(number string) string {
 // SameNumber 判断两个番号是否指同一部片。
 // 空串一律不同（避免「都没番号」被判为命中）。
 func SameNumber(a, b string) bool {
-	left, right := Normalize(a), Normalize(b)
+	left, right := comparisonNumber(a), comparisonNumber(b)
 	if left == "" || right == "" {
 		return false
 	}
@@ -97,8 +118,19 @@ func SameNumber(a, b string) bool {
 	if compact(left) == compact(right) {
 		return true
 	}
-	// 再剥掉 provider 语义后缀比一次：NHDTB-944-mosaic 与 NHDTB-944。
-	return compact(stripProviderSuffix(left)) == compact(stripProviderSuffix(right))
+	// Preserve old compact equality when a numeric boundary cannot be inferred,
+	// such as H004610 / H-004610; do not guess a new structure for H004610.
+	return compact(stripProviderSuffix(normalizeSeparators(a))) == compact(stripProviderSuffix(normalizeSeparators(b)))
+}
+
+func comparisonNumber(s string) string {
+	s = Normalize(stripProviderSuffix(Normalize(s)))
+	// Only letter-only compact prefixes have an unambiguous numeric boundary.
+	// Keep forms such as H4610 and FC2PPV1234567 unguessed.
+	if match := reCompactID.FindStringSubmatch(s); match != nil {
+		return NormalizeMovieID(match[1] + "-" + match[2])
+	}
+	return s
 }
 
 func compact(s string) string {

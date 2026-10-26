@@ -336,7 +336,7 @@ func buildFields(info metatube.MovieInfo, title, plot string, overwrite bool, ma
 	if runtime <= 0 {
 		runtime = 0
 	}
-	// 番号先归一化：强制大写、统一分隔符，再补上破折号
+	// 番号先归一化：强制大写、统一分隔符，再补上破折号并规范数字段
 	//（abf_018 / ABF 018 / ABF018 → ABF-018，T28036 → T28-036），<num> 与标题前缀都用它。
 	// <title>/<sorttitle> 统一为「番号 标题」：库内条目按番号聚拢、排序也按番号走；
 	// 标题取译文（未开翻译或翻译失败时 translateFields 已回退原文）。
@@ -413,13 +413,13 @@ func dashedNumber(number string) string {
 	for _, rule := range seriesNumberRules {
 		if rest := strings.TrimPrefix(number, rule.prefix); rest != number && digitsOnly(strings.TrimPrefix(rest, "-")) {
 			rest = strings.TrimPrefix(rest, "-")
-			return rule.alias + "-" + rest
+			return metatube.NormalizeMovieID(rule.alias + "-" + rest)
 		}
 	}
 	if number == "" || strings.Contains(number, "-") {
-		return number
+		return metatube.NormalizeMovieID(number)
 	}
-	return numberWithDash.ReplaceAllString(number, "$1-$2")
+	return metatube.NormalizeMovieID(numberWithDash.ReplaceAllString(number, "$1-$2"))
 }
 
 // digitsOnly 判断字符串是否非空且全为 ASCII 数字。

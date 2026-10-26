@@ -164,6 +164,8 @@ func TestJoinNumberTitle(t *testing.T) {
 		{"ABF-018", "abf-018（标题）", "ABF-018（标题）"},
 		{"ABF-018", "abf-018. 标题", "ABF-018 标题"},
 		{"ABF-018", "abf018 标题", "ABF-018 标题"},
+		{"AEGE-015", "AEGE-0015 Title", "AEGE-015 Title"},
+		{"IENFH-29503", "109IENFH-29503 Title", "IENFH-29503 Title"},
 		// 前缀一律随传入的番号形态（buildFields 传入的已是带破折号的规范番号）。
 		{"ABF018", "ABF-018 标题", "ABF018 标题"},
 		// 番号只是标题的前缀片段时不算已带番号（前端判定须与此一致）。
@@ -192,7 +194,11 @@ func TestBuildFieldsNormalizesNumber(t *testing.T) {
 		{"ABF-018", "ABF-018"},
 		{"abf--018", "ABF-018"},
 		{"abf018", "ABF-018"},
-		{"SSIS00123", "SSIS-00123"},
+		{"SSIS00123", "SSIS-123"},
+		{"AEGE-0015", "AEGE-015"},
+		{"AEGE0015", "AEGE-015"},
+		{"109IENFH-29503", "IENFH-29503"},
+		{"T28-00036", "T28-036"},
 		// 259LUXU 的数字前缀是来源站编号，不属于番号。
 		{"259LUXU1234", "LUXU-1234"},
 		{"259LUXU", "259LUXU"},
