@@ -43,11 +43,40 @@ const { hideImages } = useMediaVisibility();
 </template>
 
 <style scoped>
+.avatar-grid {
+  display: flex;
+  overflow-x: auto;
+  gap: 16px;
+  padding: 4px 2px 14px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.avatar-grid::-webkit-scrollbar {
+  height: 5px;
+}
+
+.avatar-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.avatar-grid::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.avatar-grid::-webkit-scrollbar-thumb:hover {
+  background: var(--line-strong);
+}
+
 .actor-entry {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  flex: 0 0 76px;
+  width: 76px;
   min-width: 0;
 }
 
@@ -78,5 +107,17 @@ const { hideImages } = useMediaVisibility();
 
 .avatar-card:hover small {
   color: var(--accent);
+}
+
+.actor-entry :deep(.favorite-button) {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 6px;
+}
+
+.actor-entry :deep(.favorite-button svg) {
+  width: 13px;
+  height: 13px;
 }
 </style>

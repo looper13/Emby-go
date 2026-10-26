@@ -915,19 +915,58 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* ------------------------------------------------------------------ 浮层、通知与进度条 */
+.toasts {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 500;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 [data-theme="light"] .toast {
-  background: #ffffff;
-  border: 1px solid #ced4da;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   color: #1a1b1e;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
 }
 
 [data-theme="dark"] .toast {
-  background: #25262b;
-  border: 1px solid #373a40;
-  color: #ffffff;
-  border-radius: 8px;
+  background: rgba(30, 31, 35, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #f8f9fa;
+}
+
+.toast.ok {
+  border-color: rgba(32, 201, 151, 0.6) !important;
+  color: var(--ok) !important;
+}
+
+.toast.error {
+  border-color: rgba(250, 82, 82, 0.6) !important;
+  color: var(--danger) !important;
+}
+
+.toast.out {
+  animation: toast-out 0.25s cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 [data-theme="light"] .scan-progress {
@@ -1540,6 +1579,43 @@ details summary {
   }
   .player-stage {
     max-height: calc(100dvh - 90px);
+  }
+}
+
+/* ------------------------------------------------------------------ 移动端与窄屏导航优化 */
+@media (max-width: 860px) {
+  .sidebar {
+    padding: 10px 14px;
+    background: var(--panel) !important;
+  }
+  .nav {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 6px;
+    padding: 2px 0 4px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav-item {
+    flex: 0 0 auto;
+    border-radius: 999px !important;
+    padding: 6px 14px !important;
+    font-size: 13px !important;
+  }
+  .main {
+    padding: 18px 16px 40px !important;
+  }
+  .topbar {
+    gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+  }
+  .topbar h1 {
+    font-size: 22px !important;
   }
 }
 

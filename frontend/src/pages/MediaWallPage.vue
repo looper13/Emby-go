@@ -163,7 +163,7 @@ watch(() => tasks.revision, () => {
     <div v-if="televisionLibrary && !value('status') && !entity" class="television-views" role="tablist" aria-label="媒体视图"><button class="btn btn-sm" role="tab" :aria-selected="browseTelevision" @click="filter('view','')">{{ library?.Type === 'mixed' ? '影片与电视节目' : '电视节目' }}</button><button class="btn btn-sm" role="tab" :aria-selected="!browseTelevision" @click="filter('view','index')">全部媒体索引</button></div>
     <TelevisionBrowser v-if="browseTelevision && library" :key="library.Id" :library="library.Id" :search="value('search')" :revision="tasks.revision" :series="value('tv_series')" :season="value('tv_season')" @browse="browseSeries" @open="open" />
     <h3 v-if="browseTelevision && library?.Type === 'mixed'">影片</h3>
-    <MediaGrid :can-manage="auth.isAdministrator" v-if="showWall" :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
+    <MediaGrid :can-manage="auth.isAdministrator" v-if="showWall" :loading="wall.loading || !ready" :items="wall.items" :image-tags="wall.imageTags" :userdata="wall.userdata" :busy="actions.busy.value" @open="open" @quickplay="quickplay" @probe="actions.run('probe', $event)" @reread="actions.run('reread', $event)" @remove="actions.run('remove', $event)" />
     <div id="wall-empty"><EmptyState v-if="showWall && ready && !wall.error && wall.total === 0" :title="emptyTitle" :hint="value('search') ? '试试其它关键词。' : auth.isAdministrator ? '开始扫描或手动补录后再来看看。' : ''" /></div>
     <div v-show="showWall" id="wall-more" ref="more" class="wall-more">
       <WallLoadState :error="wall.error" :refresh-error="wall.refreshError" :refreshing="wall.refreshing" :loading="wall.loading" :ready="ready" :done="wall.done" :total="wall.total" @retry="retryLoad" />
@@ -171,8 +171,38 @@ watch(() => tasks.revision, () => {
   </section>
 </template>
 <style scoped>
-.television-views { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.television-views [aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+.television-views {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 14px 0 6px;
+  padding: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  width: fit-content;
+}
+.television-views button {
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.television-views button:hover {
+  color: var(--text);
+}
+.television-views [aria-selected="true"] {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(26, 113, 255, 0.35);
+}
 .wall-head { flex-wrap: wrap; }
 .wall-head h2 { flex-shrink: 0; white-space: nowrap; }
 .wall-head .panel-actions { flex-wrap: wrap; min-width: 0; }

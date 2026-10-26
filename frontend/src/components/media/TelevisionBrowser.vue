@@ -5,6 +5,7 @@ import { televisionApi, type TelevisionItem } from '../../api/television';
 import { usePageRequest } from '../../composables/usePageRequest';
 import MediaImage from './MediaImage.vue';
 import FavoriteButton from './FavoriteButton.vue';
+import SkeletonCard from '../common/SkeletonCard.vue';
 import { imageURL } from '../../lib/image-url';
 import { useMediaVisibility } from '../../composables/useMediaVisibility';
 
@@ -148,6 +149,7 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
     </p>
 
     <div class="television-grid" :class="{ 'episode-grid': selected }">
+      <SkeletonCard v-if="loading && !items.length" :count="12" />
       <article v-for="item in items" :key="item.Id" class="television-entry">
         <button class="television-card" :data-tv-id="item.Id" @click="select(item)">
           <div class="television-cover">
@@ -168,8 +170,8 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
       </article>
     </div>
 
-    <p v-if="loading" role="status">加载中…</p>
-    <p v-else-if="!error && !items.length" class="hint">{{ selected ? '暂无单集' : '暂无电视节目' }}</p>
+    <p v-if="loading && items.length" role="status">加载中…</p>
+    <p v-else-if="!error && !items.length && !loading" class="hint">{{ selected ? '暂无单集' : '暂无电视节目' }}</p>
     <button v-if="items.length < total && !error" class="btn btn-sm" :disabled="loading" @click="load(true)">
       加载更多
     </button>
