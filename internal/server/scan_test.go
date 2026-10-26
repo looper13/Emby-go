@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -45,7 +46,7 @@ func TestIncrementalScanAPIAndScheduledModes(t *testing.T) {
 		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 			t.Fatal(err)
 		}
-		if response.StatusCode != http.StatusOK || result != want {
+		if response.StatusCode != http.StatusOK || !reflect.DeepEqual(result, want) {
 			t.Fatalf("%s: status=%d result=%+v want=%+v", path, response.StatusCode, result, want)
 		}
 	}

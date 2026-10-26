@@ -341,6 +341,7 @@ func (a *App) scanLibrariesWithMode(ctx context.Context, libraryID int64, full b
 		result.Updated += current.Updated
 		result.Skipped += current.Skipped
 		result.Deleted += current.Deleted
+		result.AddFailureSamples(current)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				slog.Info("媒体库扫描已取消", "library", library.Name, "added", current.Added,

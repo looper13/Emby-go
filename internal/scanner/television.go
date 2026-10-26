@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,7 +67,7 @@ func applyTelevision(movie *store.Movie, meta nfo.MovieMeta, lib store.Library, 
 	parent, err := read(filepath.Join(root, "tvshow.nfo"))
 	if err == nil {
 		if !strings.EqualFold(parent.Root, "tvshow") {
-			return fmt.Errorf("tvshow.nfo 根节点必须是 tvshow: %s", root)
+			return &fs.PathError{Op: "校验 NFO", Path: filepath.Join(root, "tvshow.nfo"), Err: fmt.Errorf("tvshow.nfo 根节点必须是 tvshow")}
 		}
 		if parent.Title != "" {
 			tv.Title = parent.Title

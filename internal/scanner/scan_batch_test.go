@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestBatchScanBoundariesAndReadFailure(test *testing.T) {
 			}
 		}
 	})
-	if err != nil || result != (Result{Added: 205, Success: 205}) || !committedBeforeEnd || progress.Result != result {
+	if err != nil || !reflect.DeepEqual(result, Result{Added: 205, Success: 205}) || !committedBeforeEnd || !reflect.DeepEqual(progress.Result, result) {
 		test.Fatalf("batch results=%+v progress=%+v early=%v err=%v", result, progress, committedBeforeEnd, err)
 	}
 	requireScan(test, database, library, Result{Skipped: 205})
@@ -38,7 +39,7 @@ func TestBatchScanBoundariesAndReadFailure(test *testing.T) {
 		test.Fatal(err)
 	}
 	result, err = RebuildWithProgress(context.Background(), database, library, nil)
-	if err != nil || result != (Result{Updated: 203, Success: 203, Failed: 1}) {
+	if err != nil || !reflect.DeepEqual(result, Result{Updated: 203, Success: 203, Failed: 1, Failures: result.Failures}) {
 		test.Fatalf("partial failure = %+v %v", result, err)
 	}
 	if fingerprints, err := database.ScanFingerprints(library.ID); err != nil || len(fingerprints) != 205 {
@@ -71,7 +72,7 @@ func TestPreparedMovieRemainsIndependentOfDisk(test *testing.T) {
 		test.Fatal(err)
 	}
 	entry, outcome := prepareCandidate(store.Library{ID: 1}, candidate{path: path}, nil, "", nil)
-	if outcome != (Result{Success: 1}) || entry.Movie.Title != "Original" {
+	if !reflect.DeepEqual(outcome, Result{Success: 1}) || entry.Movie.Title != "Original" {
 		test.Fatalf("prepare failed: %+v %+v", entry, outcome)
 	}
 	writeScanFile(test, root, "movie.nfo", "<movie><title>Updated contents</title></movie>")

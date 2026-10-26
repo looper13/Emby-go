@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,14 +23,15 @@ import (
 )
 
 type Result struct {
-	Success      int `json:"success"`
-	Pending      int `json:"pending"`
-	Incompatible int `json:"incompatible"`
-	Failed       int `json:"failed"`
-	Added        int `json:"added"`
-	Updated      int `json:"updated"`
-	Skipped      int `json:"skipped"`
-	Deleted      int `json:"deleted"`
+	Success      int       `json:"success"`
+	Pending      int       `json:"pending"`
+	Incompatible int       `json:"incompatible"`
+	Failed       int       `json:"failed"`
+	Added        int       `json:"added"`
+	Updated      int       `json:"updated"`
+	Skipped      int       `json:"skipped"`
+	Deleted      int       `json:"deleted"`
+	Failures     []Failure `json:"failures,omitempty"`
 }
 
 func (result *Result) add(other Result) {
@@ -43,6 +43,7 @@ func (result *Result) add(other Result) {
 	result.Updated += other.Updated
 	result.Skipped += other.Skipped
 	result.Deleted += other.Deleted
+	result.addFailures(other.Failures)
 }
 
 type candidate struct {
@@ -319,7 +320,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 		before, err := readLibraryMetadataState(lib, task.item.path, task.fallbackNFO)
 		res.sourceTime = time.Since(started)
 		if err != nil {
-			res.outcome.Failed++
+			res.outcome = failedCandidate(lib, task.item.path, "", "读取文件状态", err)
 			return res
 		}
 		previous, exists := fingerprints[task.item.path]
@@ -643,11 +644,18 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 	var actors []store.ActorRef
 	nfoPath := strings.TrimSuffix(item.path, filepath.Ext(item.path)) + ".nfo"
 	readNFO := func(path string) (nfo.MovieMeta, error) {
+		var meta nfo.MovieMeta
+		var err error
 		if timing == nil {
-			return nfo.Read(path)
+			meta, err = nfo.Read(path)
+		} else {
+			var stats nfo.ReadStats
+			meta, stats, err = nfo.ReadWithStats(path)
+			timing.addNFO(stats)
 		}
-		meta, stats, err := nfo.ReadWithStats(path)
-		timing.addNFO(stats)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			err = &fs.PathError{Op: "读取或解析 NFO", Path: path, Err: err}
+		}
 		return meta, err
 	}
 	meta, nfoErr := readNFO(nfoPath)
@@ -660,8 +668,7 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 		metadataStarted := time.Now()
 		applyMeta(&movie, meta, nfoPath)
 		if err := applyTelevision(&movie, meta, lib, readNFO); err != nil {
-			slog.Warn("媒体类型与 NFO 不匹配", "path", item.path, "error", err)
-			return store.ScannedMovie{}, Result{Failed: 1}
+			return store.ScannedMovie{}, failedCandidate(lib, item.path, nfoPath, "校验媒体元数据", err)
 		}
 		// NFO 的 <actor><thumb> 是头像真源：一并带进索引，删库重建后仍可恢复。
 		for _, actor := range meta.Actors {
@@ -679,10 +686,7 @@ func prepareCandidate(lib store.Library, item candidate, additionalParts []strin
 		// 已经入库的好元数据，并写入本轮指纹让后续扫描直接跳过（影片就此隐没）。
 		// 这里保留旧索引、记下具体错误，且不写指纹，下一轮仍会重试；
 		// NFO 被修好（刮削重写）后自然恢复为 success。
-		result.Failed++
-		slog.Warn("NFO 读取或解析失败，保留原索引待下轮重试",
-			"library_id", lib.ID, "source", item.path, "nfo", nfoPath, "error", nfoErr)
-		return store.ScannedMovie{}, result
+		return store.ScannedMovie{}, failedCandidate(lib, item.path, nfoPath, "读取或解析 NFO", nfoErr)
 	}
 	return store.ScannedMovie{Movie: movie, Actors: actors}, result
 }

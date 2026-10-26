@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"emby-go/internal/librarywatch"
+	"emby-go/internal/scanner"
 	"emby-go/internal/store"
 )
 
@@ -27,6 +29,54 @@ func awaitLibraryWatch(t *testing.T, condition func() bool) {
 	t.Fatal("timed out waiting for automatic library refresh")
 }
 
+func TestLibraryRefreshDiagnosticsAcrossDirectories(t *testing.T) {
+	for _, mode := range []string{librarywatch.ModeRealtime, librarywatch.ModePolling} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			const count = scanner.FailureSampleLimit + 3
+			var changes []librarywatch.Change
+			for index := 0; index < count; index++ {
+				path := filepath.Join(root, fmt.Sprintf("folder-%02d", index), "movie.nfo")
+				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, strings.TrimSuffix(path, ".nfo")+".strm", "http://media.test/movie.mp4")
+				writeFile(t, path, "<movie><title>Original</title></movie>")
+				changes = append(changes, librarywatch.Change{Path: path})
+			}
+			app, _, _ := newProbeTestApp(t, root)
+			app.cfg.LibraryMonitorMode = mode
+			library, err := app.db.Library(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, change := range changes {
+				writeFile(t, change.Path, "<movie><title>Broken")
+			}
+			err = app.refreshLibraryChanges(context.Background(), library, changes)
+			if err == nil || librarywatch.ShouldRetry(err) || !strings.Contains(err.Error(), "显示 20 / 23 条") || !strings.Contains(err.Error(), changes[19].Path) || strings.Contains(err.Error(), changes[20].Path) {
+				t.Fatalf("incorrect merged diagnostics: %v", err)
+			}
+			app.taskMu.Lock()
+			last := app.tasks[0]
+			app.taskMu.Unlock()
+			wantType := "watch"
+			if mode == librarywatch.ModePolling {
+				wantType = "poll"
+			}
+			if last.Type != wantType || last.Status != "failed" || last.Error != err.Error() {
+				t.Fatalf("diagnostics not retained for %s: %+v", mode, last)
+			}
+			fatalPath := filepath.Join(root, "z-not-a-directory")
+			writeFile(t, fatalPath, "not a directory")
+			err = app.refreshLibraryChanges(context.Background(), library, append(changes[:1:1], librarywatch.Change{Path: fatalPath, Directory: true}))
+			if err == nil || !librarywatch.ShouldRetry(err) || !strings.Contains(err.Error(), fatalPath) || !strings.Contains(err.Error(), changes[0].Path) {
+				t.Fatalf("fatal error lost its path, earlier failure, or retry semantics: %v", err)
+			}
+		})
+	}
+}
+
 func TestLibraryRefreshItemFailuresCompleteOtherDirectories(t *testing.T) {
 	root := t.TempDir()
 	bad := filepath.Join(root, "a-bad", "movie.nfo")
@@ -38,7 +88,7 @@ func TestLibraryRefreshItemFailuresCompleteOtherDirectories(t *testing.T) {
 		writeFile(t, strings.TrimSuffix(path, ".nfo")+".strm", "http://media.test/movie.mp4\n")
 		writeFile(t, path, "<movie><title>Original</title><runtime>90</runtime></movie>")
 	}
-	app, _, _ := newProbeTestApp(t, root)
+	app, server, token := newProbeTestApp(t, root)
 	library, err := app.db.Library(1)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +101,7 @@ func TestLibraryRefreshItemFailuresCompleteOtherDirectories(t *testing.T) {
 	writeFile(t, good, "<movie><title>Updated good</title></movie>")
 	changes := []librarywatch.Change{{Path: bad}, {Path: good}}
 	err = app.refreshLibraryChanges(context.Background(), library, changes)
-	if err == nil || librarywatch.ShouldRetry(err) || !strings.Contains(err.Error(), "1 个文件读取失败") {
+	if err == nil || librarywatch.ShouldRetry(err) || !strings.Contains(err.Error(), "1 个条目处理失败") {
 		t.Fatalf("expected completed partial failure, got %v", err)
 	}
 	before, err := app.db.Movie(badID)
@@ -67,6 +117,18 @@ func TestLibraryRefreshItemFailuresCompleteOtherDirectories(t *testing.T) {
 	app.taskMu.Unlock()
 	if last.Type != "watch" || last.Status != "failed" || last.Error == "" {
 		t.Fatalf("partial failure disappeared from task history: %+v", last)
+	}
+	for _, detail := range []string{filepath.Dir(bad), bad, "读取或解析 NFO", "broken", "显示 1 / 1 条"} {
+		if !strings.Contains(last.Error, detail) {
+			t.Errorf("task error is missing %q: %s", detail, last.Error)
+		}
+	}
+	response, raw := embyRaw(t, server, http.MethodGet, "/api/admin/tasks", token, "")
+	var history struct {
+		Items []task `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &history); err != nil || response.StatusCode != http.StatusOK || len(history.Items) == 0 || history.Items[0].Error != last.Error {
+		t.Fatalf("failure details did not reach task API: %s, %v", raw, err)
 	}
 	app.scanMu.RLock()
 	status := app.scanStatus

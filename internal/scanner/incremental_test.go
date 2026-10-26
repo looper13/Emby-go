@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -38,10 +39,12 @@ func requireScan(t *testing.T, database *store.Store, library store.Library, wan
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
+	counts := got
+	counts.Failures = nil
+	if !reflect.DeepEqual(counts, want) {
 		t.Fatalf("scan result = %+v, want %+v", got, want)
 	}
-	if progress.Done != progress.Total || progress.Result != got {
+	if progress.Done != progress.Total || !reflect.DeepEqual(progress.Result, got) {
 		t.Fatalf("final progress = %+v, result = %+v", progress, got)
 	}
 }
@@ -69,7 +72,7 @@ func TestIncrementalUnchangedSurvivesRestart(t *testing.T) {
 		t.Fatalf("unchanged movie or version was rewritten: before=%+v after=%+v", before, after)
 	}
 	result, err := RebuildWithProgress(context.Background(), reopened, library, nil)
-	if err != nil || result != (Result{Updated: 1, Success: 1}) {
+	if err != nil || !reflect.DeepEqual(result, Result{Updated: 1, Success: 1}) {
 		t.Fatalf("full rebuild = %+v, %v", result, err)
 	}
 	if rebuilt := visible(t, reopened)[0]; rebuilt.ID != before.ID || rebuilt.UpdatedAt == before.UpdatedAt {

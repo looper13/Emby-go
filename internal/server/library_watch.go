@@ -178,15 +178,16 @@ func (a *App) refreshLibraryChanges(ctx context.Context, library store.Library, 
 		total.Updated += result.Updated
 		total.Skipped += result.Skipped
 		total.Deleted += result.Deleted
+		total.AddFailureSamples(result)
 		processed += result.Added + result.Updated + result.Skipped + result.Failed
 		if err != nil {
-			return err
+			return errors.Join(fmt.Errorf("刷新目录失败: %s: %w", directory, err), total.FailureError("局部刷新", library.Path))
 		}
 	}
 	slog.Info("媒体库局部刷新完成", "library_id", library.ID, "events", len(changes),
 		"added", total.Added, "updated", total.Updated, "skipped", total.Skipped, "deleted", total.Deleted, "failed", total.Failed)
 	if total.Failed > 0 {
-		return &librarywatch.RefreshCompletedError{Err: fmt.Errorf("局部刷新有 %d 个文件读取失败: %s", total.Failed, library.Path)}
+		return &librarywatch.RefreshCompletedError{Err: total.FailureError("局部刷新", library.Path)}
 	}
 	return nil
 }
