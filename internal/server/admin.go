@@ -523,21 +523,36 @@ func (a *App) adminDelete(c *gin.Context) {
 		return
 	}
 	defer a.releaseNFO("delete")
+	if !a.configEditMu.TryLock() {
+		c.JSON(http.StatusConflict, gin.H{"error": "正在保存配置，请稍后重试"})
+		return
+	}
+	defer a.configEditMu.Unlock()
+
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(404, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
 	movie, err := a.db.Movie(id)
 	if err != nil {
-		c.JSON(404, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if err = a.db.DeleteMovie(id); err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+	lib, err := a.db.Library(movie.LibraryID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "媒体库不存在"})
 		return
 	}
-	_ = a.db.BumpVersion(movie.LibraryID)
+
+	ctx, cancel := context.WithTimeout(a.rootCtx, 2*time.Minute)
+	defer cancel()
+
+	if _, err := a.deleteMovieWithFiles(ctx, movie, lib); err != nil {
+		slog.Error("删除影片失败", "id", id, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	c.Status(http.StatusNoContent)
 }

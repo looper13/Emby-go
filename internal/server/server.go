@@ -469,6 +469,8 @@ func (a *App) embyRoutes() []embyRoute {
 		{"GET", "/Users/:uid/Items/:id/PlaybackInfo", true, a.playback},
 		{"POST", "/Users/:uid/Items/:id/PlaybackInfo", true, a.playback},
 		{"GET", "/Videos/:id/AdditionalParts", true, a.additionalParts},
+		{"DELETE", "/Items/:id", true, a.embyDeleteItem},
+		{"DELETE", "/Users/:uid/Items/:id", true, a.embyDeleteItem},
 		// The handler accepts account authentication or a scoped delivery signature.
 		{"GET", "/Videos/:id/:source/Subtitles/:index/Stream.:format", false, a.subtitleStream},
 		{"HEAD", "/Videos/:id/:source/Subtitles/:index/Stream.:format", false, a.subtitleStream},

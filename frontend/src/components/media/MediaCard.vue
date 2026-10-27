@@ -104,7 +104,7 @@ function key(event: KeyboardEvent, id: number) {
         <button
           class="icon-btn danger"
           :data-delete="movie.id"
-          title="删除索引（不删文件）"
+          title="删除影片及文件"
           :disabled="busy?.has('remove:' + movie.id)"
           @click.stop="emit('remove', movie.id)"
         >

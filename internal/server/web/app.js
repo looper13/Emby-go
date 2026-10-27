@@ -291,7 +291,7 @@ function wallCard(item, ud, tags = {}) {
         <div class="wall-actions">
           <button class="icon-btn" data-probe="${item.id}" title="探测媒体信息（ffprobe，写回 NFO）">${icon('probe')}</button>
           <button class="icon-btn" data-reread="${item.id}" title="重读 .strm 与 NFO">${icon('refresh')}</button>
-          <button class="icon-btn danger" data-delete="${item.id}" title="删除索引（不删文件）">${icon('trash')}</button>
+          <button class="icon-btn danger" data-delete="${item.id}" title="删除影片及文件">${icon('trash')}</button>
         </div>
         ${playable ? `<button class="wall-play" data-quickplay="${item.id}" title="直接播放">${icon('play')}</button>` : ''}
       </div>
@@ -460,8 +460,8 @@ async function pageItems(_param, options = {}) {
     const remove = event.target.closest('[data-delete]');
     if (remove) {
       event.stopPropagation();
-      if (!confirm('仅删除数据库索引，不删除源文件。继续？')) return;
-      try { await api('/items/' + remove.dataset.delete, { method: 'DELETE' }); toast('已删除索引', 'ok'); refreshPage(view); }
+      if (!confirm('确定删除该影片？将删除本地文件（STRM/视频、NFO、图片等）并清理关联网盘源文件。')) return;
+      try { await api('/items/' + remove.dataset.delete, { method: 'DELETE' }); toast('已删除影片及文件', 'ok'); refreshPage(view); }
       catch (e) { toast(e.message, 'error'); }
       return;
     }
