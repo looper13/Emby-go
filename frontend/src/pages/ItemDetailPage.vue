@@ -2,10 +2,12 @@
 import { computed, inject, nextTick, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { catalogApi } from '../api/catalog';
+import { televisionApi, type TelevisionItem } from '../api/television';
 import type { DetailDto, SimilarDto } from '../api/contracts';
 import { usePageRequest } from '../composables/usePageRequest';
 import { isValidItemId } from '../router/legacy-url';
-import { viewHistoryKey } from '../router/view-history';
+import { viewHistoryKey, saveViewPosition } from '../router/view-history';
+import { useMediaWallStore } from '../stores/media-wall';
 import ItemHero from '../components/media/ItemHero.vue';
 import DetailPlaybackControls from '../components/media/DetailPlaybackControls.vue';
 import type { TrackSelection } from '../lib/player-tracks';
@@ -47,13 +49,98 @@ const trailerThumb = computed(() => {
 function entity(key: string, value: string) { void router.push({ path: '/items', query: { [key]: value, ...(typeof route.query.library_id === 'string' ? { library_id: route.query.library_id } : {}) } }); }
 function openSimilar(id: string) { void router.push({ path: `/item/${id}`, query: route.query }); }
 function back() { history.backFromItem(route.query); }
+
+const wall = useMediaWallStore();
+const currentId = computed(() => Number(route.params.id));
+const tvEpisodes = shallowRef<TelevisionItem[]>([]);
+
+const tvIndex = computed(() => {
+  if (!tvEpisodes.value.length) return -1;
+  return tvEpisodes.value.findIndex(item => String(item.Id) === String(route.params.id));
+});
+
+const wallIndex = computed(() => {
+  return wall.items.findIndex(item => item.id === currentId.value);
+});
+
+const hasPrev = computed(() => {
+  if (tvIndex.value !== -1) return tvIndex.value > 0;
+  if (wallIndex.value !== -1) return wallIndex.value > 0;
+  return false;
+});
+
+const hasNext = computed(() => {
+  if (tvIndex.value !== -1) return tvIndex.value < tvEpisodes.value.length - 1;
+  if (wallIndex.value !== -1) return wallIndex.value < wall.items.length - 1 || !wall.done;
+  return false;
+});
+
+const prevTitle = computed(() => {
+  if (tvIndex.value > 0) return tvEpisodes.value[tvIndex.value - 1]?.Name || '';
+  if (wallIndex.value > 0) return wall.items[wallIndex.value - 1]?.Title || '';
+  return '';
+});
+
+const nextTitle = computed(() => {
+  if (tvIndex.value >= 0 && tvIndex.value < tvEpisodes.value.length - 1) {
+    return tvEpisodes.value[tvIndex.value + 1]?.Name || '';
+  }
+  if (wallIndex.value >= 0 && wallIndex.value < wall.items.length - 1) {
+    return wall.items[wallIndex.value + 1]?.Title || '';
+  }
+  return '';
+});
+
+function openItem(id: number) {
+  saveViewPosition({ scrollY: window.scrollY, wallCount: wall.items.length, focusID: String(id) });
+  void router.push({ path: `/item/${id}`, query: route.query });
+}
+
+function prev() {
+  if (tvIndex.value > 0) {
+    openItem(Number(tvEpisodes.value[tvIndex.value - 1]!.Id));
+  } else if (wallIndex.value > 0) {
+    openItem(wall.items[wallIndex.value - 1]!.id);
+  }
+}
+
+async function next() {
+  if (tvIndex.value >= 0 && tvIndex.value < tvEpisodes.value.length - 1) {
+    openItem(Number(tvEpisodes.value[tvIndex.value + 1]!.Id));
+  } else if (wallIndex.value >= 0 && wallIndex.value < wall.items.length - 1) {
+    openItem(wall.items[wallIndex.value + 1]!.id);
+  } else if (wallIndex.value >= 0 && !wall.done) {
+    const current = scope.begin();
+    const loaded = await wall.loadMore(current.signal);
+    if (loaded && wallIndex.value < wall.items.length - 1) {
+      openItem(wall.items[wallIndex.value + 1]!.id);
+    }
+  }
+}
+
 function escape(event: KeyboardEvent) {
   if (event.key !== 'Escape' || event.defaultPrevented || (event.target instanceof Element
     && event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]'))) return;
   event.preventDefault(); back();
 }
+function keyNav(event: KeyboardEvent) {
+  if (event.defaultPrevented || (event.target instanceof Element
+    && event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]'))
+    || player.current || document.querySelector('#artwork-overlay')) return;
+  if ((event.key === 'ArrowLeft' || event.key === '[') && hasPrev.value) {
+    event.preventDefault();
+    prev();
+  } else if ((event.key === 'ArrowRight' || event.key === ']') && hasNext.value) {
+    event.preventDefault();
+    void next();
+  }
+}
 window.addEventListener('keydown', escape);
-onScopeDispose(() => window.removeEventListener('keydown', escape));
+window.addEventListener('keydown', keyNav);
+onScopeDispose(() => {
+  window.removeEventListener('keydown', escape);
+  window.removeEventListener('keydown', keyNav);
+});
 async function enter(preserve = false) {
   const current = scope.begin(); const id = String(route.params.id); const restore = history.target();
   const scrollY = window.scrollY;
@@ -69,6 +156,23 @@ async function enter(preserve = false) {
       selectedVersionId.value = detail.versions?.find(version => version.id === detail.movie.id && version.playable)?.id
         ?? detail.versions?.find(version => version.playable)?.id ?? detail.movie.id;
     }
+
+    if (typeof route.query.tv_series === 'string' && route.query.tv_series) {
+      void televisionApi.episodes(route.query.tv_series, typeof route.query.tv_season === 'string' ? route.query.tv_season : '', 0, current.signal).then(res => {
+        if (current.isCurrent()) tvEpisodes.value = res.items;
+      }).catch(() => {});
+    } else if (wall.items.length === 0) {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(route.query)) {
+        if (typeof v === 'string' && k !== 'offset' && k !== 'limit') q.set(k, v);
+      }
+      if (!q.has('library_id') && detail.movie.library_id) {
+        q.set('library_id', String(detail.movie.library_id));
+      }
+      wall.prepare(q, false);
+      void wall.loadMore(current.signal);
+    }
+
     await nextTick();
     if (!current.isCurrent()) return;
     emit('title', detail.movie.Title || id);
@@ -82,7 +186,26 @@ watch(() => tasks.revision, () => { void enter(true); });
 </script>
 <template>
   <article v-if="data" class="item-page" style="grid-template-columns:minmax(0,1fr)">
-    <ItemHero :can-manage="auth.isAdministrator" :movie="data.movie" :favorite="data.favorite" :images="data.images" :playable="data.playable" :busy="actions.busy.value" @back="back" @scrape="scrape" @play="play" @probe="actions.run('probe', data.movie.id)" @reread="actions.run('reread', data.movie.id)" @entity="entity">
+    <ItemHero
+      :can-manage="auth.isAdministrator"
+      :movie="data.movie"
+      :favorite="data.favorite"
+      :images="data.images"
+      :playable="data.playable"
+      :busy="actions.busy.value"
+      :has-prev="hasPrev"
+      :has-next="hasNext"
+      :prev-title="prevTitle"
+      :next-title="nextTitle"
+      @back="back"
+      @scrape="scrape"
+      @play="play"
+      @probe="actions.run('probe', data.movie.id)"
+      @reread="actions.run('reread', data.movie.id)"
+      @entity="entity"
+      @prev="prev"
+      @next="next"
+    >
       <template #playback>
         <label v-if="(data.versions?.length ?? 0) > 1" class="version-choice"><span>播放版本</span><select v-model.number="selectedVersionId" aria-label="播放版本">
           <option v-for="version in data.versions" :key="version.id" :value="version.id" :disabled="!version.playable">{{ version.name }}{{ version.playable ? '' : ' · 不可播放' }}</option>

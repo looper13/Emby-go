@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { RefreshCw, Trash2, Folder, Film, Tv, Layers } from '@lucide/vue';
+import { RefreshCw, Trash2, Folder, Film, Tv, Layers, Shuffle } from '@lucide/vue';
 import { adminApi } from '../api/admin';
+import { catalogApi } from '../api/catalog';
 import { useAdminRead } from '../composables/useAdminRead';
 import { useTasksStore } from '../stores/tasks';
 import { useToastStore } from '../stores/toasts';
+import { usePlayerStore } from '../stores/player';
 import LibraryForm from '../components/libraries/LibraryForm.vue';
 import DuplicateMoviesPanel from '../components/libraries/DuplicateMoviesPanel.vue';
 import EmptyState from '../components/common/EmptyState.vue';
@@ -18,11 +20,40 @@ function contentLabel(lib: LibraryDto) {
 const { data, loading, error, load, active } = useAdminRead(adminApi.libraries);
 const tasks = useTasksStore();
 const toasts = useToastStore();
+const player = usePlayerStore();
 const duplicates = ref<InstanceType<typeof DuplicateMoviesPanel>>();
 const submitting = ref(false);
 const formKey = ref(0);
 const deleting = ref(new Set<number>());
 const updatingProxy = ref(new Set<number>());
+const playingLibraryId = ref<number | null>(null);
+
+async function playRandom(lib: LibraryDto) {
+  if (playingLibraryId.value === lib.Id) return;
+  playingLibraryId.value = lib.Id;
+  try {
+    const q = new URLSearchParams({
+      library_id: String(lib.Id),
+      sort: 'random',
+      seed: String((crypto.getRandomValues(new Uint32Array(1))[0]! & 0x7fffffff) || 1),
+      limit: '1',
+      offset: '0',
+    });
+    if (lib.Type === 'mixed') {
+      q.set('media_type', 'Movie');
+    }
+    const result = await catalogApi.items(q);
+    if (result.items.length > 0) {
+      player.media(result.items[0]);
+    } else {
+      toasts.show(`媒体库「${lib.Name}」暂无可用影片`, 'error');
+    }
+  } catch (cause) {
+    toasts.show(cause instanceof Error ? cause.message : '随机播放失败', 'error');
+  } finally {
+    playingLibraryId.value = null;
+  }
+}
 
 watch(() => tasks.revision, () => {
   void load();
@@ -171,6 +202,16 @@ async function remove(id: number) {
                   <Folder :size="13" aria-hidden="true" />
                   <span>浏览</span>
                 </RouterLink>
+                <button
+                  class="btn btn-sm btn-random-play"
+                  :data-lib-random-play="lib.Id"
+                  title="随机播放该媒体库中的影片"
+                  :disabled="playingLibraryId === lib.Id"
+                  @click="playRandom(lib)"
+                >
+                  <Shuffle :size="13" aria-hidden="true" />
+                  <span>{{ playingLibraryId === lib.Id ? '选取中…' : '随机播放' }}</span>
+                </button>
                 <button
                   class="btn btn-sm"
                   :data-lib-scan="lib.Id"
@@ -326,5 +367,11 @@ async function remove(id: number) {
 .btn-browse:hover {
   background: var(--accent);
   color: #ffffff;
+}
+
+.btn-random-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 </style>

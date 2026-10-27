@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { Play, Activity, RefreshCw, Search, Film, Star, ArrowLeft } from '@lucide/vue';
+import { Play, Activity, RefreshCw, Search, Film, Star, ArrowLeft, ChevronLeft, ChevronRight } from '@lucide/vue';
 import type { MovieDto, ImageDto } from '../../api/contracts';
 import { numberUnlessInTitle, statusText, fmtDuration } from '../../lib/media';
 import { imageURL } from '../../lib/image-url';
@@ -15,6 +15,10 @@ const props = defineProps<{
   busy?: Set<string>;
   favorite?: boolean;
   canManage?: boolean;
+  hasPrev?: boolean;
+  hasNext?: boolean;
+  prevTitle?: string;
+  nextTitle?: string;
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +28,8 @@ const emit = defineEmits<{
   reread: [];
   scrape: [];
   entity: [key: string, value: string];
+  prev: [];
+  next: [];
 }>();
 
 const { hideImages } = useMediaVisibility();
@@ -49,12 +55,37 @@ const backdrop = computed(() =>
       <div class="hero-ambient-glow" />
     </div>
 
-    <!-- 顶部悬浮返回按钮（毛玻璃胶囊） -->
+    <!-- 顶部悬浮工具栏：返回按钮与前一部/后一部导航 -->
     <div class="item-hero-topbar">
       <button id="item-back" class="btn item-back" title="返回媒体墙 (Esc)" @click="emit('back')">
         <ArrowLeft :size="15" aria-hidden="true" />
         <span>← 返回媒体墙</span>
       </button>
+
+      <div class="item-nav-group">
+        <button
+          id="item-prev"
+          class="btn item-nav-btn"
+          :disabled="!hasPrev"
+          :title="prevTitle ? `前一部：${prevTitle}` : '前一部'"
+          aria-label="前一部"
+          @click="emit('prev')"
+        >
+          <ChevronLeft :size="15" aria-hidden="true" />
+          <span>前一部</span>
+        </button>
+        <button
+          id="item-next"
+          class="btn item-nav-btn"
+          :disabled="!hasNext"
+          :title="nextTitle ? `后一部：${nextTitle}` : '后一部'"
+          aria-label="后一部"
+          @click="emit('next')"
+        >
+          <span>后一部</span>
+          <ChevronRight :size="15" aria-hidden="true" />
+        </button>
+      </div>
     </div>
 
     <!-- 主体：海报 + 信息区 + 标签 + 操作栏 -->
@@ -234,6 +265,58 @@ const backdrop = computed(() =>
   position: relative;
   z-index: 10;
   padding: 14px 20px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.item-nav-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.item-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(14, 16, 20, 0.45) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: #ededee !important;
+  font-size: 12px;
+  font-weight: 500;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.item-nav-btn:hover:not(:disabled) {
+  background: rgba(14, 16, 20, 0.75) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+.item-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+[data-theme="light"] .item-nav-btn {
+  background: rgba(255, 255, 255, 0.75) !important;
+  border-color: rgba(0, 0, 0, 0.12) !important;
+  color: #1a1b1e !important;
+}
+
+[data-theme="light"] .item-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(0, 0, 0, 0.22) !important;
 }
 
 .item-back {

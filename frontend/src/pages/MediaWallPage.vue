@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onScopeDispose, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { Shuffle } from '@lucide/vue';
 import { catalogApi } from '../api/catalog';
 import type { LibraryDto } from '../api/contracts';
 import { usePageRequest } from '../composables/usePageRequest';
@@ -8,6 +9,7 @@ import { useMediaWallStore, WALL_PAGE_SIZE } from '../stores/media-wall';
 import { viewHistoryKey, saveViewPosition, type ViewPosition } from '../router/view-history';
 import { useTasksStore } from '../stores/tasks';
 import { useAuthStore } from '../stores/auth';
+import { useToastStore } from '../stores/toasts';
 import BackgroundTaskProgress from '../components/tasks/BackgroundTaskProgress.vue';
 import MediaGrid from '../components/media/MediaGrid.vue';
 import WallFilters from '../components/media/WallFilters.vue';
@@ -26,6 +28,7 @@ const wall = useMediaWallStore(); const scope = usePageRequest();
 const tasks = useTasksStore();
 const auth = useAuthStore();
 const player = usePlayerStore();
+const toasts = useToastStore();
 const libraries = ref<LibraryDto[]>([]); const pageError = ref('');
 const search = ref(''); const ready = ref(false); const more = ref<HTMLElement | null>(null);
 const actions = useMediaActions(refresh, () => route.fullPath);
@@ -87,6 +90,34 @@ function reshuffle() {
   void enter({ scrollY: 0, wallCount: WALL_PAGE_SIZE, focusID: '' });
 }
 function quickplay(id: number) { const movie = wall.items.find(m => m.id === id); if (movie) player.media(movie); }
+const randomPlaying = ref(false);
+async function playRandom() {
+  if (randomPlaying.value || wall.total === 0) return;
+  randomPlaying.value = true;
+  try {
+    const q = query();
+    q.set('sort', 'random');
+    q.set('seed', String((crypto.getRandomValues(new Uint32Array(1))[0]! & 0x7fffffff) || 1));
+    q.set('limit', '1');
+    q.set('offset', '0');
+    if (!value('status')) {
+      q.delete('status');
+    }
+    const result = await catalogApi.items(q);
+    if (result.items.length > 0) {
+      player.media(result.items[0]);
+    } else if (wall.items.length > 0) {
+      const pick = wall.items[Math.floor(Math.random() * wall.items.length)];
+      if (pick) player.media(pick);
+    } else {
+      toasts.show('未找到可播放的影片', 'error');
+    }
+  } catch (cause) {
+    toasts.show(cause instanceof Error ? cause.message : '随机播放失败', 'error');
+  } finally {
+    randomPlaying.value = false;
+  }
+}
 async function load(retry = false) {
   if (!request?.isCurrent()) return false;
   const loaded = await wall.loadMore(request.signal, retry);
@@ -156,7 +187,23 @@ watch(() => tasks.revision, () => {
 </script>
 <template>
   <section class="panel">
-    <div class="panel-head wall-head"><h2>媒体墙</h2><div class="panel-actions"><span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span><button v-if="auth.isAdministrator" id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button></div></div>
+    <div class="panel-head wall-head">
+      <h2>媒体墙</h2>
+      <div class="panel-actions">
+        <span id="wall-count" class="hint" style="margin:0">共 {{ wall.total }} 条{{ scopeLabel ? ' · ' + scopeLabel : '' }} · 已加载 {{ wall.items.length }}</span>
+        <button
+          id="wall-random-play"
+          class="btn btn-accent"
+          :disabled="wall.total === 0 || randomPlaying"
+          title="随机播放当前范围内的影片"
+          @click="playRandom"
+        >
+          <Shuffle :size="15" aria-hidden="true" />
+          <span>{{ randomPlaying ? '选取中…' : '随机播放' }}</span>
+        </button>
+        <button v-if="auth.isAdministrator" id="probe-media" class="btn" :disabled="tasks.mutationBusy" @click="tasks.probe.run({only_missing:true})">{{ tasks.probe.busy ? '探测中…' : '探测媒体信息' }}</button>
+      </div>
+    </div>
     <p v-if="pageError" role="alert">{{ pageError }} <button class="btn" @click="enter()">重试</button></p>
     <BackgroundTaskProgress v-if="auth.isAdministrator" kind="probe" :progress="tasks.probe.progress" :visible="tasks.probe.visible" :busy="tasks.probe.busy" :unavailable="tasks.probe.unavailable" :cancelling="tasks.probe.cancelling" @cancel="tasks.probe.cancel()" />
     <WallFilters :can-manage="auth.isAdministrator" :query="route.query" :libraries="libraries" :search="search" @filter="filter" @search="search = $event; searchChanged()" @clear-entity="clearEntity" @shuffle="reshuffle"><template #entity-action><FavoriteButton v-if="entityItem" :item-id="entityItem.Id" :favorite="entityItem.UserData.IsFavorite" :label="entityItem.Name" /></template></WallFilters>
@@ -207,4 +254,10 @@ watch(() => tasks.revision, () => {
 .wall-head h2 { flex-shrink: 0; white-space: nowrap; }
 .wall-head .panel-actions { flex-wrap: wrap; min-width: 0; }
 .wall-head #wall-count { overflow-wrap: anywhere; }
+#wall-random-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
 </style>
