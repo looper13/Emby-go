@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users, Heart, UserRound, LogOut, Sun, Moon, Image, ImageOff } from '@lucide/vue';
+import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users, Heart, UserRound, LogOut, Sun, Moon, Image, ImageOff, PanelLeftClose, PanelLeftOpen } from '@lucide/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { computed, ref, watch } from 'vue';
 import { useTasksStore } from '../stores/tasks';
@@ -7,6 +7,8 @@ import { useAuthStore } from '../stores/auth';
 import { useToastStore } from '../stores/toasts';
 import { useTheme } from '../composables/useTheme';
 import { useMediaVisibility } from '../composables/useMediaVisibility';
+import { useSidebar } from '../composables/useSidebar';
+import { useCardSize } from '../composables/useCardSize';
 
 const route = useRoute();
 const router = useRouter();
@@ -14,6 +16,8 @@ const tasks = useTasksStore();
 const auth = useAuthStore(), toasts = useToastStore();
 const theme = useTheme();
 const mediaVisibility = useMediaVisibility();
+const { isCollapsed, toggle } = useSidebar();
+useCardSize(); // Initialize global media card size CSS variable
 
 async function logout() {
   try { await auth.logout(); if (!auth.authenticated) await router.replace('/login'); }
@@ -41,32 +45,80 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
 </script>
 
 <template>
-  <div id="app-shell">
-    <aside class="sidebar">
+  <div id="app-shell" :class="{ 'sidebar-collapsed': isCollapsed }">
+    <aside class="sidebar" :class="{ 'is-collapsed': isCollapsed }">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <Film :size="20" aria-hidden="true" />
-        </span>
-        <div class="brand-text"><strong>Emby-go</strong><small>媒体档案控制台</small></div>
+        <div
+          class="brand-mark-wrap"
+          :title="isCollapsed ? '展开侧边栏' : undefined"
+          :role="isCollapsed ? 'button' : undefined"
+          :tabindex="isCollapsed ? 0 : undefined"
+          @click="isCollapsed && toggle()"
+          @keydown.enter="isCollapsed && toggle()"
+          @keydown.space.prevent="isCollapsed && toggle()"
+        >
+          <span class="brand-mark" aria-hidden="true">
+            <Film :size="20" aria-hidden="true" />
+          </span>
+        </div>
+        <div v-show="!isCollapsed" class="brand-text"><strong>Emby-go</strong><small>媒体档案控制台</small></div>
+        <button
+          v-if="!isCollapsed"
+          class="icon-btn sidebar-collapse-btn"
+          type="button"
+          title="收回侧边栏"
+          aria-label="收回侧边栏"
+          @click="toggle"
+        >
+          <PanelLeftClose :size="16" aria-hidden="true" />
+        </button>
       </div>
       <nav id="nav" class="nav" aria-label="主导航">
         <template v-for="(item, index) in navigation" :key="item.page">
-          <div v-if="index === 0 || item.group !== navigation[index - 1]?.group" class="nav-group-label" aria-hidden="true">
-            {{ item.group }}
+          <div
+            v-if="index === 0 || item.group !== navigation[index - 1]?.group"
+            class="nav-group-label"
+            :class="{ 'is-collapsed': isCollapsed }"
+            aria-hidden="true"
+          >
+            <span v-show="!isCollapsed">{{ item.group }}</span>
           </div>
-          <button class="nav-item" :class="{ 'is-active': route.meta.navigation === item.page }"
-            :data-page="item.page" :aria-current="route.meta.navigation === item.page ? 'page' : undefined" @click="router.push('/' + item.page)">
-            <component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" /><span>{{ item.label }}</span>
+          <button
+            class="nav-item"
+            :class="{ 'is-active': route.meta.navigation === item.page }"
+            :data-page="item.page"
+            :aria-current="route.meta.navigation === item.page ? 'page' : undefined"
+            :title="isCollapsed ? item.label : undefined"
+            :aria-label="item.label"
+            @click="router.push('/' + item.page)"
+          >
+            <component :is="item.icon" :size="17" :stroke-width="1.8" aria-hidden="true" />
+            <span v-show="!isCollapsed">{{ item.label }}</span>
           </button>
         </template>
       </nav>
-      <footer class="side-foot"><span class="status-dot" aria-hidden="true"></span>EMBY-GO · CONSOLE</footer>
+      <footer class="side-foot" :title="isCollapsed ? 'EMBY-GO · CONSOLE (在线)' : undefined">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span v-show="!isCollapsed">EMBY-GO · CONSOLE</span>
+      </footer>
     </aside>
     <main class="main">
       <header class="topbar">
-        <div>
-          <p id="page-eyebrow" class="crumb">{{ route.meta.crumb }}</p>
-          <h1 id="page-title">{{ detailTitle || route.meta.title }}</h1>
+        <div class="topbar-left">
+          <button
+            class="icon-btn sidebar-toggle-btn"
+            type="button"
+            :title="isCollapsed ? '展开侧边栏' : '收回侧边栏'"
+            :aria-label="isCollapsed ? '展开侧边栏' : '收回侧边栏'"
+            @click="toggle"
+          >
+            <PanelLeftOpen v-if="isCollapsed" :size="18" aria-hidden="true" />
+            <PanelLeftClose v-else :size="18" aria-hidden="true" />
+          </button>
+          <div class="topbar-titles">
+            <p id="page-eyebrow" class="crumb">{{ route.meta.crumb }}</p>
+            <h1 id="page-title">{{ detailTitle || route.meta.title }}</h1>
+          </div>
         </div>
         <div class="top-actions">
           <div class="connection-indicator" title="服务已连接">

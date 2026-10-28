@@ -135,7 +135,7 @@ async function test(target: SourceTest) {
 .actor-filters { margin-bottom: 22px; }
 .actor-filters input, .actor-filters select { width: 100%; min-width: 0; }
 .actor-filters .field:first-child { flex: 1; min-width: 160px; }
-.actor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 22px 16px; }
+.actor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--wall-card-min-width, 176px), 1fr)); gap: 22px 16px; }
 .actor-card { min-width: 0; text-decoration: none; color: inherit; transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1); }
 .actor-card:hover { transform: translateY(-3px); }
 .actor-card > a { display: block; text-decoration: none; color: inherit; }

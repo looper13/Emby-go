@@ -303,12 +303,12 @@ watch(() => [props.library, props.search, props.revision, props.series, props.se
 }
 .television-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(134px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--wall-card-min-width, 176px), 1fr));
   gap: 20px 16px;
   margin-bottom: 16px;
 }
 .episode-grid {
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(220px, calc(var(--wall-card-min-width, 176px) * 1.3)), 1fr));
 }
 .television-card {
   appearance: none;

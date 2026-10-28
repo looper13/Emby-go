@@ -115,8 +115,133 @@ h1, h2, h3 {
 
 /* ------------------------------------------------------------------ 侧边栏 & Amane 品牌导航 */
 .sidebar {
+  width: 244px;
+  flex: 0 0 244px;
   border-right: 1px solid var(--line);
-  transition: background 0.22s ease, border-color 0.22s ease;
+  transition: width 0.24s cubic-bezier(0.2, 0, 0, 1), flex-basis 0.24s cubic-bezier(0.2, 0, 0, 1), padding 0.24s ease, background 0.22s ease, border-color 0.22s ease;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.sidebar.is-collapsed {
+  width: 68px;
+  flex: 0 0 68px;
+  padding: 20px 10px 16px;
+}
+
+.sidebar.is-collapsed .brand {
+  padding: 2px 0 16px;
+  justify-content: center;
+  gap: 0;
+}
+
+.sidebar.is-collapsed .brand-mark-wrap {
+  cursor: pointer;
+}
+
+.sidebar.is-collapsed .brand-mark-wrap:hover .brand-mark {
+  transform: scale(1.05);
+  box-shadow: 0 4px 14px rgba(26, 113, 255, 0.45);
+}
+
+.sidebar.is-collapsed .nav-group-label {
+  height: 1px;
+  margin: 8px 4px;
+  padding: 0;
+  background: var(--line);
+  font-size: 0;
+  overflow: hidden;
+}
+
+.sidebar.is-collapsed .nav-item {
+  width: 44px;
+  height: 40px;
+  padding: 0;
+  margin: 0 auto;
+  justify-content: center;
+  gap: 0;
+}
+
+.sidebar.is-collapsed .nav-item svg {
+  margin: 0;
+}
+
+.sidebar.is-collapsed .side-foot {
+  justify-content: center;
+  padding: 14px 0 2px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+  transition: padding 0.24s ease, gap 0.24s ease;
+}
+
+.brand-mark-wrap {
+  display: inline-flex;
+  outline: none;
+}
+
+.brand-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-collapse-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-collapse-btn:hover {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbar-titles {
+  min-width: 0;
+}
+
+.sidebar-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 8px;
+  flex-shrink: 0;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.sidebar-toggle-btn:hover {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--accent);
 }
 
 [data-theme="dark"] .sidebar {
@@ -305,7 +430,47 @@ h1, h2, h3 {
 
 /* ------------------------------------------------------------------ Amane 海报墙 (Poster Card) */
 .wall {
-  gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--wall-card-min-width, 176px), 1fr));
+  gap: 18px;
+  transition: gap 0.22s ease;
+}
+
+/* 卡片尺寸切换控件 */
+.card-size-selector {
+  display: inline-flex;
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.card-size-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.card-size-btn:hover {
+  color: var(--text);
+}
+
+.card-size-btn.is-active {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(26, 113, 255, 0.25);
 }
 
 .wall-card {
@@ -1584,9 +1749,41 @@ details summary {
 
 /* ------------------------------------------------------------------ 移动端与窄屏导航优化 */
 @media (max-width: 860px) {
+  .sidebar-toggle-btn,
+  .sidebar-collapse-btn {
+    display: none !important;
+  }
   .sidebar {
     padding: 10px 14px;
     background: var(--panel) !important;
+  }
+  .sidebar.is-collapsed {
+    width: auto !important;
+    flex: none !important;
+    padding: 10px 14px !important;
+  }
+  .sidebar.is-collapsed .brand {
+    padding: 0 0 10px !important;
+    justify-content: flex-start !important;
+    gap: 12px !important;
+  }
+  .sidebar.is-collapsed .brand-mark-wrap {
+    cursor: default;
+  }
+  .sidebar.is-collapsed .brand-text,
+  .sidebar.is-collapsed .nav-item span {
+    display: inline !important;
+  }
+  .sidebar.is-collapsed .nav-group-label {
+    display: none !important;
+  }
+  .sidebar.is-collapsed .nav-item {
+    width: auto !important;
+    height: auto !important;
+    padding: 6px 14px !important;
+  }
+  .sidebar.is-collapsed .side-foot {
+    display: none !important;
   }
   .nav {
     display: flex;

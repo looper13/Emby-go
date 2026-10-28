@@ -8,8 +8,10 @@ import FavoriteButton from '../components/media/FavoriteButton.vue';
 import MediaImage from '../components/media/MediaImage.vue';
 import { imageURL } from '../lib/image-url';
 import { useMediaVisibility } from '../composables/useMediaVisibility';
+import { useCardSize } from '../composables/useCardSize';
 const route = useRoute(), router = useRouter(), scope = usePageRequest();
 const { hideImages } = useMediaVisibility();
+const { cardSize, setSize } = useCardSize();
 const tabs = [['Movie,Episode', '影片与单集'], ['Series,Season', '剧集与季'], ['Person', '演员'], ['Genre', '类型'], ['Studio', '厂商'], ['Tag', '标签'], ['BoxSet', '合集']] as const;
 const type = computed(() => tabs.find(([id]) => id === route.query.type)?.[0] ?? tabs[0][0]);
 const offset = computed(() => { const n = Number(route.query.offset ?? 0); return Number.isSafeInteger(n) && n >= 0 ? n : 0; });
@@ -35,6 +37,11 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
       <label class="favorite-search"><Search :size="17" aria-hidden="true" /><input v-model="search" type="search" aria-label="搜索收藏" placeholder="搜索收藏"></label>
       <button class="icon-btn" type="submit" title="搜索" aria-label="搜索"><Search :size="18" /></button>
       <button class="icon-btn" type="button" title="刷新收藏" aria-label="刷新收藏" :disabled="loading" @click="load"><RefreshCw :size="18" /></button>
+      <div class="card-size-selector" role="group" aria-label="卡片尺寸">
+        <button type="button" class="card-size-btn" :class="{ 'is-active': cardSize === 'compact' }" title="紧凑卡片" aria-label="紧凑尺寸" @click="setSize('compact')">小</button>
+        <button type="button" class="card-size-btn" :class="{ 'is-active': cardSize === 'normal' }" title="标准卡片" aria-label="标准尺寸" @click="setSize('normal')">中</button>
+        <button type="button" class="card-size-btn" :class="{ 'is-active': cardSize === 'large' }" title="舒适大图" aria-label="大图尺寸" @click="setSize('large')">大</button>
+      </div>
       <span class="hint">{{ total }} 项收藏</span>
     </form>
     <p v-if="error" role="alert">{{ error }} <button class="btn" @click="load">重试</button></p>
@@ -66,7 +73,7 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
 .favorite-search { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 360px; min-width: 120px; }
 .favorite-search input { min-width: 0; width: 100%; }
 .favorites-toolbar .hint { margin: 0 0 0 auto; color: var(--dim); font-size: 12.5px; }
-.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 22px 16px; }
+.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--wall-card-min-width, 176px), 1fr)); gap: 22px 16px; }
 .favorite-card {
   position: relative;
   min-width: 0;

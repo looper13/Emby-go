@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { Search, SlidersHorizontal, Folder, CheckCircle2, Sparkles, Heart, X, RotateCcw } from '@lucide/vue';
 import type { LibraryDto } from '../../api/contracts';
 import { entityParams } from '../../lib/media';
+import { useCardSize } from '../../composables/useCardSize';
 
 const props = defineProps<{
   query: Record<string, unknown>;
@@ -17,6 +18,8 @@ const emit = defineEmits<{
   clearEntity: [];
   shuffle: [];
 }>();
+
+const { cardSize, setSize } = useCardSize();
 
 const value = (key: string) => typeof props.query[key] === 'string' ? props.query[key] : '';
 const entity = computed(() => entityParams.map(([key, label]) => [key, label, value(key)]).find(row => row[2]));
@@ -145,6 +148,40 @@ function clearAllFilters() {
           <Heart :size="13" class="fav-icon" :class="{ 'is-filled': value('favorite') === 'true' }" aria-hidden="true" />
           <span>仅收藏</span>
         </label>
+
+        <!-- 卡片尺寸切换（紧凑/标准/大图） -->
+        <div class="card-size-selector" role="group" aria-label="卡片尺寸">
+          <button
+            type="button"
+            class="card-size-btn"
+            :class="{ 'is-active': cardSize === 'compact' }"
+            title="紧凑卡片 (小图)"
+            aria-label="紧凑尺寸"
+            @click="setSize('compact')"
+          >
+            小
+          </button>
+          <button
+            type="button"
+            class="card-size-btn"
+            :class="{ 'is-active': cardSize === 'normal' }"
+            title="标准卡片 (默认)"
+            aria-label="标准尺寸"
+            @click="setSize('normal')"
+          >
+            中
+          </button>
+          <button
+            type="button"
+            class="card-size-btn"
+            :class="{ 'is-active': cardSize === 'large' }"
+            title="舒适大图 (放大)"
+            aria-label="大图尺寸"
+            @click="setSize('large')"
+          >
+            大
+          </button>
+        </div>
       </div>
     </div>
 
