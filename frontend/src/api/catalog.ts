@@ -8,6 +8,25 @@ export interface ResumeEntry {
   userdata?: WallUserData;
 }
 
+interface EmbyResumeItem {
+  Id: string | number;
+  Name?: string;
+  OriginalTitle?: string;
+  IndexNumber?: number;
+  ParentIndexNumber?: number;
+  SeriesName?: string;
+  Overview?: string;
+  ProductionYear?: number;
+  CommunityRating?: number;
+  RunTimeTicks?: number;
+  ImageTags?: Record<string, string>;
+  UserData?: {
+    Played?: boolean;
+    IsFavorite?: boolean;
+    PlaybackPositionTicks?: number;
+  };
+}
+
 export const catalogApi = {
   async items(query: URLSearchParams, signal?: AbortSignal) {
     return parseWall(await apiClient.request(`/api/admin/items?${query}`, { auth: 'required', signal }));
@@ -28,8 +47,9 @@ export const catalogApi = {
   },
   async resume(userId: string | number = 1, signal?: AbortSignal): Promise<ResumeEntry[]> {
     try {
-      const raw = await apiClient.request<{ Items?: any[] }>(`/Users/${encodeURIComponent(String(userId))}/Items/Resume?Limit=12`, { auth: 'required', signal });
-      return (raw?.Items || []).map(item => ({
+      const raw = (await apiClient.request(`/Users/${encodeURIComponent(String(userId))}/Items/Resume?Limit=12`, { auth: 'required', signal })) as { Items?: EmbyResumeItem[] } | null | undefined;
+      const list = Array.isArray(raw?.Items) ? raw.Items : [];
+      return list.map((item: EmbyResumeItem) => ({
         movie: {
           id: Number(item.Id),
           library_id: 1,
