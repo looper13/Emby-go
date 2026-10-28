@@ -21,11 +21,13 @@ import FavoritesPage from '../pages/FavoritesPage.vue';
 import ScheduledPage from '../pages/ScheduledPage.vue';
 import AccountPage from '../pages/AccountPage.vue';
 import UsersPage from '../pages/UsersPage.vue';
+import R18CatalogPage from '../pages/R18CatalogPage.vue';
+import R18DetailPage from '../pages/R18DetailPage.vue';
 
 export function createAppRouter(pinia: Pinia, history: RouterHistory = createWebHashHistory(window.location.pathname)) {
   const router = createRouter({
     history,
-    scrollBehavior(to) { return to.name === 'items' || to.name === 'item' ? false : { top: 0 }; },
+    scrollBehavior(to) { return ['items', 'item', 'r18'].includes(String(to.name)) ? false : { top: 0 }; },
     routes: [
       { path: '/login', name: 'login', component: LoginPage },
       {
@@ -45,6 +47,8 @@ export function createAppRouter(pinia: Pinia, history: RouterHistory = createWeb
           { path: 'probe', name: 'probe', component: ProbePage, meta: { adminOnly: true, title: '接口探针', crumb: 'Archive / Probe', navigation: 'probe' } },
           { path: 'items', name: 'items', component: MediaWallPage,
             meta: { title: '媒体墙', crumb: 'Archive / Items', navigation: 'items' } },
+          { path: 'r18', name: 'r18', component: R18CatalogPage, meta: { title: 'R18 资料库', crumb: 'Archive / R18', navigation: 'r18' } },
+          { path: 'r18/:libraryId/item/:id', name: 'r18-detail', component: R18DetailPage, meta: { title: 'R18 影片详情', crumb: 'R18 / 详情', navigation: 'r18' } },
           { path: 'item/:id', name: 'item', component: ItemDetailPage,
             beforeEnter: to => sanitizeReturnTo(to.path) ? true : '/items',
             meta: { title: '影片详情', crumb: '媒体墙 / 详情', navigation: 'items' } },

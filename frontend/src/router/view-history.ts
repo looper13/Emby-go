@@ -1,5 +1,5 @@
 import type { InjectionKey } from 'vue';
-import type { LocationQuery, Router, RouterHistory } from 'vue-router';
+import type { LocationQuery, RouteLocationRaw, Router, RouterHistory } from 'vue-router';
 
 export interface ViewPosition { scrollY: number; wallCount: number; focusID: string }
 export function readViewPosition(value: unknown): ViewPosition | null {
@@ -22,8 +22,8 @@ export function createViewHistory(router: Router, history: RouterHistory, wallCo
   router.beforeEach((_to, from) => {
     target = pop ? readViewPosition(history.state.__embyView) : null;
     if (!pop && from.matched.length) {
-      const card = document.activeElement?.closest<HTMLElement>('.wall-card');
-      saveViewPosition({ scrollY: window.scrollY, wallCount: from.name === 'items' ? wallCount() : 0, focusID: card?.dataset.play ?? '' });
+      const card = document.activeElement?.closest<HTMLElement>('.wall-card, .r18-card');
+      saveViewPosition({ scrollY: window.scrollY, wallCount: from.name === 'items' ? wallCount() : 0, focusID: card?.dataset.play ?? card?.dataset.r18Id ?? '' });
     }
     pop = false;
   });
@@ -35,7 +35,12 @@ export function createViewHistory(router: Router, history: RouterHistory, wallCo
     if (typeof position === 'number' && visited.has(position - 1)) router.back();
     else void router.replace({ path: '/items', query });
   }
-  return { target: () => target, backFromItem, dispose: stop };
+  function backTo(fallback: RouteLocationRaw) {
+    const position = history.state.position;
+    if (typeof position === 'number' && visited.has(position - 1) && history.state.back === router.resolve(fallback).fullPath) router.back();
+    else void router.replace(fallback);
+  }
+  return { target: () => target, backFromItem, backTo, dispose: stop };
 }
 
 export type ViewHistory = ReturnType<typeof createViewHistory>;

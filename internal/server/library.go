@@ -691,6 +691,9 @@ func (a *App) views(c *gin.Context) {
 	}
 	out := make([]gin.H, 0, len(libs))
 	for _, l := range libs {
+		if l.SourceType == store.SourceR18 {
+			continue
+		}
 		out = append(out, a.collectionFolderDTO(l))
 	}
 	// 有合集（NFO <set>）时追加「合集」媒体库视图（CollectionType=boxsets）。

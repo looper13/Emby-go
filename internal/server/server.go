@@ -20,6 +20,7 @@ import (
 	"emby-go/internal/librarywatch"
 	"emby-go/internal/logging"
 	"emby-go/internal/metatube"
+	"emby-go/internal/r18"
 	"emby-go/internal/scheduler"
 	"emby-go/internal/store"
 	"emby-go/internal/subtitle"
@@ -125,6 +126,9 @@ type appState struct {
 	subtitleSigningKey [32]byte
 	subtitleBytes      *cache.Memory
 	discoverSubtitles  func(string) []subtitle.File
+	r18Mu              sync.Mutex
+	r18Clients         map[int64]r18ClientEntry
+	r18Open            func(r18.Config) (r18Source, error)
 }
 
 // scanStatus 管理端可轮询的扫描进度快照。
@@ -279,6 +283,7 @@ func (a *App) checkScrapeBackend() {
 // 否则一次大库扫描会让停机一直卡到它自然结束。
 func (a *App) Close() {
 	a.rootCancel()
+	a.closeR18Clients()
 	a.mediaMu.Lock()
 	a.mediaMu.Unlock()
 	a.mediaWG.Wait()
@@ -311,6 +316,7 @@ func (a *App) routes() {
 	r.GET("/api/version", noStore, a.bind((*App).buildInfo))
 	r.POST("/api/auth/initialize", noStore, a.bind((*App).initialize))
 	r.GET("/api/browse/libraries", a.requireAuth, noStore, a.bind((*App).browseLibraries))
+	a.registerR18Routes(r)
 	// Browser image requests use the read-only session cookie.
 	r.GET("/api/admin/scrape/image", a.requireAuth, a.requireAdministrator, a.bind((*App).adminScrapeImage))
 

@@ -1756,7 +1756,11 @@ details summary {
   .sidebar {
     padding: 10px 14px;
     background: var(--panel) !important;
+    width: auto;
+    flex: none;
+    border-right: 0;
   }
+  .nav-group-label { display: none; }
   .sidebar.is-collapsed {
     width: auto !important;
     flex: none !important;

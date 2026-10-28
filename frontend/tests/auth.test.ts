@@ -250,7 +250,7 @@ describe('login and minimal application', () => {
     await fillLogin(wrapper);
     await wrapper.get('#auth-form').trigger('submit'); await flushPromises();
     expect(router.currentRoute.value.path).toBe('/items');
-    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['favorites', 'items', 'account']);
+    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['favorites', 'items', 'r18', 'account']);
     expect(wrapper.find('#scan').exists()).toBe(false);
     expect(wrapper.find('[data-scrape]').exists()).toBe(false);
     expect(fetcher.mock.calls.some(([path]) => path === '/api/browse/libraries')).toBe(true);
@@ -306,7 +306,7 @@ describe('login and minimal application', () => {
     expect(new Headers(call?.[1]?.headers).has('X-Emby-Token')).toBe(false);
     expect(wrapper.find('#content > .cards').exists()).toBe(true);
     expect(wrapper.find('a[href="/admin"]').exists()).toBe(false);
-    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['overview', 'libraries', 'favorites', 'items', 'actors', 'manual', 'settings', 'apikeys', 'account', 'users', 'scrape', 'scheduled', 'tasks', 'probe']);
+    expect(wrapper.findAll('#nav [data-page]').map(item => item.attributes('data-page'))).toEqual(['overview', 'libraries', 'favorites', 'items', 'r18', 'actors', 'manual', 'settings', 'apikeys', 'account', 'users', 'scrape', 'scheduled', 'tasks', 'probe']);
     expect(wrapper.find('#scan').exists()).toBe(true);
     expect(wrapper.find('#reindex').exists()).toBe(true);
   });

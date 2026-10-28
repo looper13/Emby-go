@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"emby-go/internal/librarywatch"
+	"emby-go/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -64,6 +65,9 @@ func (a *App) virtualFolderItems() ([]gin.H, error) {
 	folders := make([]gin.H, 0, len(libraries))
 	cfg := a.configSnapshot()
 	for _, library := range libraries {
+		if library.SourceType == store.SourceR18 {
+			continue
+		}
 		id := externalLibraryID(library.ID)
 		if !library.IsDirectory() {
 			folders = append(folders, gin.H{"Name": library.Name, "Locations": []string{}, "ItemId": id, "Id": id, "LibraryOptions": gin.H{"PathInfos": []gin.H{}, "EnableRealtimeMonitor": false}})
@@ -92,6 +96,9 @@ func (a *App) mediaFolders(c *gin.Context) {
 			return
 		}
 		for _, library := range libraries {
+			if library.SourceType == store.SourceR18 {
+				continue
+			}
 			items = append(items, a.collectionFolderDTO(library))
 		}
 	}

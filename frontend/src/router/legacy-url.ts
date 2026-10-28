@@ -1,12 +1,13 @@
 const pages = new Set([
   'overview', 'libraries', 'items', 'manual', 'settings', 'apikeys', 'account', 'users',
-  'actors', 'favorites', 'scrape', 'scheduled', 'tasks', 'probe',
+  'actors', 'favorites', 'scrape', 'scheduled', 'tasks', 'probe', 'r18',
 ]);
 const filterKeys = new Set([
   'library_id', 'status', 'search', 'sort', 'order', 'source_protocol',
   'genre', 'tag', 'studio', 'person', 'collection', 'scrape', 'limit', 'offset',
   'year',
   'view', 'tv_series', 'tv_season', 'favorite', 'type',
+  'cursor', 'direction', 'search_mode', 'service', 'from',
 ]);
 
 export function isValidItemId(value: string): boolean {
@@ -15,6 +16,7 @@ export function isValidItemId(value: string): boolean {
 
 function allowedPath(path: string, login: boolean): boolean {
   return path.startsWith('/') && (pages.has(path.slice(1)) || (login && path === '/login')
+    || /^\/r18\/[1-9]\d{0,18}\/item\/[A-Za-z0-9_-]{1,1024}$/u.test(path)
     || (path.startsWith('/item/') && isValidItemId(path.slice(6))));
 }
 

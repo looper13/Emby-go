@@ -46,6 +46,7 @@ const navigation = computed(() => [
   { page: 'libraries', label: '媒体库', icon: Folder, group: '媒体浏览' },
   { page: 'favorites', label: '收藏', icon: Heart, group: '媒体浏览' },
   { page: 'items', label: '媒体墙', icon: Film, group: '媒体浏览' },
+  { page: 'r18', label: 'R18 资料库', icon: Folder, group: '媒体浏览' },
   { page: 'actors', label: '演员', icon: Users, group: '媒体浏览' },
   { page: 'manual', label: '手动补录', icon: CirclePlus, group: '录入与工具' },
   { page: 'settings', label: '设置', icon: Settings, group: '系统与账号' },
@@ -56,7 +57,7 @@ const navigation = computed(() => [
   { page: 'scheduled', label: '计划任务', icon: Clock, group: '自动化与运维' },
   { page: 'tasks', label: '任务', icon: Activity, group: '自动化与运维' },
   { page: 'probe', label: '接口探针', icon: Search, group: '自动化与运维' },
-].filter(item => auth.isAdministrator || ['items', 'favorites', 'account'].includes(item.page)));
+].filter(item => auth.isAdministrator || ['items', 'r18', 'favorites', 'account'].includes(item.page)));
 const detailTitle = ref('');
 function updateTitle(value: string) { detailTitle.value = value; }
 watch(() => route.fullPath, () => { detailTitle.value = ''; });

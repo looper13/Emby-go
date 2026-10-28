@@ -67,6 +67,7 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 		return
 	}
 	_ = a.db.BumpVersion(id)
+	a.invalidateR18Client(id)
 
 	slog.Info("删除媒体库", "library_id", id)
 	c.Status(http.StatusNoContent)
