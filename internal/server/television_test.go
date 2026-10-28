@@ -585,3 +585,193 @@ func TestTelevisionEmbyClientContractRouteVariantsAndPlayback(t *testing.T) {
 		}
 	}
 }
+
+func TestTelevisionSeasonClientAccessPatterns(t *testing.T) {
+	_, server, token := newProbeTestApp(t, t.TempDir())
+	call := func(method, path string, body any, want int) map[string]any {
+		t.Helper()
+		var bodyReader io.Reader
+		if body != nil {
+			data, _ := json.Marshal(body)
+			bodyReader = strings.NewReader(string(data))
+		}
+		req, _ := http.NewRequest(method, server.URL+path, bodyReader)
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != want {
+			var errBody any
+			_ = json.NewDecoder(resp.Body).Decode(&errBody)
+			t.Fatalf("%s %s: status %d != %d (%v)", method, path, resp.StatusCode, want, errBody)
+		}
+		if resp.StatusCode == 204 {
+			return nil
+		}
+		var val map[string]any
+		if err = json.NewDecoder(resp.Body).Decode(&val); err != nil {
+			t.Fatalf("%s decode: %v", path, err)
+		}
+		return val
+	}
+	root := t.TempDir()
+	show := filepath.Join(root, "SeriesA")
+	season1 := filepath.Join(show, "Season 1")
+	season2 := filepath.Join(show, "Season 2")
+	_ = os.MkdirAll(season1, 0755)
+	_ = os.MkdirAll(season2, 0755)
+	writeFile(t, filepath.Join(show, "tvshow.nfo"), `<tvshow><title>SeriesA</title><plot>Overview A</plot><year>2026</year></tvshow>`)
+	for i := 1; i <= 2; i++ {
+		name := fmt.Sprintf("SeriesA.S01E0%d", i)
+		writeFile(t, filepath.Join(season1, name+".strm"), "https://media.test/s01.mp4")
+		writeFile(t, filepath.Join(season1, name+".nfo"), fmt.Sprintf(`<episodedetails><title>Episode 10%d</title><season>1</season><episode>%d</episode></episodedetails>`, i, i))
+	}
+	for i := 1; i <= 2; i++ {
+		name := fmt.Sprintf("SeriesA.S02E0%d", i)
+		writeFile(t, filepath.Join(season2, name+".strm"), "https://media.test/s02.mp4")
+		writeFile(t, filepath.Join(season2, name+".nfo"), fmt.Sprintf(`<episodedetails><title>Episode 20%d</title><season>2</season><episode>%d</episode></episodedetails>`, i, i))
+	}
+	library := call("POST", "/api/admin/libraries", ginBody("TV", root, "tvshows"), 200)
+	lib := int64(library["Id"].(float64))
+	call("POST", fmt.Sprintf("/api/admin/scan?library_id=%d", lib), nil, 200)
+
+	seriesID := store.TVSeriesID(lib, show)
+	season1ID := store.TVSeasonID(lib, show, 1)
+	season2ID := store.TVSeasonID(lib, show, 2)
+
+	// 1. GET /Users/1/Shows/:id/Seasons
+	res := call("GET", "/Users/1/Shows/"+url.PathEscape(seriesID)+"/Seasons", nil, 200)
+	seasons := res["Items"].([]any)
+	if len(seasons) != 2 {
+		t.Fatalf("expected 2 seasons, got %d", len(seasons))
+	}
+	s1 := seasons[0].(map[string]any)
+	if s1["Id"] != season1ID || s1["Type"] != "Season" || s1["IndexNumber"] != float64(1) {
+		t.Fatalf("unexpected season 1 DTO: %v", s1)
+	}
+	if s1["MediaType"] != nil {
+		t.Fatalf("season folder must not have MediaType: %v", s1["MediaType"])
+	}
+	if s1["CollectionType"] != "tvshows" {
+		t.Fatalf("season folder CollectionType should be tvshows: %v", s1["CollectionType"])
+	}
+
+	// 2. GET /Users/1/Shows/:id/Episodes with SeasonId
+	res = call("GET", "/Users/1/Shows/"+url.PathEscape(seriesID)+"/Episodes?SeasonId="+url.QueryEscape(season1ID), nil, 200)
+	eps := res["Items"].([]any)
+	if len(eps) != 2 || eps[0].(map[string]any)["ParentIndexNumber"] != float64(1) {
+		t.Fatalf("expected 2 season 1 episodes, got %v", eps)
+	}
+
+	// 3. camelCase seasonId
+	res = call("GET", "/Users/1/Shows/"+url.PathEscape(seriesID)+"/Episodes?seasonId="+url.QueryEscape(season1ID), nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 1 episodes via camelCase seasonId, got %v", res)
+	}
+
+	// 4. Numeric SeasonId=2
+	res = call("GET", "/Users/1/Shows/"+url.PathEscape(seriesID)+"/Episodes?SeasonId=2", nil, 200)
+	eps2 := res["Items"].([]any)
+	if len(eps2) != 2 || eps2[0].(map[string]any)["ParentIndexNumber"] != float64(2) {
+		t.Fatalf("expected 2 season 2 episodes via SeasonId=2, got %v", eps2)
+	}
+
+	// 5. Numeric Season=2
+	res = call("GET", "/Users/1/Shows/"+url.PathEscape(seriesID)+"/Episodes?Season=2", nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 2 episodes via Season=2, got %v", res)
+	}
+
+	// 6. Direct Season ID on /Shows/:seasonId/Episodes and /Users/1/Shows/:seasonId/Episodes
+	res = call("GET", "/Shows/"+url.PathEscape(season1ID)+"/Episodes", nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 1 episodes on /Shows/:seasonId/Episodes, got %v", res)
+	}
+	res = call("GET", "/Users/1/Shows/"+url.PathEscape(season1ID)+"/Episodes", nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 1 episodes on /Users/1/Shows/:seasonId/Episodes, got %v", res)
+	}
+
+	// 7. /Users/1/Items with ParentId=season1ID
+	res = call("GET", "/Users/1/Items?ParentId="+url.QueryEscape(season1ID), nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 1 episodes on /Users/1/Items?ParentId=:season1ID, got %v", res)
+	}
+
+	// 8. /Users/1/Items with ParentId=seriesID&SeasonId=season1ID&IncludeItemTypes=Episode
+	res = call("GET", "/Users/1/Items?ParentId="+url.QueryEscape(seriesID)+"&SeasonId="+url.QueryEscape(season1ID)+"&IncludeItemTypes=Episode", nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 1 episodes on /Users/1/Items?ParentId=:seriesID&SeasonId=:season1ID, got %v", res)
+	}
+
+	// 9. /Users/1/Items with ParentId=seriesID&SeasonId=2&IncludeItemTypes=Episode
+	res = call("GET", "/Users/1/Items?ParentId="+url.QueryEscape(seriesID)+"&SeasonId=2&IncludeItemTypes=Episode", nil, 200)
+	if len(res["Items"].([]any)) != 2 || res["Items"].([]any)[0].(map[string]any)["ParentIndexNumber"] != float64(2) {
+		t.Fatalf("expected 2 season 2 episodes on /Users/1/Items with SeasonId=2, got %v", res)
+	}
+
+	// 10. /Users/1/Items without ParentId but with SeasonId=season1ID
+	res = call("GET", "/Users/1/Items?SeasonId="+url.QueryEscape(season1ID)+"&IncludeItemTypes=Episode", nil, 200)
+	if len(res["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 season 1 episodes on /Users/1/Items?SeasonId=:season1ID, got %v", res)
+	}
+
+	// 11. /Users/1/Items without ParentId but with SeriesId and SeasonId=2
+	res = call("GET", "/Users/1/Items?SeriesId="+url.QueryEscape(seriesID)+"&SeasonId=2&IncludeItemTypes=Episode", nil, 200)
+	if len(res["Items"].([]any)) != 2 || res["Items"].([]any)[0].(map[string]any)["ParentIndexNumber"] != float64(2) {
+		t.Fatalf("expected 2 season 2 episodes on /Users/1/Items with SeriesId&SeasonId=2, got %v", res)
+	}
+
+	// 12. Direct Item fetches: /Shows/:id, /Users/1/Shows/:id, /Seasons/:id, /Users/1/Seasons/:id
+	seriesItem := call("GET", "/Shows/"+url.PathEscape(seriesID), nil, 200)
+	if seriesItem["Type"] != "Series" {
+		t.Fatalf("expected Series item, got %v", seriesItem)
+	}
+	seriesUserItem := call("GET", "/Users/1/Shows/"+url.PathEscape(seriesID), nil, 200)
+	if seriesUserItem["Type"] != "Series" {
+		t.Fatalf("expected Series item from user show endpoint, got %v", seriesUserItem)
+	}
+	seasonItem := call("GET", "/Seasons/"+url.PathEscape(season1ID), nil, 200)
+	if seasonItem["Type"] != "Season" {
+		t.Fatalf("expected Season item, got %v", seasonItem)
+	}
+	seasonUserItem := call("GET", "/Users/1/Seasons/"+url.PathEscape(season1ID), nil, 200)
+	if seasonUserItem["Type"] != "Season" {
+		t.Fatalf("expected Season item from user season endpoint, got %v", seasonUserItem)
+	}
+
+	// 13. Episode Item & PlaybackInfo
+	epID := eps[0].(map[string]any)["Id"].(string)
+	epItem := call("GET", "/Episodes/"+epID, nil, 200)
+	if epItem["Type"] != "Episode" {
+		t.Fatalf("expected Episode item, got %v", epItem)
+	}
+	epUserItem := call("GET", "/Users/1/Episodes/"+epID, nil, 200)
+	if epUserItem["Type"] != "Episode" {
+		t.Fatalf("expected Episode item from user endpoint, got %v", epUserItem)
+	}
+	playInfo := call("POST", "/Episodes/"+epID+"/PlaybackInfo", nil, 200)
+	if len(playInfo["MediaSources"].([]any)) != 1 {
+		t.Fatalf("expected MediaSources in /Episodes/:id/PlaybackInfo, got %v", playInfo)
+	}
+	playUserInfo := call("POST", "/Users/1/Episodes/"+epID+"/PlaybackInfo", nil, 200)
+	if len(playUserInfo["MediaSources"].([]any)) != 1 {
+		t.Fatalf("expected MediaSources in /Users/1/Episodes/:id/PlaybackInfo, got %v", playUserInfo)
+	}
+
+	// 14. /Users/1/Shows/NextUp
+	nextUp := call("GET", "/Users/1/Shows/NextUp", nil, 200)
+	if nextUp["Items"] == nil {
+		t.Fatalf("expected NextUp response, got %v", nextUp)
+	}
+
+	// 15. /Users/1/Shows/:seasonId/Seasons normalizes to series seasons
+	seasonToSeasons := call("GET", "/Users/1/Shows/"+url.PathEscape(season1ID)+"/Seasons", nil, 200)
+	if len(seasonToSeasons["Items"].([]any)) != 2 {
+		t.Fatalf("expected 2 seasons when passing SeasonId to /Seasons, got %v", seasonToSeasons)
+	}
+	_ = season2ID
+}

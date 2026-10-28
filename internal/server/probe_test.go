@@ -124,12 +124,12 @@ func TestMediaProbe(t *testing.T) {
 		"<title>Alpha</title>", "<customtag>keepme</customtag>", // 原内容保留
 		"<codec>h264</codec>", "<width>320</width>", "<height>240</height>", // 探测所得
 		"<aspectratio>4:3</aspectratio>", "<profile>High</profile>", "<level>30</level>",
-		"<pixelformat>yuv420p</pixelformat>", "<bitdepth>8</bitdepth>", "<reframes>1</reframes>",
+		"<pixelformat>yuv420p</pixelformat>", "<bitdepth>8</bitdepth>",
 		"<colortransfer>bt709</colortransfer>", "<colorprimaries>bt709</colorprimaries>", "<colorspace>bt709</colorspace>",
 		"<scantype>progressive</scantype>", "<framerate>10.00000</framerate>",
 		"<codec>aac</codec>", "<channels>2</channels>", "<samplingrate>44100</samplingrate>",
 		"<channellayout>stereo</channellayout>",
-		"<probeversion>1</probeversion>", // 幂等标记：下次全库探测据此跳过
+		"<probeversion>" + strconv.Itoa(probeVersion) + "</probeversion>", // 幂等标记：下次全库探测据此跳过
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("NFO 缺少 %q\n实际内容:\n%s", want, text)

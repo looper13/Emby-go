@@ -108,8 +108,17 @@ func (a *App) televisionFolderDTO(raw string, episodes []store.Movie, c *gin.Con
 	item["UserData"] = a.itemUserData(raw)
 	item["UserData"].(gin.H)["Played"], item["UserData"].(gin.H)["UnplayedItemCount"] = unplayed == 0, unplayed
 	if kind == "Season" {
-		item["ParentId"], item["SeriesId"], item["SeriesName"], item["IndexNumber"] = store.TVSeriesID(lib, path), store.TVSeriesID(lib, path), episodes[0].Television.Title, season
+		seriesFolder := store.TVSeriesID(lib, path)
+		item["ParentId"], item["SeriesId"], item["SeriesName"], item["IndexNumber"] = seriesFolder, seriesFolder, episodes[0].Television.Title, season
+		item["SeasonId"] = raw
+		seriesMovie, _, _ := televisionFolderMovie(seriesFolder, episodes)
+		seriesMovie = a.movieArtwork(seriesMovie)
+		if seriesMovie.PosterPath != "" {
+			item["SeriesPrimaryImageTag"] = a.posterTag(seriesMovie.PosterPath)
+		}
 	}
+	delete(item, "MediaType")
+	item["CollectionType"] = "tvshows"
 	return item
 }
 
@@ -149,27 +158,103 @@ func (a *App) televisionImage(c *gin.Context) {
 	a.serveImage(c, path)
 }
 
+func queryParam(c *gin.Context, keys ...string) string {
+	q := c.Request.URL.Query()
+	for _, k := range keys {
+		if v := q.Get(k); v != "" {
+			return v
+		}
+	}
+	for k, vs := range q {
+		if len(vs) == 0 || vs[0] == "" {
+			continue
+		}
+		for _, target := range keys {
+			if strings.EqualFold(k, target) {
+				return vs[0]
+			}
+		}
+	}
+	return ""
+}
+
 // Intercept local hierarchy scopes before the movie-only compatibility path.
 // 电影和本地电视条目在分页前统一排序。
 func (a *App) televisionItems(c *gin.Context) bool {
 	parent := c.Query("ParentId")
+	seasonParam := queryParam(c, "SeasonId", "seasonId", "seasonID")
+	seriesParam := queryParam(c, "SeriesId", "seriesId", "seriesID")
+	seasonNumParam := queryParam(c, "Season", "season")
+
 	kind, lib, path, season, folder := store.ParseTVID(parent)
-	if strings.HasPrefix(parent, "tv-") && !folder {
-		c.JSON(404, gin.H{"error": "not found"})
-		return true
-	}
-	if parent != "" && !folder {
-		var collection string
-		lib, collection = parseParentScope(parent)
-		if collection != "" || lib <= 0 {
-			return false
+	if strings.HasPrefix(parent, "tv-") {
+		if !folder {
+			c.JSON(404, gin.H{"error": "not found"})
+			return true
 		}
-		l, err := a.db.Library(lib)
-		if err != nil {
-			return false
+		if kind == "Series" {
+			if seasonParam != "" {
+				if sk, sl, sp, sn, sok := store.ParseTVID(seasonParam); sok && sk == "Season" {
+					if sl != lib || sp != path {
+						c.JSON(404, gin.H{"error": "season does not belong to series"})
+						return true
+					}
+					parent = seasonParam
+					kind, season = "Season", sn
+				} else if n, err := strconv.Atoi(seasonParam); err == nil && n >= 0 && n <= 1000 {
+					parent = store.TVSeasonID(lib, path, n)
+					kind, season = "Season", n
+				} else {
+					c.JSON(404, gin.H{"error": "season does not belong to series"})
+					return true
+				}
+			} else if seasonNumParam != "" {
+				n, err := strconv.Atoi(seasonNumParam)
+				if err != nil || n < 0 || n > 1000 {
+					c.JSON(400, gin.H{"error": "invalid season"})
+					return true
+				}
+				parent = store.TVSeasonID(lib, path, n)
+				kind, season = "Season", n
+			}
 		}
-		if l.Type != store.LibraryTVShows && l.Type != store.LibraryMixed {
-			return false
+	} else {
+		if sk, sl, sp, sn, sok := store.ParseTVID(seasonParam); sok && sk == "Season" {
+			parent = seasonParam
+			kind, lib, path, season, folder = sk, sl, sp, sn, true
+		} else if sk, sl, sp, _, sok := store.ParseTVID(seriesParam); sok && sk == "Series" {
+			targetSeason := -1
+			if seasonParam != "" {
+				if ssk, ssl, ssp, ssn, ssok := store.ParseTVID(seasonParam); ssok && ssk == "Season" && ssl == sl && ssp == sp {
+					targetSeason = ssn
+				} else if n, err := strconv.Atoi(seasonParam); err == nil && n >= 0 && n <= 1000 {
+					targetSeason = n
+				}
+			} else if seasonNumParam != "" {
+				if n, err := strconv.Atoi(seasonNumParam); err == nil && n >= 0 && n <= 1000 {
+					targetSeason = n
+				}
+			}
+			if targetSeason >= 0 {
+				parent = store.TVSeasonID(sl, sp, targetSeason)
+				kind, lib, path, season, folder = "Season", sl, sp, targetSeason, true
+			} else {
+				parent = seriesParam
+				kind, lib, path, season, folder = "Series", sl, sp, 0, true
+			}
+		} else if parent != "" {
+			var collection string
+			lib, collection = parseParentScope(parent)
+			if collection != "" || lib <= 0 {
+				return false
+			}
+			l, err := a.db.Library(lib)
+			if err != nil {
+				return false
+			}
+			if l.Type != store.LibraryTVShows && l.Type != store.LibraryMixed {
+				return false
+			}
 		}
 	}
 	include := splitQueryTypes(c.Query("IncludeItemTypes"))
@@ -232,11 +317,11 @@ func (a *App) televisionItems(c *gin.Context) bool {
 				out = append(out, item)
 			}
 		}
-		if wants("Season") && kind != "Season" {
+		if wants("Season") {
 			seen := map[int]bool{}
 			for _, ep := range group.Episodes {
 				n := ep.Television.Season
-				if seen[n] {
+				if (kind == "Season" && n != season) || seen[n] {
 					continue
 				}
 				seen[n] = true
@@ -325,36 +410,58 @@ func televisionItemMatches(c *gin.Context, item gin.H) bool {
 }
 
 func (a *App) televisionSeasons(c *gin.Context) {
+	if c.Param("uid") != "" && !a.validUser(c) {
+		return
+	}
+	parent := c.Param("id")
+	if kind, lib, path, _, ok := store.ParseTVID(parent); ok && kind == "Season" {
+		parent = store.TVSeriesID(lib, path)
+	}
 	q := c.Request.URL.Query()
-	q.Set("ParentId", c.Param("id"))
+	q.Set("ParentId", parent)
 	q.Set("IncludeItemTypes", "Season")
 	c.Request.URL.RawQuery = q.Encode()
 	if !a.televisionItems(c) {
 		a.emptyItems(c)
 	}
 }
+
 func (a *App) televisionEpisodes(c *gin.Context) {
-	kind, lib, path, _, ok := store.ParseTVID(c.Param("id"))
-	if !ok || kind != "Series" {
-		c.JSON(404, gin.H{"error": "series not found"})
+	if c.Param("uid") != "" && !a.validUser(c) {
+		return
+	}
+	rawID := c.Param("id")
+	kind, lib, path, seasonNum, ok := store.ParseTVID(rawID)
+	if !ok || (kind != "Series" && kind != "Season") {
+		c.JSON(404, gin.H{"error": "series or season not found"})
 		return
 	}
 	q := c.Request.URL.Query()
-	parent := c.Param("id")
-	if raw := q.Get("SeasonId"); raw != "" {
-		k, l, p, _, valid := store.ParseTVID(raw)
-		if !valid || k != "Season" || l != lib || p != path {
-			c.JSON(404, gin.H{"error": "season does not belong to series"})
-			return
+	parent := rawID
+	if kind == "Season" {
+		parent = store.TVSeasonID(lib, path, seasonNum)
+	} else {
+		if raw := queryParam(c, "SeasonId", "seasonId", "seasonID"); raw != "" {
+			if k, l, p, _, valid := store.ParseTVID(raw); valid && k == "Season" {
+				if l != lib || p != path {
+					c.JSON(404, gin.H{"error": "season does not belong to series"})
+					return
+				}
+				parent = raw
+			} else if n, err := strconv.Atoi(raw); err == nil && n >= 0 && n <= 1000 {
+				parent = store.TVSeasonID(lib, path, n)
+			} else {
+				c.JSON(404, gin.H{"error": "season does not belong to series"})
+				return
+			}
+		} else if raw := queryParam(c, "Season", "season"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 || n > 1000 {
+				c.JSON(400, gin.H{"error": "invalid season"})
+				return
+			}
+			parent = store.TVSeasonID(lib, path, n)
 		}
-		parent = raw
-	} else if raw := q.Get("Season"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 || n > 1000 {
-			c.JSON(400, gin.H{"error": "invalid season"})
-			return
-		}
-		parent = store.TVSeasonID(lib, path, n)
 	}
 	q.Set("ParentId", parent)
 	q.Set("IncludeItemTypes", "Episode")

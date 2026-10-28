@@ -99,7 +99,9 @@ func ParseTVID(id string) (kind string, libraryID int64, path string, season int
 		return
 	}
 	libraryID, _ = strconv.ParseInt(parts[1], 10, 64)
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[len(parts)-1])
+	b64 := parts[len(parts)-1]
+	b64 = strings.TrimRight(strings.ReplaceAll(strings.ReplaceAll(b64, "+", "-"), "/", "_"), "=")
+	decoded, err := base64.RawURLEncoding.DecodeString(b64)
 	if err != nil || len(decoded) == 0 || libraryID <= 0 {
 		return
 	}

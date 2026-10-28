@@ -533,6 +533,9 @@ func (a *App) resume(c *gin.Context) {
 
 // nextUp returns the next playable main episode from a started series.
 func (a *App) nextUp(c *gin.Context) {
+	if c.Param("uid") != "" && !a.validUser(c) {
+		return
+	}
 	if !a.validQueryUser(c) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return

@@ -337,5 +337,8 @@ func (a *App) requireAdministrator(c *gin.Context) {
 func (a *App) validQueryUser(c *gin.Context) bool {
 	// Season/episode adapters rewrite RawQuery before common item browsing.
 	uid := c.Request.URL.Query().Get("UserId")
+	if uid == "" {
+		uid = c.Param("uid")
+	}
 	return uid == "" || uid == strconv.FormatInt(a.db.UserID(), 10)
 }
