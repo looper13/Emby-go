@@ -45,6 +45,10 @@ func movieImagePath(m store.Movie, kind string) string {
 }
 
 func (a *App) image(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		a.r18CompatImage(c)
+		return
+	}
 	if strings.HasPrefix(c.Param("id"), "tv-") {
 		a.televisionImage(c)
 		return
@@ -302,6 +306,10 @@ func (a *App) boxsetPoster(rawID string) string {
 }
 
 func (a *App) imageInfo(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		a.r18CompatImageInfo(c)
+		return
+	}
 	if strings.HasPrefix(c.Param("id"), "tv-") {
 		eps, err := a.db.TVFolderEpisodes(c.Param("id"))
 		if err != nil {
@@ -404,6 +412,10 @@ func currentMovieSource(movie store.Movie, sourcePath string) (store.Movie, bool
 }
 
 func (a *App) playback(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		a.r18CompatPlayback(c)
+		return
+	}
 	movie, sourcePath, id, ok := a.resolvePlaybackTarget(c.Param("id"))
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -1447,6 +1459,12 @@ func (a *App) played(c *gin.Context) { a.setPlayed(c, true) }
 func (a *App) unplayed(c *gin.Context) { a.setPlayed(c, false) }
 
 func (a *App) additionalParts(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		if _, _, ok := a.r18CompatVideo(c); ok {
+			a.emptyItems(c)
+		}
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

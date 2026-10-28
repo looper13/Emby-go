@@ -15,7 +15,7 @@ import (
 
 func normalizeEmbyQuery(c *gin.Context) {
 	query := c.Request.URL.Query()
-	for _, canonical := range []string{"UserId", "ParentId", "IncludeItemTypes", "ExcludeItemTypes", "IsFavorite", "IsHidden", "Filters", "SortBy", "SortOrder", "SearchTerm", "StartIndex", "Limit", "EnableImages", "Recursive", "Ids", "NameStartsWith", "NameStartsWithOrGreater", "NameLessThan", "Genres", "GenreIds", "Tags", "TagIds", "Studios", "StudioIds", "Person", "PersonIds", "Years", "OfficialRatings", "MediaTypes"} {
+	for _, canonical := range []string{"UserId", "ParentId", "IncludeItemTypes", "ExcludeItemTypes", "IsFavorite", "IsHidden", "IsFolder", "IsPlaceHolder", "Filters", "SortBy", "SortOrder", "SearchTerm", "StartIndex", "Limit", "EnableImages", "Recursive", "Ids", "NameStartsWith", "NameStartsWithOrGreater", "NameLessThan", "Genres", "GenreIds", "Tags", "TagIds", "Studios", "StudioIds", "Person", "PersonIds", "Years", "OfficialRatings", "MediaTypes"} {
 		if _, exists := query[canonical]; exists {
 			continue
 		}

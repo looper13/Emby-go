@@ -6,6 +6,7 @@ import { r18Api, type R18Video, type R18Resource } from '../api/r18';
 import { usePageRequest } from '../composables/usePageRequest';
 import { useToastStore } from '../stores/toasts';
 import MediaImage from '../components/media/MediaImage.vue';
+import R18Cover from '../components/media/R18Cover.vue';
 import ReadState from '../components/common/ReadState.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import { viewHistoryKey } from '../router/view-history';
@@ -71,7 +72,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
   <ReadState :loading="loading" :empty="!video" :error="error" @retry="load" />
   <template v-if="video">
     <section class="panel r18-detail-hero">
-      <div class="r18-detail-cover"><MediaImage :src="video.cover_url" :alt="video.number || video.content_id" referrerpolicy="no-referrer" /></div>
+      <R18Cover class="r18-detail-cover" :src="video.cover_url" :alt="video.number || video.content_id" />
       <div class="r18-detail-info">
         <p class="r18-detail-source"><Database :size="14" aria-hidden="true" /> {{ libraryName }} / {{ video.service_code }}</p>
         <p class="r18-detail-number mono">{{ video.number || video.content_id }}</p>
@@ -103,9 +104,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
 
 <style scoped>
 .r18-back { margin-bottom:18px; }
-.r18-detail-hero { display:grid; grid-template-columns:minmax(180px,290px) minmax(0,1fr); gap:32px; }
-.r18-detail-cover { aspect-ratio:3/4; overflow:hidden; border-radius:10px; background:var(--bg); }
-.r18-detail-cover :deep(img) { object-fit:contain; }
+.r18-detail-hero { display:grid; grid-template-columns:156px minmax(0,1fr); align-items:start; gap:26px; }
 .r18-detail-source { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted); margin-top:0; }
 .r18-detail-number { color:var(--accent); font-size:22px; margin:18px 0 12px; overflow-wrap:anywhere; }
 .r18-detail-info h2 { font-size:24px; line-height:1.65; overflow-wrap:anywhere; }
@@ -113,12 +112,12 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
 .r18-facts { display:flex; flex-wrap:wrap; gap:22px; margin:26px 0; }
 .r18-facts dt { color:var(--muted); font-size:12px; margin-bottom:6px; }.r18-facts dd { margin:0; overflow-wrap:anywhere; }
 .r18-play-todo { border-left:3px solid var(--accent); padding:12px 16px; background:var(--bg); color:var(--muted); font-size:13px; line-height:1.8; }
-.r18-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }.r18-gallery a { height:260px; overflow:hidden; border-radius:8px; background:var(--bg); }.r18-gallery :deep(img) { object-fit:contain; }
+.r18-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }.r18-gallery a { position:relative; display:block; aspect-ratio:16/9; overflow:hidden; border-radius:8px; background:var(--bg); }.r18-gallery :deep(img), .r18-gallery :deep(.image-placeholder) { position:absolute; inset:0; width:100%; height:100%; }.r18-gallery :deep(img) { display:block; object-fit:contain; }
 .r18-resources h2 { display:flex; gap:8px; align-items:center; }
 .r18-resource { padding:20px 0; border-bottom:1px solid var(--line); }
 .r18-resource-head { display:flex; justify-content:space-between; gap:16px; align-items:baseline; }.r18-resource-head h3 { margin:0; font-size:15px; line-height:1.7; overflow-wrap:anywhere; }.r18-resource-head > span { flex-shrink:0; color:var(--accent); font-size:12px; }
 .r18-resource-meta { display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin:10px 0; }.r18-resource-tag { color:var(--accent); }
 .r18-magnet-text { display:block; padding:12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); overflow-wrap:anywhere; white-space:pre-wrap; font-size:12px; line-height:1.8; user-select:text; }
 .r18-resource-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }.r18-more { display:block; margin:24px auto 0; }
-@media(max-width:650px) { .r18-detail-hero { grid-template-columns:1fr; gap:20px; }.r18-detail-cover { max-width:260px; width:100%; margin:auto; }.r18-detail-info h2 { font-size:19px; }.r18-gallery { grid-template-columns:1fr; }.r18-gallery a { height:220px; }.r18-resource-head { flex-direction:column; gap:4px; }.r18-facts { gap:18px; } }
+@media(max-width:720px) { .r18-detail-hero { grid-template-columns:1fr; gap:20px; }.r18-detail-hero .r18-detail-cover { width:120px; }.r18-detail-info h2 { font-size:19px; }.r18-gallery { grid-template-columns:1fr; }.r18-resource-head { flex-direction:column; gap:4px; }.r18-facts { gap:18px; } }
 </style>

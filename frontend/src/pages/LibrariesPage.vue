@@ -476,12 +476,13 @@ async function remove(id: number) {
 /* 卡片网格视图 */
 .library-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
   gap: 16px;
   margin-top: 14px;
 }
 
 .library-card {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -551,6 +552,7 @@ async function remove(id: number) {
 }
 
 .lib-card-title {
+  min-width: 0;
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
@@ -586,6 +588,7 @@ async function remove(id: number) {
 }
 
 .lib-path-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -44,6 +44,12 @@ func (a *App) itemCollections(c *gin.Context) {
 	if c.Param("uid") != "" && !a.validUser(c) {
 		return
 	}
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		if _, _, ok := a.r18CompatVideo(c); ok {
+			a.emptyItems(c)
+		}
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		c.Status(http.StatusNotFound)

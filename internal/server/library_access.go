@@ -13,6 +13,9 @@ func (a *App) canAccessItem(raw string) bool {
 	if raw == "" || raw == "0" {
 		return true
 	}
+	if lib, _, ok := parseR18ItemID(raw); ok {
+		return a.db.CanAccessLibrary(lib)
+	}
 	if _, lib, _, _, ok := store.ParseTVID(raw); ok {
 		return a.db.CanAccessLibrary(lib)
 	}

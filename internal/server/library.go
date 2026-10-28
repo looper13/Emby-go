@@ -389,6 +389,9 @@ func zeroUserData() gin.H {
 // collectionFolderDTO 把内部媒体库渲染为 Emby 的 CollectionFolder（电影库）BaseItemDto。
 // Id 用外部命名空间（libraryIDBase+内部id），与影片 id 全局不冲突。
 func (a *App) collectionFolderDTO(l store.Library) gin.H {
+	if l.SourceType == store.SourceR18 {
+		return a.r18CollectionDTO(l)
+	}
 	unplayed := a.cachedUnplayed(l.ID)
 	item := gin.H{
 		"Id":                   externalLibraryID(l.ID),
@@ -548,6 +551,12 @@ func (a *App) nextUp(c *gin.Context) {
 
 // similar 返回与当前影片共享 流派/标签/制片商 的近似影片。
 func (a *App) similar(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		if _, _, ok := a.r18CompatVideo(c); ok {
+			a.emptyItems(c)
+		}
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -691,9 +700,6 @@ func (a *App) views(c *gin.Context) {
 	}
 	out := make([]gin.H, 0, len(libs))
 	for _, l := range libs {
-		if l.SourceType == store.SourceR18 {
-			continue
-		}
 		out = append(out, a.collectionFolderDTO(l))
 	}
 	// 有合集（NFO <set>）时追加「合集」媒体库视图（CollectionType=boxsets）。
@@ -904,6 +910,11 @@ func (a *App) latest(c *gin.Context) {
 	}
 	// ParentId 可能是媒体库外部 id（libraryIDBase+内部 id）或旧内部 id，统一换算。
 	libraryID, _ := parseParentScope(c.Query("ParentId"))
+	if l, err := a.db.Library(libraryID); err == nil && l.SourceType == store.SourceR18 {
+		c.Set("r18LibraryID", libraryID)
+		a.r18CatalogResponse(c, l, true)
+		return
+	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("Limit", "20"))
 	if limit < 1 || limit > 100 {
 		limit = 20
@@ -954,6 +965,9 @@ func (a *App) suggestions(c *gin.Context) {
 // 不支持的类型（如 Series/Episode）返回空结果而非错把影片当该类型返回。
 func (a *App) itemsQuery(c *gin.Context) {
 	if !validFavoriteQuery(c) {
+		return
+	}
+	if a.r18CompatItems(c) {
 		return
 	}
 	if a.favoriteRootItems(c) || a.televisionItems(c) {
@@ -1287,6 +1301,10 @@ func (a *App) item(c *gin.Context) {
 		return
 	}
 	rawID := c.Param("id")
+	if strings.HasPrefix(rawID, "r18-") {
+		a.r18CompatItem(c)
+		return
+	}
 	// Only a single playable detail enables local track discovery. Folder/list
 	// DTO builders also call embyItemDetail, so they must never enable it.
 	if movie, path, _, ok := a.resolvePlaybackTarget(rawID); ok && movie.IsVisible() {

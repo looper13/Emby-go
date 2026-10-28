@@ -24,10 +24,11 @@ type entry struct {
 	expires time.Time
 }
 type Memory struct {
-	mu    sync.Mutex
-	max   int
-	items map[string]*list.Element
-	order *list.List
+	mu            sync.Mutex
+	max           int
+	maxEntryBytes int
+	items         map[string]*list.Element
+	order         *list.List
 }
 
 func NewMemory(max int) *Memory {
@@ -35,6 +36,13 @@ func NewMemory(max int) *Memory {
 		max = 256
 	}
 	return &Memory{max: max, items: map[string]*list.Element{}, order: list.New()}
+}
+
+// NewMemoryLimited bounds byte storage as well as the number of hot entries.
+func NewMemoryLimited(max, maxEntryBytes int) *Memory {
+	m := NewMemory(max)
+	m.maxEntryBytes = maxEntryBytes
+	return m
 }
 func (m *Memory) Get(key string) ([]byte, bool) {
 	m.mu.Lock()
@@ -55,6 +63,13 @@ func (m *Memory) Get(key string) ([]byte, bool) {
 func (m *Memory) Set(key string, value []byte, ttl time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.maxEntryBytes > 0 && len(value) > m.maxEntryBytes {
+		if e, ok := m.items[key]; ok {
+			delete(m.items, key)
+			m.order.Remove(e)
+		}
+		return
+	}
 	if e, ok := m.items[key]; ok {
 		e.Value = entry{key: key, value: append([]byte(nil), value...), expires: expiry(ttl)}
 		m.order.MoveToFront(e)

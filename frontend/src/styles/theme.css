@@ -431,7 +431,7 @@ h1, h2, h3 {
 /* ------------------------------------------------------------------ Amane 海报墙 (Poster Card) */
 .wall {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--wall-card-min-width, 176px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--wall-card-min-width, 176px)), 1fr));
   gap: 18px;
   transition: gap 0.22s ease;
 }

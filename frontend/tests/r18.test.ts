@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia } from 'pinia';
 import { reactive } from 'vue';
-import { r18Api, parseR18Page, parseR18Resources, safeR18URL, type R18Video } from '../src/api/r18';
+import { r18Api, parseR18Page, parseR18Resources, parseR18Video, safeR18URL, safeR18ImageURL, type R18Video } from '../src/api/r18';
 import { parseLibraries } from '../src/api/contracts';
 import R18CatalogPage from '../src/pages/R18CatalogPage.vue';
 import R18DetailPage from '../src/pages/R18DetailPage.vue';
 import R18LibraryForm from '../src/components/libraries/R18LibraryForm.vue';
+import R18Cover from '../src/components/media/R18Cover.vue';
+import WallFilters from '../src/components/media/WallFilters.vue';
 import { applyMediaVisibility } from '../src/composables/useMediaVisibility';
+import { useCardSize } from '../src/composables/useCardSize';
 import { sanitizeReturnTo } from '../src/router/legacy-url';
 import { viewHistoryKey } from '../src/router/view-history';
 
@@ -16,20 +19,62 @@ const router = { push: vi.fn(), replace: vi.fn() };
 vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => router }));
 const wrappers: VueWrapper[] = [], stores: ReturnType<typeof createPinia>[] = [];
 const lib = { Id: 2, Name: 'R18', Path: '', SourceType: 'postgres_r18' as const, Revision: 1 };
-const video: R18Video = { id: 'WyJ0ZXN0IiwiZGlnaXRhbCJd', content_id: 'test', service_code: 'digital', number: 'TEST-001', title: 'Catalog title', original_title: 'Original', release_date: '2026-01-01', cover_url: 'https://example.com/cover.jpg', images: [] };
+const video: R18Video = { id: 'WyJ0ZXN0IiwiZGlnaXRhbCJd', content_id: 'test', service_code: 'digital', number: 'TEST-001', title: 'Catalog title', original_title: 'Original', release_date: '2026-01-01', cover_url: '/api/r18/libraries/2/videos/WyJ0ZXN0IiwiZGlnaXRhbCJd/images/poster', images: ['/api/r18/libraries/2/videos/WyJ0ZXN0IiwiZGlnaXRhbCJd/images/0'] };
 const page = { items: [video], has_more: true, has_previous: false, next_cursor: video.id, previous_cursor: video.id, estimated_total: 1900000 };
 function render(component: typeof R18CatalogPage | typeof R18DetailPage | typeof R18LibraryForm, props = {}, history?: object) {
   const pinia = createPinia(); stores.push(pinia);
   const w = mount(component, { props, global: { plugins: [pinia], provide: history ? { [viewHistoryKey as symbol]: history } : {}, stubs: { RouterLink: { template: '<a><slot /></a>' } } } }); wrappers.push(w); return w;
 }
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); stores.splice(0).forEach(disposePinia); vi.restoreAllMocks(); router.push.mockReset(); router.replace.mockReset(); applyMediaVisibility(false); route.name = 'r18'; route.fullPath = '/r18?library_id=2'; route.query = { library_id: '2' }; route.params = {}; });
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); stores.splice(0).forEach(disposePinia); vi.restoreAllMocks(); router.push.mockReset(); router.replace.mockReset(); applyMediaVisibility(false); useCardSize().setSize('normal'); route.name = 'r18'; route.fullPath = '/r18?library_id=2'; route.query = { library_id: '2' }; route.params = {}; });
 
 describe('R18 library presentation', () => {
+  it('shares card-size controls and saved preference with the media wall without reloading the catalog', async () => {
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
+    const reads = vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
+    const w = render(R18CatalogPage); await flushPromises();
+    const wall = mount(WallFilters, { props: { query: {}, libraries: [], search: '' } }); wrappers.push(wall);
+    expect(w.get('.r18-grid').classes()).toContain('wall');
+    await w.get('[aria-label="大图尺寸"]').trigger('click');
+    expect(wall.get('[aria-label="大图尺寸"]').attributes('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('emby_wall_card_size')).toBe('large');
+    expect(document.documentElement.style.getPropertyValue('--wall-card-min-width')).toBe('224px');
+    await wall.get('[aria-label="紧凑尺寸"]').trigger('click');
+    expect(w.get('[aria-label="紧凑尺寸"]').attributes('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('emby_wall_card_size')).toBe('compact');
+    expect(document.documentElement.style.getPropertyValue('--wall-card-min-width')).toBe('144px');
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(router.push).not.toHaveBeenCalled();
+    expect(w.findAll('.r18-card')).toHaveLength(1);
+  });
+  it('fits full jackets to the front cover and keeps portrait, missing and hidden cover states', async () => {
+    const w = mount(R18Cover, { props: { src: video.cover_url, alt: video.number, loading: 'lazy' } }); wrappers.push(w);
+    const img = w.get('img');
+    Object.defineProperties(img.element, { naturalWidth: { configurable: true, value: 800 }, naturalHeight: { configurable: true, value: 600 } });
+    await img.trigger('load');
+    expect(w.classes()).toContain('is-jacket');
+    expect(img.attributes('loading')).toBe('lazy');
+    await w.setProps({ src: video.images[0]! });
+    expect(w.classes()).not.toContain('is-jacket');
+    Object.defineProperties(img.element, { naturalWidth: { configurable: true, value: 565 }, naturalHeight: { configurable: true, value: 800 } });
+    await img.trigger('load');
+    expect(w.classes()).not.toContain('is-jacket');
+    await img.trigger('error');
+    expect(w.find('img').exists()).toBe(false);
+    expect(w.get('.image-placeholder').attributes('aria-label')).toBe(video.number);
+    await w.setProps({ src: video.cover_url });
+    applyMediaVisibility(true); await flushPromises();
+    expect(w.find('img').exists()).toBe(false);
+    expect(w.get('.image-hidden').attributes('aria-label')).toBe(video.number);
+  });
   it('keeps external source types and safe URLs, without inventing playback', () => {
     expect(parseLibraries({ items: [lib], total: 1 }).items?.[0]?.SourceType).toBe('postgres_r18');
     expect(parseR18Page(page).items[0]?.id).toBe(video.id);
     expect(safeR18URL('javascript:alert(1)')).toBe('');
     expect(safeR18URL('https://user:secret@example.com/')).toBe('');
+    expect(safeR18ImageURL(video.cover_url)).toBe(video.cover_url);
+    expect(safeR18ImageURL(video.cover_url.replace('/poster', '/cover'))).toContain('/images/cover');
+    for (const raw of ['https://images.example/cover.jpg', '//evil.example/a', '/api/r18/libraries/2/videos/id/images/cover?url=http://evil.example', '/api/admin/scrape/image', '/api/r18/libraries/2/videos/../images/cover']) expect(safeR18ImageURL(raw)).toBe('');
+    expect(parseR18Video({ ...video, cover_url: 'https://images.example/cover.jpg', images: ['https://images.example/gallery.jpg'] })).toMatchObject({ cover_url: '', images: [] });
     expect(() => parseR18Resources({ items: [{ magnet: 'javascript:alert(1)' }], has_more: false, next_offset: 0 })).toThrow();
     expect(sanitizeReturnTo('/r18/2/item/' + video.id + '?from=%2Fr18%3Flibrary_id%3D2')).toContain('/r18/2/item/');
   });
@@ -38,12 +83,28 @@ describe('R18 library presentation', () => {
     const reads = vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
     const w = render(R18CatalogPage); await flushPromises();
     expect(w.findAll('.r18-card')).toHaveLength(1);
-    expect(w.text()).toContain('全库约 1,900,000 条');
+    expect(w.get('.r18-card img').attributes('src')).toBe(video.cover_url);
+    expect(w.findAll('img')).toHaveLength(1);
+    expect(w.find('.r18-gallery').exists()).toBe(false);
+    expect(w.text()).toContain('源表约 1,900,000 条');
+    expect(w.text()).toContain('仅展示 dvd_id 有值的影片');
+    expect(w.get('label[for="r18-order"]').text()).toBe('发行日期排序');
+    expect((w.get('#r18-order').element as HTMLSelectElement).value).toBe('desc');
+    expect(reads.mock.calls[0]?.[1].get('order')).toBe('desc');
     const next = w.findAll('button').find(b => b.text().includes('下一页'))!; await next.trigger('click');
     expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ cursor: video.id, direction: 'next' }) }));
     reads.mockRejectedValueOnce(new Error('Source unavailable'));
     await w.findAll('button').find(b => b.text() === '刷新')!.trigger('click'); await flushPromises();
     expect(w.findAll('.r18-card')).toHaveLength(1); expect(w.text()).toContain('Source unavailable');
+  });
+  it('allows oldest-first release sorting and resets pagination when the order changes', async () => {
+    route.query = { library_id: '2', cursor: video.id, order: 'desc' };
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
+    vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
+    const w = render(R18CatalogPage); await flushPromises();
+    await w.get('#r18-order').setValue('asc');
+    await w.get('form').trigger('submit');
+    expect(router.push).toHaveBeenCalledExactlyOnceWith({ path: '/r18', query: { library_id: '2', search_mode: 'number', order: 'asc' } });
   });
   it('loads article resources on detail entry and copies magnets without opening a player', async () => {
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
@@ -54,9 +115,15 @@ describe('R18 library presentation', () => {
     const w = render(R18DetailPage); await flushPromises();
     expect(resources).toHaveBeenCalledWith('2', video.id, 0, expect.any(AbortSignal));
     expect(w.text()).toContain('Article resource'); expect(w.text()).toContain('TODO');
+    expect(w.get('.r18-detail-cover img').attributes('src')).toBe(video.cover_url);
+    expect(w.get('.r18-gallery a').attributes('href')).toBe(video.images[0]);
+    expect(w.get('.r18-gallery img').attributes('src')).toBe(video.images[0]);
+    expect(w.get('.r18-gallery img').attributes('loading')).toBe('lazy');
     await w.findAll('button').find(b => b.text() === '复制磁力')!.trigger('click');
     expect(write).toHaveBeenCalledWith(magnet);
     expect(w.findAll('a[href^="magnet:"]')).toHaveLength(0);
+    applyMediaVisibility(true); await flushPromises();
+    expect(w.findAll('img')).toHaveLength(0);
   });
   it('restores the catalog position after detail return and uses only one back navigation', async () => {
     const backTo = vi.fn();

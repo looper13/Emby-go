@@ -2,6 +2,8 @@ package r18
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -68,9 +70,14 @@ func TestR18LiveReadOnlyPaginationAndResources(t *testing.T) {
 	if e = c.Check(ctx); e != nil {
 		t.Fatal(e)
 	}
+	checkLiveReleaseDatePagination(t, c, ctx)
 	var readonly string
 	if e = c.db.QueryRowContext(ctx, "SHOW transaction_read_only").Scan(&readonly); e != nil || readonly != "on" {
 		t.Fatal("not read-only", readonly, e)
+	}
+	var valid int
+	if e = c.db.QueryRowContext(ctx, "WITH videos(dvd_id) AS (VALUES (NULL::text),(''),('   '),('TEST-001')) SELECT COUNT(*) FROM videos WHERE "+videoFilter).Scan(&valid); e != nil || valid != 1 {
+		t.Fatal("DVD ID filter must exclude NULL, empty and space-only values", valid, e)
 	}
 	first, e := c.List(ctx, Query{Limit: 3})
 	if e != nil || len(first.Items) != 3 || !first.HasMore || first.HasPrevious {
@@ -84,21 +91,37 @@ func TestR18LiveReadOnlyPaginationAndResources(t *testing.T) {
 	if e != nil || !reflect.DeepEqual(first.Items, back.Items) || back.HasPrevious {
 		t.Fatal("previous page", e)
 	}
-	last, e := c.List(ctx, Query{Limit: 3, Order: "desc"})
+	last, e := c.List(ctx, Query{Limit: 3, Order: "asc"})
 	if e != nil || len(last.Items) != 3 || !last.HasMore || last.HasPrevious {
-		t.Fatal("descending first page", e)
+		t.Fatal("ascending first page", e)
 	}
-	descNext, e := c.List(ctx, Query{Limit: 3, Order: "desc", Cursor: last.NextCursor})
-	if e != nil || len(descNext.Items) != 3 || descNext.Items[0].ID == last.Items[0].ID {
-		t.Fatal("descending next page", e)
+	ascNext, e := c.List(ctx, Query{Limit: 3, Order: "asc", Cursor: last.NextCursor})
+	if e != nil || len(ascNext.Items) != 3 || ascNext.Items[0].ID == last.Items[0].ID {
+		t.Fatal("ascending next page", e)
 	}
-	descBack, e := c.List(ctx, Query{Limit: 3, Order: "desc", Cursor: descNext.PreviousCursor, Before: true})
-	if e != nil || !reflect.DeepEqual(last.Items, descBack.Items) || descBack.HasPrevious {
-		t.Fatal("descending previous page", e)
+	for _, page := range []Page{first, next, back, last, ascNext} {
+		for _, v := range page.Items {
+			if strings.TrimSpace(v.Number) == "" {
+				t.Fatal("listed a video without a DVD ID", v.ID)
+			}
+		}
+	}
+	ascBack, e := c.List(ctx, Query{Limit: 3, Order: "asc", Cursor: ascNext.PreviousCursor, Before: true})
+	if e != nil || !reflect.DeepEqual(last.Items, ascBack.Items) || ascBack.HasPrevious {
+		t.Fatal("ascending previous page", e)
 	}
 	detail, e := c.Get(ctx, first.Items[0].ID)
 	if e != nil || detail.ID != first.Items[0].ID {
 		t.Fatal("detail", e)
+	}
+	var excludedContent, excludedService string
+	e = c.db.QueryRowContext(ctx, "SELECT content_id,service_code FROM public.r18_video WHERE NOT ("+videoFilter+") LIMIT 1").Scan(&excludedContent, &excludedService)
+	if e == nil {
+		if _, e = c.Get(ctx, EncodeID(excludedContent, excludedService)); !errors.Is(e, sql.ErrNoRows) {
+			t.Fatal("direct detail returned a video without a DVD ID", e)
+		}
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		t.Fatal("checking excluded video", e)
 	}
 	matched, e := c.List(ctx, Query{Search: "DASS-385", SearchMode: "number", Limit: 40})
 	if e != nil || len(matched.Items) == 0 {
@@ -108,5 +131,27 @@ func TestR18LiveReadOnlyPaginationAndResources(t *testing.T) {
 	if e != nil || len(resources.Items) == 0 {
 		t.Fatal("article association", e)
 	}
+	total, e := c.CatalogCount(ctx, CatalogQuery{})
+	if e != nil || total < 3 {
+		t.Fatal("filtered Emby catalog count", total, e)
+	}
+	catalogFirst, e := c.CatalogList(ctx, CatalogQuery{Limit: 3})
+	if e != nil || !reflect.DeepEqual(catalogFirst, first.Items) {
+		t.Fatal("Emby first page", e)
+	}
+	catalogNext, e := c.CatalogList(ctx, CatalogQuery{Start: 3, Limit: 3})
+	if e != nil || !reflect.DeepEqual(catalogNext, next.Items) {
+		t.Fatal("Emby offset page", e)
+	}
+	search := CatalogQuery{Search: "DASS-385", Limit: 40, Sort: "SortName"}
+	searchCount, e := c.CatalogCount(ctx, search)
+	if e != nil || searchCount < 1 {
+		t.Fatal("Emby search count", searchCount, e)
+	}
+	searchItems, e := c.CatalogList(ctx, search)
+	if e != nil || int64(len(searchItems)) != searchCount {
+		t.Fatal("Emby search page", e)
+	}
+	t.Logf("Emby catalog count=%d, offset pagination and title/number search passed", total)
 	t.Logf("read-only pagination, detail and article matching passed; %d source variants, %d resources", len(matched.Items), len(resources.Items))
 }

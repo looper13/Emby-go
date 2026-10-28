@@ -26,11 +26,14 @@ function list(v: unknown): unknown[] { if (!Array.isArray(v)) throw new Error('R
 export function safeR18URL(raw: string): string {
   try { const u = new URL(raw); return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password ? u.href : ''; } catch { return ''; }
 }
+export function safeR18ImageURL(raw: string): string {
+  return /^\/api\/r18\/libraries\/[1-9]\d*\/videos\/[A-Za-z0-9_-]{1,1024}\/images\/(poster|cover|0|1)$/u.test(raw) ? raw : '';
+}
 export function parseR18Video(v: unknown): R18Video {
   const r = record(v);
   return { id: str(r.id), content_id: str(r.content_id), service_code: str(r.service_code), number: str(r.number),
     title: str(r.title), original_title: str(r.original_title), release_date: str(r.release_date),
-    cover_url: safeR18URL(str(r.cover_url)), images: list(r.images).map(str).map(safeR18URL).filter(Boolean) };
+    cover_url: safeR18ImageURL(str(r.cover_url)), images: list(r.images).map(str).map(safeR18ImageURL).filter(Boolean) };
 }
 export function parseR18Page(v: unknown): R18Page {
   const r = record(v);

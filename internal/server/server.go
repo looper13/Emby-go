@@ -129,6 +129,11 @@ type appState struct {
 	r18Mu              sync.Mutex
 	r18Clients         map[int64]r18ClientEntry
 	r18Open            func(r18.Config) (r18Source, error)
+	r18ImageHTTP       *http.Client
+	r18CoverOnce       sync.Once
+	r18CoverWarnings   sync.Once
+	r18CoverMemory     *cache.Managed
+	r18CoverFiles      *cache.Files
 }
 
 // scanStatus 管理端可轮询的扫描进度快照。

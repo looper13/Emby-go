@@ -36,6 +36,14 @@ func (f *fakeR18) List(_ context.Context, q r18.Query) (r18.Page, error) {
 	return r18.Page{Items: []r18.Video{f.video}, NextCursor: f.video.ID, PreviousCursor: f.video.ID}, nil
 }
 func (f *fakeR18) Get(context.Context, string) (r18.Video, error) { f.reads++; return f.video, nil }
+func (f *fakeR18) CatalogCount(context.Context, r18.CatalogQuery) (int64, error) {
+	f.reads++
+	return 1, nil
+}
+func (f *fakeR18) CatalogList(context.Context, r18.CatalogQuery) ([]r18.Video, error) {
+	f.reads++
+	return []r18.Video{f.video}, nil
+}
 func (f *fakeR18) Resources(context.Context, r18.Video, int) (r18.ResourcePage, error) {
 	f.reads++
 	return r18.ResourcePage{Items: []r18.Resource{{ID: "1", Title: "Resource", Number: "TEST-001", Magnet: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", Tags: []string{}}}}, nil

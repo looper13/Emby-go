@@ -115,6 +115,7 @@ func DecodeID(id string) (string, string, error) {
 }
 
 const videoColumns = `content_id,service_code,COALESCE(dvd_id,''),COALESCE(title_ja,''),COALESCE(title_en,''),COALESCE(to_char(release_date,'YYYY-MM-DD'),''),COALESCE(jacket_full_url,''),COALESCE(gallery_full_first_url,''),COALESCE(gallery_full_last_url,'')`
+const videoFilter = `dvd_id IS NOT NULL AND TRIM(dvd_id)<>''`
 
 func readVideo(row interface{ Scan(...any) error }) (Video, error) {
 	var v Video
@@ -162,7 +163,7 @@ func (c *Client) List(ctx context.Context, q Query) (Page, error) {
 	if len([]rune(q.Search)) > 120 || len(q.Service) > 64 {
 		return page, errors.New("search is too long")
 	}
-	where := []string{"TRUE"}
+	where := []string{videoFilter}
 	args := []any{}
 	bind := func(v any) string { args = append(args, v); return "$" + strconv.Itoa(len(args)) }
 	if q.Service != "" {
@@ -179,11 +180,12 @@ func (c *Client) List(ctx context.Context, q Query) (Page, error) {
 			where = append(where, "(dvd_id="+p+" OR dvd_id="+l+" OR content_id="+l+" OR content_id="+p+")")
 		}
 	}
-	order, op := "ASC", ">"
-	if q.Order == "desc" {
-		order, op = "DESC", "<"
+	order, op, nulls, nullDate := "DESC", "<", "LAST", "'-infinity'"
+	if q.Order == "asc" {
+		order, op, nullDate = "ASC", ">", "'infinity'"
 	}
 	if q.Before {
+		nulls = "FIRST"
 		if order == "ASC" {
 			order, op = "DESC", "<"
 		} else {
@@ -195,9 +197,13 @@ func (c *Client) List(ctx context.Context, q Query) (Page, error) {
 		if e != nil {
 			return page, e
 		}
-		where = append(where, "(content_id,service_code) "+op+" ("+bind(content)+","+bind(service)+")")
+		// Keep item-ID cursors compatible, resolving their date inside this read.
+		// Infinity puts undated items last in either direction, even across pages.
+		key := "COALESCE(release_date," + nullDate + "),content_id,service_code"
+		anchor := "SELECT " + key + " FROM public.r18_video WHERE " + videoFilter + " AND content_id=" + bind(content) + " AND service_code=" + bind(service)
+		where = append(where, "("+key+") "+op+" ("+anchor+")")
 	}
-	query := "SELECT " + videoColumns + " FROM public.r18_video WHERE " + strings.Join(where, " AND ") + " ORDER BY content_id " + order + ",service_code " + order + " LIMIT " + bind(q.Limit+1)
+	query := "SELECT " + videoColumns + " FROM public.r18_video WHERE " + strings.Join(where, " AND ") + " ORDER BY release_date " + order + " NULLS " + nulls + ",content_id " + order + ",service_code " + order + " LIMIT " + bind(q.Limit+1)
 	rows, e := c.db.QueryContext(ctx, query, args...)
 	if e != nil {
 		return page, e
@@ -234,7 +240,7 @@ func (c *Client) Get(ctx context.Context, id string) (Video, error) {
 	if e != nil {
 		return Video{}, e
 	}
-	return readVideo(c.db.QueryRowContext(ctx, "SELECT "+videoColumns+" FROM public.r18_video WHERE content_id=$1 AND service_code=$2", content, service))
+	return readVideo(c.db.QueryRowContext(ctx, "SELECT "+videoColumns+" FROM public.r18_video WHERE "+videoFilter+" AND content_id=$1 AND service_code=$2", content, service))
 }
 
 func (c *Client) Estimate(ctx context.Context) (int64, error) {

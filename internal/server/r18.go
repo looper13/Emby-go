@@ -22,6 +22,8 @@ type r18Source interface {
 	Get(context.Context, string) (r18.Video, error)
 	Resources(context.Context, r18.Video, int) (r18.ResourcePage, error)
 	Estimate(context.Context) (int64, error)
+	CatalogCount(context.Context, r18.CatalogQuery) (int64, error)
+	CatalogList(context.Context, r18.CatalogQuery) ([]r18.Video, error)
 	Close() error
 }
 type r18ClientEntry struct {
@@ -35,6 +37,8 @@ func (a *App) registerR18Routes(r *gin.Engine) {
 	browse.GET("/libraries/:lib/videos", a.bind((*App).r18Videos))
 	browse.GET("/libraries/:lib/videos/:video", a.bind((*App).r18Video))
 	browse.GET("/libraries/:lib/videos/:video/resources", a.bind((*App).r18Resources))
+	browse.GET("/libraries/:lib/videos/:video/images/:image", a.bind((*App).r18Image))
+	browse.HEAD("/libraries/:lib/videos/:video/images/:image", a.bind((*App).r18Image))
 	admin := r.Group("/api/admin/r18", a.requireAuth, a.requireAdministrator, noStore)
 	admin.POST("/libraries", a.bind((*App).createR18Library))
 	admin.GET("/libraries/:id", a.bind((*App).r18LibraryConfig))
@@ -109,6 +113,11 @@ func (a *App) r18Failure(c *gin.Context, stage string, e error) {
 	// pgx connection errors may include a DSN; ordinary users never receive it.
 	message := e.Error()
 	id, _ := strconv.ParseInt(c.Param("lib"), 10, 64)
+	if id == 0 {
+		if value, ok := c.Get("r18LibraryID"); ok {
+			id = value.(int64)
+		}
+	}
 	if cfg, err := a.db.R18Connection(id); err == nil && cfg.Password != "" {
 		message = redactR18Error(message, cfg.Password)
 	}
@@ -172,6 +181,9 @@ func (a *App) r18Videos(c *gin.Context) {
 		return
 	}
 	estimate, _ := client.Estimate(ctx)
+	for i, v := range page.Items {
+		page.Items[i] = a.r18Presentation(l, v)
+	}
 	l.Path = ""
 	c.JSON(200, gin.H{"items": page.Items, "next_cursor": page.NextCursor, "previous_cursor": page.PreviousCursor, "has_more": page.HasMore, "has_previous": page.HasPrevious, "estimated_total": estimate, "library": l})
 }
@@ -196,7 +208,7 @@ func (a *App) r18Video(c *gin.Context) {
 		a.r18Failure(c, "详情查询", e)
 		return
 	}
-	c.JSON(200, gin.H{"video": v, "library_name": l.Name, "playable": false})
+	c.JSON(200, gin.H{"video": a.r18Presentation(l, v), "library_name": l.Name, "playable": false})
 }
 func (a *App) r18Resources(c *gin.Context) {
 	l, ok := a.r18Library(c)
