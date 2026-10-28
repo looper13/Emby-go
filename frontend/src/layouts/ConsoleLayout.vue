@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { LayoutGrid, Film, Folder, CirclePlus, Settings, KeyRound, Activity, Search, TrendingUp, Clock, Sparkles, Users, Heart, UserRound, LogOut, Sun, Moon, Image, ImageOff, PanelLeftClose, PanelLeftOpen } from '@lucide/vue';
 import { useRoute, useRouter } from 'vue-router';
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useTasksStore } from '../stores/tasks';
 import { useAuthStore } from '../stores/auth';
 import { useToastStore } from '../stores/toasts';
@@ -9,6 +9,7 @@ import { useTheme } from '../composables/useTheme';
 import { useMediaVisibility } from '../composables/useMediaVisibility';
 import { useSidebar } from '../composables/useSidebar';
 import { useCardSize } from '../composables/useCardSize';
+import GlobalSearchDialog from '../components/common/GlobalSearchDialog.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -18,6 +19,23 @@ const theme = useTheme();
 const mediaVisibility = useMediaVisibility();
 const { isCollapsed, toggle } = useSidebar();
 useCardSize(); // Initialize global media card size CSS variable
+
+const searchOpen = ref(false);
+
+function handleGlobalKey(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    searchOpen.value = !searchOpen.value;
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKey);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKey);
+});
 
 async function logout() {
   try { await auth.logout(); if (!auth.authenticated) await router.replace('/login'); }
@@ -120,6 +138,22 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
             <h1 id="page-title">{{ detailTitle || route.meta.title }}</h1>
           </div>
         </div>
+
+        <!-- 顶栏全局搜索触发栏 (Ctrl+K) -->
+        <div class="topbar-search">
+          <button
+            class="global-search-trigger"
+            type="button"
+            title="全局搜索 (Ctrl + K)"
+            aria-label="全局搜索 (Ctrl + K)"
+            @click="searchOpen = true"
+          >
+            <Search :size="15" aria-hidden="true" />
+            <span class="search-trigger-placeholder">搜索媒体、演员、库...</span>
+            <kbd class="search-trigger-kbd">Ctrl K</kbd>
+          </button>
+        </div>
+
         <div class="top-actions">
           <div class="connection-indicator" title="服务已连接">
             <span class="status-dot" aria-hidden="true"></span>
@@ -138,5 +172,74 @@ watch(() => route.fullPath, () => { detailTitle.value = ''; });
       </header>
       <div id="content" class="content" aria-live="polite"><RouterView v-slot="{ Component }"><component :is="Component" v-on="route.name === 'item' ? { title: updateTitle } : {}" /></RouterView></div>
     </main>
+
+    <!-- 全局聚光灯搜索弹窗 -->
+    <GlobalSearchDialog :open="searchOpen" @close="searchOpen = false" />
   </div>
 </template>
+
+<style scoped>
+.topbar-search {
+  flex: 1;
+  max-width: 320px;
+  margin: 0 16px;
+}
+
+.global-search-trigger {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--panel, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.global-search-trigger:hover {
+  background: var(--panel-hover, rgba(255, 255, 255, 0.1));
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.search-trigger-placeholder {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--dim);
+}
+
+.search-trigger-kbd {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  color: var(--muted);
+}
+
+@media (max-width: 768px) {
+  .search-trigger-placeholder,
+  .search-trigger-kbd {
+    display: none;
+  }
+  .topbar-search {
+    max-width: 34px;
+    margin: 0 8px;
+  }
+  .global-search-trigger {
+    width: 34px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
+  }
+}
+</style>

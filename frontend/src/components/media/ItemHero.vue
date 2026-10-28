@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Play, Activity, RefreshCw, Search, Film, Star, ArrowLeft, ChevronLeft, ChevronRight } from '@lucide/vue';
-import type { MovieDto, ImageDto } from '../../api/contracts';
+import type { MovieDto, ImageDto, FileDto } from '../../api/contracts';
 import { numberUnlessInTitle, statusText, fmtDuration } from '../../lib/media';
 import { imageURL } from '../../lib/image-url';
 import MediaImage from './MediaImage.vue';
@@ -11,6 +11,7 @@ import { useMediaVisibility } from '../../composables/useMediaVisibility';
 const props = defineProps<{
   movie: MovieDto;
   images?: ImageDto[];
+  files?: FileDto[];
   playable?: boolean;
   busy?: Set<string>;
   favorite?: boolean;
@@ -43,6 +44,73 @@ const backdrop = computed(() =>
       ? imageURL(props.movie.id, 'Thumb', 1280, tag('Thumb'))
       : poster.value
 );
+
+interface TechBadge {
+  label: string;
+  category: 'res' | 'hdr' | 'codec' | 'audio' | 'sub';
+}
+
+const techBadges = computed<TechBadge[]>(() => {
+  const list: TechBadge[] = [];
+  if (!props.files?.length) {
+    if (props.movie.source_container) {
+      list.push({ label: props.movie.source_container.toUpperCase(), category: 'codec' });
+    }
+    return list;
+  }
+
+  const streams = props.files.flatMap(f => f.streams || []);
+  const video = streams.find(s => s.Type?.toLowerCase() === 'video');
+  const audio = streams.find(s => s.Type?.toLowerCase() === 'audio');
+  const subs = streams.filter(s => s.Type?.toLowerCase() === 'subtitle');
+
+  if (video?.Width && video?.Height) {
+    const w = video.Width;
+    const h = video.Height;
+    if (w >= 3600 || h >= 2000) list.push({ label: '4K UHD', category: 'res' });
+    else if (w >= 1800 || h >= 1000) list.push({ label: '1080p FHD', category: 'res' });
+    else if (w >= 1200 || h >= 700) list.push({ label: '720p HD', category: 'res' });
+    else list.push({ label: `${h}p`, category: 'res' });
+  }
+
+  if (video) {
+    const is10Bit = video.BitDepth === 10 || (video.Profile && /10/i.test(video.Profile));
+    if (is10Bit) list.push({ label: '10-bit HDR', category: 'hdr' });
+  }
+
+  if (video?.Codec) {
+    const c = video.Codec.toLowerCase();
+    if (c === 'hevc' || c === 'h265') list.push({ label: 'HEVC', category: 'codec' });
+    else if (c === 'h264' || c === 'avc') list.push({ label: 'AVC (H.264)', category: 'codec' });
+    else if (c === 'av01' || c === 'av1') list.push({ label: 'AV1', category: 'codec' });
+    else if (c === 'vp9') list.push({ label: 'VP9', category: 'codec' });
+    else list.push({ label: video.Codec.toUpperCase(), category: 'codec' });
+  }
+
+  if (audio) {
+    let aName = '';
+    if (audio.Codec) {
+      const ac = audio.Codec.toLowerCase();
+      if (ac === 'aac') aName = 'AAC';
+      else if (ac === 'ac3') aName = 'Dolby 5.1';
+      else if (ac === 'eac3') aName = 'E-AC3';
+      else if (ac === 'dts') aName = 'DTS';
+      else if (ac === 'truehd') aName = 'TrueHD';
+      else if (ac === 'flac') aName = 'FLAC';
+      else aName = audio.Codec.toUpperCase();
+    }
+    if (audio.Channels === 6 && !aName.includes('5.1')) aName += (aName ? ' · ' : '') + '5.1 声道';
+    else if (audio.Channels === 8) aName += (aName ? ' · ' : '') + '7.1 声道';
+    else if (audio.Channels === 2) aName += (aName ? ' · ' : '') + '立体声';
+    if (aName) list.push({ label: aName, category: 'audio' });
+  }
+
+  if (subs.length > 0) {
+    list.push({ label: `字幕 ×${subs.length}`, category: 'sub' });
+  }
+
+  return list;
+});
 </script>
 
 <template>
@@ -140,6 +208,18 @@ const backdrop = computed(() =>
           <span v-if="numberUnlessInTitle(movie.Title, movie.Number)" class="detail-meta-pill mono">{{ numberUnlessInTitle(movie.Title, movie.Number) }}</span>
           <span v-if="canManage" class="badge" :class="movie.Status">{{ statusText[movie.Status] || movie.Status }}</span>
           <span v-if="movie.collection" class="badge manual">合集 {{ movie.collection }}</span>
+        </div>
+
+        <!-- 技术规格徽章 (Resolution, HDR, Video Codec, Audio, Subtitles) -->
+        <div v-if="techBadges.length" class="detail-tech-badges">
+          <span
+            v-for="b in techBadges"
+            :key="b.label"
+            class="tech-badge"
+            :class="b.category"
+          >
+            {{ b.label }}
+          </span>
         </div>
 
         <!-- 标签芯片 -->
@@ -458,6 +538,89 @@ const backdrop = computed(() =>
 .detail-meta-pill.mono {
   font-family: var(--font-mono);
   font-size: 11.5px;
+}
+
+.detail-tech-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 1px;
+}
+
+.tech-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #e4e4e7;
+  user-select: none;
+}
+
+.tech-badge.res {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #60a5fa;
+}
+
+.tech-badge.hdr {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+}
+
+.tech-badge.codec {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+}
+
+.tech-badge.audio {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.tech-badge.sub {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--muted);
+}
+
+[data-theme="light"] .tech-badge {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #27272a;
+}
+
+[data-theme="light"] .tech-badge.res {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.35);
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .tech-badge.hdr {
+  background: rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.4);
+  color: #b45309;
+}
+
+[data-theme="light"] .tech-badge.codec {
+  background: rgba(147, 51, 234, 0.1);
+  border-color: rgba(147, 51, 234, 0.35);
+  color: #7e22ce;
+}
+
+[data-theme="light"] .tech-badge.audio {
+  background: rgba(5, 150, 105, 0.1);
+  border-color: rgba(5, 150, 105, 0.35);
+  color: #047857;
 }
 
 .detail-badges {

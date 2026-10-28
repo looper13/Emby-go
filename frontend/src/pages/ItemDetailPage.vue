@@ -191,6 +191,7 @@ watch(() => tasks.revision, () => { void enter(true); });
       :movie="data.movie"
       :favorite="data.favorite"
       :images="data.images"
+      :files="data.files"
       :playable="data.playable"
       :busy="actions.busy.value"
       :has-prev="hasPrev"
