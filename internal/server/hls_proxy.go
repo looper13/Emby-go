@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 )
@@ -122,10 +123,6 @@ func (a *App) rewriteHLSPlaylist(c *gin.Context, item, sessionID, base string, b
 	if err != nil || baseURL.Host == "" || (baseURL.Scheme != "http" && baseURL.Scheme != "https") {
 		return nil, errors.New("HLS 播放列表地址无效")
 	}
-	playlist := strings.TrimSpace(strings.TrimPrefix(string(body), "\uFEFF"))
-	if !strings.HasPrefix(playlist, "#EXTM3U") {
-		return nil, errors.New("响应不是有效的 HLS 播放列表")
-	}
 	rewriteURI := func(raw string) (string, error) {
 		ref, parseErr := url.Parse(strings.TrimSpace(raw))
 		if parseErr != nil {
@@ -145,15 +142,27 @@ func (a *App) rewriteHLSPlaylist(c *gin.Context, item, sessionID, base string, b
 		}
 		return prefix + "/Videos/" + url.PathEscape(item) + "/hls-proxy/" + sessionID + "/" + resourceID, nil
 	}
+	return rewriteHLSPlaylistURIs(body, rewriteURI)
+}
 
+func rewriteHLSPlaylistURIs(body []byte, rewriteURI func(string) (string, error)) ([]byte, error) {
+	content := strings.TrimPrefix(string(body), "\uFEFF")
+	playlist := strings.TrimSpace(content)
+	header, _, _ := strings.Cut(playlist, "\n")
+	if strings.TrimSpace(header) != "#EXTM3U" {
+		return nil, errors.New("响应不是有效的 HLS 播放列表")
+	}
 	var out strings.Builder
-	for _, chunk := range strings.SplitAfter(string(body), "\n") {
+	for _, chunk := range strings.SplitAfter(content, "\n") {
 		if chunk == "" {
 			continue
 		}
 		line, ending := splitHLSLineEnding(chunk)
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
+			if err := validateHLSURIAttributes(trimmed); err != nil {
+				return nil, err
+			}
 			var rewriteErr error
 			line = hlsURIAttribute.ReplaceAllStringFunc(line, func(attribute string) string {
 				if rewriteErr != nil {
@@ -184,6 +193,46 @@ func (a *App) rewriteHLSPlaylist(c *gin.Context, item, sessionID, base string, b
 		out.WriteString(ending)
 	}
 	return []byte(out.String()), nil
+}
+
+// 浏览器会容忍未加引号的 URI，代理必须拒绝它，防止密钥绕过改写直连。
+func validateHLSURIAttributes(line string) error {
+	_, attributes, found := strings.Cut(line, ":")
+	if !found {
+		return nil
+	}
+	validate := func(attribute string) error {
+		trim := func(value string) string {
+			return strings.TrimFunc(value, func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' })
+		}
+		attribute = trim(attribute)
+		name, _, found := strings.Cut(attribute, "=")
+		if !found || !strings.EqualFold(trim(name), "URI") {
+			return nil
+		}
+		if !strings.HasPrefix(attribute, `URI="`) || !strings.HasSuffix(attribute, `"`) || strings.Count(attribute, `"`) != 2 {
+			return errors.New("HLS URI 必须使用规范的双引号属性")
+		}
+		return nil
+	}
+	start, quoted := 0, false
+	for i := range len(attributes) {
+		switch attributes[i] {
+		case '"':
+			quoted = !quoted
+		case ',':
+			if !quoted {
+				if err := validate(attributes[start:i]); err != nil {
+					return err
+				}
+				start = i + 1
+			}
+		}
+	}
+	if quoted {
+		return errors.New("HLS 属性引号不完整")
+	}
+	return validate(attributes[start:])
 }
 
 func splitHLSLineEnding(chunk string) (string, string) {

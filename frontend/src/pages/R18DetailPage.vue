@@ -2,11 +2,13 @@
 import { computed, inject, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowLeft, Copy, ExternalLink, Magnet, Database, Play } from '@lucide/vue';
-import { r18Api, type R18Video, type R18Resource, type R18LocalSource } from '../api/r18';
+import { r18Api, safeR18PreviewURL, type R18Video, type R18Resource, type R18LocalSource } from '../api/r18';
 import { usePageRequest } from '../composables/usePageRequest';
 import { useToastStore } from '../stores/toasts';
 import { usePlayerStore } from '../stores/player';
-import MediaImage from '../components/media/MediaImage.vue';
+import ArtworkGallery from '../components/media/ArtworkGallery.vue';
+import MetadataRow from '../components/media/MetadataRow.vue';
+import TrailerSection from '../components/media/TrailerSection.vue';
 import R18Cover from '../components/media/R18Cover.vue';
 import R18OfflinePanel from '../components/media/R18OfflinePanel.vue';
 import { useAuthStore } from '../stores/auth';
@@ -15,6 +17,7 @@ import EmptyState from '../components/common/EmptyState.vue';
 import { viewHistoryKey } from '../router/view-history';
 import { useR18Playback } from '../composables/useR18Playback';
 import { magnetHash, offlineLabels, type R18PlaybackVersion } from '../lib/r18-playback';
+import { playbackType } from '../lib/player';
 
 const route = useRoute(), scope = usePageRequest(), resourceScope = usePageRequest(), localScope = usePageRequest(), toasts = useToastStore();
 const router = useRouter(), history = inject(viewHistoryKey, null);
@@ -27,6 +30,12 @@ const id = computed(() => String(route.params.id));
 const player = usePlayerStore(), localSources = ref<R18LocalSource[]>([]), selectedLocalId = ref('');
 const localBusy = ref(false), localError = ref(''), magnetFlow = ref(false), resolvedIdentity = ref('');
 const identity = computed(() => `${libraryId.value}/${id.value}`);
+const previewURL = computed(() => video.value?.has_preview ? safeR18PreviewURL(video.value.preview_url) : '');
+function playPreview() {
+  if (!video.value || !previewURL.value || route.name !== 'r18-detail' || resolvedIdentity.value !== identity.value) return;
+  // 预览不属于本地正片，不传影片 ID，避免记录播放进度或已看状态。
+  player.open({ title: '预览视频 · ' + video.value.title, url: previewURL.value, type: playbackType(previewURL.value) });
+}
 const selectedLocal = computed(() => localSources.value.find(source => source.id === selectedLocalId.value));
 const magnetEnabled = computed(() => route.name === 'r18-detail' && resolvedIdentity.value === identity.value && !!video.value && (!localSources.value.length || magnetFlow.value));
 const playback = useR18Playback(() => ({ library: libraryId.value, video: id.value, title: video.value?.title || '播放' }), resources, () => magnetEnabled.value);
@@ -161,10 +170,12 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
       <button v-if="hasMore" class="btn r18-more" :disabled="resourceLoading" @click="loadResources(true)">{{ resourceLoading ? '加载中…' : '加载更多资源' }}</button>
     </section>
     <R18OfflinePanel v-if="magnetEnabled" :library="libraryId" :video="id" :title="video.title" :playback="playback" />
-    <section v-if="video.images.length" class="panel">
-      <div class="panel-head"><h2>剧照</h2><span class="hint">JavDB 当前影片提供的 {{ video.images.length }} 张剧照</span></div>
-      <div class="r18-gallery"><a v-for="image in video.images" :key="image" :href="image" target="_blank" rel="noopener noreferrer" aria-label="查看剧照原图"><MediaImage :src="image" alt="影片剧照" loading="lazy" referrerpolicy="no-referrer" /></a></div>
+    <section v-if="video.tags.length" class="detail-section r18-film-metadata">
+      <h3>影片元数据</h3>
+      <dl class="detail-meta"><MetadataRow label="标签" :value="video.tags" /></dl>
     </section>
+    <TrailerSection class="r18-preview" :url="previewURL" :thumb="video.images[0] || video.cover_url" :fallback="video.cover_url" @play="playPreview" />
+    <ArtworkGallery :key="identity" :urls="video.images" />
   </template>
 </template>
 
@@ -178,7 +189,6 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
 .r18-facts { display:flex; flex-wrap:wrap; gap:22px; margin:26px 0; }
 .r18-facts dt { color:var(--muted); font-size:12px; margin-bottom:6px; }.r18-facts dd { margin:0; overflow-wrap:anywhere; }
 .r18-playback { max-width:560px; }.version-choice { display:grid; gap:8px; color:var(--muted); font-size:12px; }.version-choice select { width:100%; min-width:0; min-height:44px; }.r18-play-actions { display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }.btn-play-large { padding:0 20px; font-size:14px; font-weight:600; box-shadow:0 4px 14px rgba(26,113,255,.25); }.r18-playback .hint { line-height:1.8; }
-.r18-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }.r18-gallery a { position:relative; display:block; aspect-ratio:16/9; overflow:hidden; border-radius:8px; background:var(--bg); }.r18-gallery :deep(img), .r18-gallery :deep(.image-placeholder) { position:absolute; inset:0; width:100%; height:100%; }.r18-gallery :deep(img) { display:block; object-fit:contain; }
 .r18-resources h2 { display:flex; gap:8px; align-items:center; }
 .r18-resource { padding:20px 0; border-bottom:1px solid var(--line); }.r18-resource.is-selected h3 { color:var(--accent); }.r18-resources { margin:24px 0; scroll-margin-top:24px; }.r18-resource .btn,.r18-play-actions .btn { min-height:44px; }
 .r18-resource-head { display:flex; justify-content:space-between; gap:16px; align-items:baseline; }.r18-resource-head h3 { margin:0; font-size:15px; line-height:1.7; overflow-wrap:anywhere; }.r18-resource-head > span { flex-shrink:0; color:var(--accent); font-size:12px; }
@@ -186,5 +196,5 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
 .r18-resource-origin { border:1px solid var(--line); border-radius:4px; padding:0 5px; }.r18-local-error { color:var(--danger); overflow-wrap:anywhere; font-size:13px; line-height:1.8; }
 .r18-magnet-text { display:block; padding:12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); overflow-wrap:anywhere; white-space:pre-wrap; font-size:12px; line-height:1.8; user-select:text; }
 .r18-resource-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }.r18-more { display:block; margin:24px auto 0; }
-@media(max-width:720px) { .r18-detail-hero { grid-template-columns:1fr; gap:20px; }.r18-detail-hero .r18-detail-cover { width:120px; }.r18-detail-info h2 { font-size:19px; }.r18-gallery { grid-template-columns:1fr; }.r18-resource-head { flex-direction:column; gap:4px; }.r18-facts { gap:18px; } }
+@media(max-width:720px) { .r18-detail-hero { grid-template-columns:1fr; gap:20px; }.r18-detail-hero .r18-detail-cover { width:120px; }.r18-detail-info h2 { font-size:19px; }.r18-resource-head { flex-direction:column; gap:4px; }.r18-facts { gap:18px; } }
 </style>

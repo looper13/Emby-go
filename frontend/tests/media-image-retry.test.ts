@@ -78,7 +78,7 @@ describe('图片有界恢复', () => {
 
 describe('JavDB 手动刷新同URL封面', () => {
   it('只有手动刷新成功才重挂载同URL，失败刷新保留卡片且不重发图片', async () => {
-    const video: R18Video = { id: 'fixture', content_id: 'fixture', service_code: 'javdb', number: 'TEST-001', title: '测试影片', original_title: '', release_date: '', cover_url: src, images: [], duration: 0, score: 0, magnets_count: 0, has_local: false };
+    const video: R18Video = { id: 'fixture', content_id: 'fixture', service_code: 'javdb', number: 'TEST-001', title: '测试影片', original_title: '', release_date: '', cover_url: src, images: [], duration: 0, score: 0, magnets_count: 0, has_local: false, tags: [], has_preview: false, preview_url: '' };
     vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [{ Id: 2, Name: '在线库', Path: '', SourceType: 'avdb_javdb' }], total: 1 });
     const read = vi.spyOn(r18Api, 'videos').mockResolvedValue({ items: [video], page: 1, page_size: 24, has_more: false, has_previous: false });
     const pinia = createPinia(); stores.push(pinia);

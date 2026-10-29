@@ -23,7 +23,7 @@ const router = { push: vi.fn(), replace: vi.fn() };
 vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => router }));
 const wrappers: VueWrapper[] = [], stores: ReturnType<typeof createPinia>[] = [];
 const lib = { Id: 2, Name: 'R18', Path: '', SourceType: 'avdb_javdb' as const, Revision: 1 };
-const video: R18Video = { id: 'WyJ0ZXN0IiwiamF2ZGIiXQ', content_id: 'test', service_code: 'javdb', number: 'TEST-001', title: 'Catalog title', original_title: 'Original', release_date: '2026-01-01', cover_url: '/api/r18/libraries/2/videos/WyJ0ZXN0IiwiamF2ZGIiXQ/images/poster', images: ['/api/r18/libraries/2/videos/WyJ0ZXN0IiwiamF2ZGIiXQ/images/0'], duration: 120, score: 4.3, magnets_count: 8, has_local: false };
+const video: R18Video = { id: 'WyJ0ZXN0IiwiamF2ZGIiXQ', content_id: 'test', service_code: 'javdb', number: 'TEST-001', title: 'Catalog title', original_title: 'Original', release_date: '2026-01-01', cover_url: '/api/r18/libraries/2/videos/WyJ0ZXN0IiwiamF2ZGIiXQ/images/poster', images: ['/api/r18/libraries/2/videos/WyJ0ZXN0IiwiamF2ZGIiXQ/images/0'], duration: 120, score: 4.3, magnets_count: 8, has_local: false, tags: [], has_preview: false, preview_url: '' };
 const page = { items: [video], page: 1, page_size: 24, has_more: true, has_previous: false };
 function render(component: typeof R18CatalogPage | typeof R18DetailPage | typeof R18LibraryForm, props = {}, history?: object) {
   const pinia = createPinia(); stores.push(pinia);
@@ -256,10 +256,10 @@ describe('R18 library presentation', () => {
     expect(w.text()).toContain('JavDB 磁力列表');
     expect(w.get('.r18-facts').text()).toContain('120 分钟');
     expect(w.get('.r18-facts').text()).toContain('4.3');
-    expect(w.text()).toContain('4 张剧照');
-    expect(w.findAll('.r18-gallery a').map(a => a.attributes('href'))).toEqual(images);
-    expect(w.findAll('.r18-gallery img').map(img => img.attributes('src'))).toEqual(images);
-    expect(w.findAll('.r18-gallery img').every(img => img.attributes('loading') === 'lazy')).toBe(true);
+    expect(w.get('.detail-section h3').text()).toBe('剧照4');
+    expect(w.find('.detail-artwork-grid a').exists()).toBe(false);
+    expect(w.findAll('.detail-artwork-grid img').map(img => img.attributes('src'))).toEqual(images);
+    expect(w.findAll('.detail-artwork-grid img').every(img => img.attributes('loading') === 'lazy')).toBe(true);
     await w.findAll('button').find(b => b.text() === '复制磁力')!.trigger('click');
     expect(write).toHaveBeenCalledWith(magnet);
     expect(w.findAll('a[href^="magnet:"]')).toHaveLength(0);

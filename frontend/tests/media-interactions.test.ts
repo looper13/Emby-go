@@ -105,7 +105,7 @@ describe('media controls', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' })); await flushPromises();
     expect(gallery.find('.artwork-image').attributes('src')).toBe('/Items/5/Images/Backdrop/1?tag=t1'); expect(gallery.find('#artwork-title').text()).toBe('剧照 2 / 3');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await flushPromises();
-    expect(gallery.find('#artwork-overlay').exists()).toBe(false); expect(document.body.style.overflow).toBe(''); expect(document.activeElement).toBe(thumbs[1]!.element);
+    expect(gallery.find('#artwork-overlay').exists()).toBe(false); expect(document.body.style.overflow).toBe(''); expect(document.activeElement).toBe(thumbs[2]!.element);
   });
 });
 describe('player lifetime', () => {

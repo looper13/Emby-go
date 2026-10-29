@@ -10,7 +10,7 @@ import { usePlayerStore } from '../src/stores/player';
 
 const route = reactive({ name: 'r18-detail', fullPath: '/r18/2/item/video', params: { libraryId: '2', id: 'video' }, query: {} });
 vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => ({ push: vi.fn() }) }));
-const video: R18Video = { id: 'video', content_id: 'fixture', service_code: 'javdb', number: 'TEST-001', title: '隔离测试影片', original_title: '', release_date: '', cover_url: '', images: [], duration: 90, score: 0, magnets_count: 1, has_local: true };
+const video: R18Video = { id: 'video', content_id: 'fixture', service_code: 'javdb', number: 'TEST-001', title: '隔离测试影片', original_title: '', release_date: '', cover_url: '', images: [], duration: 90, score: 0, magnets_count: 1, has_local: true, tags: [], has_preview: false, preview_url: '' };
 const sources: R18LocalSource[] = [
   { id: 'strm-51', item_id: '51', name: '已有影片-高清.strm', library_name: '本地资料库', container: 'mp4' },
   { id: 'strm-52', item_id: '52', name: '已有影片-另一版.strm', library_name: '另一资料库', container: 'mkv' },

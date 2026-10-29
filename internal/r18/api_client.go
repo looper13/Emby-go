@@ -16,9 +16,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const MaxImages = 100
+const MaxMovieTags = 64
+const MaxMovieTagRunes = 120
 const apiBodyLimit = 8 << 20
 
 type Config struct {
@@ -120,7 +123,12 @@ type apiMovie struct {
 	Duration     int      `json:"duration"`
 	Score        apiScore `json:"score"`
 	MagnetsCount int      `json:"magnets_count"`
-	Images       []struct {
+	Tags         []struct {
+		Name string `json:"name"`
+	} `json:"tags"`
+	HasPreviewVideo bool   `json:"has_preview_video"`
+	PreviewVideoURL string `json:"preview_video_url"`
+	Images          []struct {
 		LargeURL string `json:"large_url"`
 		ThumbURL string `json:"thumb_url"`
 	} `json:"preview_images"`
@@ -155,6 +163,7 @@ var movieIdentity = regexp.MustCompile(`^[A-Za-z0-9_-]{1,120}$`)
 func (m apiMovie) video() (Video, bool) {
 	v := Video{ContentID: m.ID, ServiceCode: "javdb", Number: strings.TrimSpace(m.Number), Title: m.Title,
 		OriginalTitle: m.OriginTitle, ReleaseDate: m.ReleaseDate, CoverURL: SafeHTTPURL(m.CoverURL), Images: []string{},
+		Tags: []string{}, HasPreview: m.HasPreviewVideo, PreviewURL: SafeHTTPURL(m.PreviewVideoURL),
 		Duration: max(m.Duration, 0), Score: max(float64(m.Score), 0), MagnetsCount: max(m.MagnetsCount, 0)}
 	if !movieIdentity.MatchString(m.ID) || v.Number == "" {
 		return v, false
@@ -168,6 +177,28 @@ func (m apiMovie) video() (Video, bool) {
 	}
 	if v.CoverURL == "" {
 		v.CoverURL = SafeHTTPURL(m.ThumbURL)
+	}
+	// 影片题材只取详情 tags[].name，与磁力资源的字幕、清晰度标签分开。
+	seenTags := map[string]bool{}
+	for _, tag := range m.Tags {
+		name := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, tag.Name)
+		name = strings.Join(strings.Fields(name), " ")
+		runes := []rune(name)
+		if len(runes) > MaxMovieTagRunes {
+			name = strings.TrimSpace(string(runes[:MaxMovieTagRunes]))
+		}
+		if name != "" && !seenTags[name] {
+			seenTags[name] = true
+			v.Tags = append(v.Tags, name)
+		}
+		if len(v.Tags) == MaxMovieTags {
+			break
+		}
 	}
 	seen := map[string]bool{}
 	for _, image := range m.Images {

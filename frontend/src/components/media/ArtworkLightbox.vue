@@ -1,27 +1,41 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref } from 'vue';
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ChevronLeft, ChevronRight, X } from '@lucide/vue';
 import type { ImageDto } from '../../api/contracts';
 import { imageURL } from '../../lib/image-url';
-const props = defineProps<{ id: number; images: ImageDto[]; index: number }>();
+const props = withDefaults(defineProps<{ id?: number; images?: ImageDto[]; urls?: string[]; index: number }>(), { images: () => [] });
 const emit = defineEmits<{ close: [index: number] }>();
 const shell = ref<HTMLElement>();
 const closeButton = ref<HTMLButtonElement>();
-const current = ref(Math.max(0, Math.min(props.index, props.images.length - 1)));
+const count = computed(() => props.urls?.length ?? props.images.length);
+const clamp = (index: number) => Math.max(0, Math.min(index, count.value - 1));
+const current = ref(clamp(props.index));
 let previousOverflow = '';
+let locked = false;
 function source(at: number) {
+  if (props.urls !== undefined) return props.urls[at] ?? '';
   const image = props.images[at];
-  return image ? imageURL(props.id, 'Backdrop', undefined, image.ImageTag, image.ImageIndex) : '';
+  return image && props.id !== undefined ? imageURL(props.id, 'Backdrop', undefined, image.ImageTag, image.ImageIndex) : '';
 }
-const many = computed(() => props.images.length > 1);
+const many = computed(() => count.value > 1);
 // 预取相邻剧照原图，左右切换时不必等图片重新下载。
 const neighbors = computed(() =>
   many.value
-    ? [...new Set([(current.value + 1) % props.images.length, (current.value - 1 + props.images.length) % props.images.length])].map(source)
+    ? [...new Set([(current.value + 1) % count.value, (current.value - 1 + count.value) % count.value].map(source))].filter(Boolean)
     : [],
 );
-function step(delta: number) { current.value = (current.value + delta + props.images.length) % props.images.length; }
+function step(delta: number) { if (count.value) current.value = (current.value + delta + count.value) % count.value; }
 function close() { emit('close', current.value); }
+function release() {
+  if (!locked) return;
+  document.body.style.overflow = previousOverflow;
+  window.removeEventListener('keydown', keyboard, true);
+  locked = false;
+}
+watch([() => props.index, count], ([index]) => {
+  current.value = clamp(index);
+  if (!count.value) { release(); close(); }
+});
 function keyboard(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault();
@@ -61,18 +75,17 @@ function keyboard(event: KeyboardEvent) {
   }
 }
 onMounted(() => {
+  if (!count.value) { close(); return; }
   previousOverflow = document.body.style.overflow;
   document.body.style.overflow = 'hidden';
+  locked = true;
   closeButton.value?.focus();
   window.addEventListener('keydown', keyboard, true);
 });
-onScopeDispose(() => {
-  document.body.style.overflow = previousOverflow;
-  window.removeEventListener('keydown', keyboard, true);
-});
+onScopeDispose(release);
 </script>
 <template>
-  <div id="artwork-overlay" class="artwork-overlay" @click.self="close()">
+  <div v-if="count" id="artwork-overlay" class="artwork-overlay" @click.self="close()">
     <div
       ref="shell"
       class="artwork-shell"
@@ -81,7 +94,7 @@ onScopeDispose(() => {
       aria-labelledby="artwork-title"
     >
       <div class="artwork-head">
-        <strong id="artwork-title">剧照 {{ current + 1 }} / {{ images.length }}</strong
+        <strong id="artwork-title">剧照 {{ current + 1 }} / {{ count }}</strong
         ><button
           id="artwork-close"
           ref="closeButton"

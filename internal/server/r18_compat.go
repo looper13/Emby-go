@@ -103,6 +103,9 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。在线磁力请在网页详情查看，管理员可通过 115 准备播放源。",
 		"People":      []gin.H{}, "Genres": []string{}, "Tags": []string{}, "Studios": []gin.H{},
 	}
+	if len(v.Tags) > 0 {
+		item["Tags"] = v.Tags
+	}
 	if date, err := time.Parse("2006-01-02", v.ReleaseDate); err == nil {
 		item["PremiereDate"], item["ProductionYear"] = normalizeDate(v.ReleaseDate), date.Year()
 	}

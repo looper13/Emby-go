@@ -5,6 +5,7 @@ export interface R18Video {
   id: string; content_id: string; service_code: string; number: string; title: string;
   original_title: string; release_date: string; cover_url: string; images: string[];
   duration: number; score: number; magnets_count: number; has_local: boolean;
+  tags: string[]; has_preview: boolean; preview_url: string;
 }
 export interface R18Page {
   items: R18Video[]; page: number; page_size: number; has_more: boolean; has_previous: boolean;
@@ -34,12 +35,16 @@ export function safeR18URL(raw: string): string {
 export function safeR18ImageURL(raw: string): string {
   return /^\/api\/r18\/libraries\/[1-9]\d*\/videos\/[A-Za-z0-9_-]{1,1024}\/images\/(poster|cover|[0-9]|[1-9][0-9])$/u.test(raw) ? raw : '';
 }
+export function safeR18PreviewURL(raw: string): string {
+  return /^\/api\/r18\/libraries\/[1-9]\d*\/videos\/[A-Za-z0-9_-]{1,1024}\/preview\.(?:m3u8|mp4)$/u.test(raw) ? raw : '';
+}
 export function parseR18Video(v: unknown): R18Video {
   const r = record(v);
   return { id: str(r.id), content_id: str(r.content_id), service_code: str(r.service_code), number: str(r.number),
     title: str(r.title), original_title: str(r.original_title), release_date: str(r.release_date),
     cover_url: safeR18ImageURL(str(r.cover_url)), images: list(r.images).map(str).map(safeR18ImageURL).filter(Boolean),
-    duration: finite(r.duration), score: finite(r.score), magnets_count: num(r.magnets_count), has_local: bool(r.has_local) };
+    duration: finite(r.duration), score: finite(r.score), magnets_count: num(r.magnets_count), has_local: bool(r.has_local),
+    tags: [...new Set(list(r.tags).map(str).map(tag => tag.trim()).filter(Boolean))], has_preview: bool(r.has_preview), preview_url: safeR18PreviewURL(str(r.preview_url)) };
 }
 export function parseR18LocalSource(v: unknown): R18LocalSource {
   const r = record(v), id = str(r.id), itemId = str(r.item_id);

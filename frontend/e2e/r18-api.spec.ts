@@ -1,5 +1,7 @@
 import type { BrowserContext, Page } from '@playwright/test';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { test, expect } from './fixtures';
 import type { R18LocalSource } from '../src/api/r18';
 
@@ -13,12 +15,16 @@ const apiAddress = 'https://avdb.fixture.invalid';
 const poster = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900"><rect width="600" height="900" fill="#183e4a"/><rect x="60" y="120" width="480" height="660" rx="24" fill="#cfb87c"/></svg>';
 const videosPath = `/api/r18/libraries/${libraryId}/videos`;
 const detailPath = `${videosPath}/${videoId}`;
+const previewPath = `${detailPath}/preview.m3u8`;
+const previewSegmentPath = `${detailPath}/preview/e2e-session/segment-0`;
 const connectionPath = `/api/admin/r18/libraries/${libraryId}`;
+const samplePath = fileURLToPath(new URL('../../internal/server/testdata/probe-sample.mp4', import.meta.url));
 const video = {
   id: videoId, content_id: 'fixture001', service_code: 'javdb', number,
   title: 'JavDB 在线测试影片', original_title: '在线资源隔离夹具', release_date: '2026-01-02',
   cover_url: imageBase + 'poster', images: [0, 1, 2].map(index => imageBase + index),
   duration: 120, score: 8.6, magnets_count: 13, has_local: false,
+  tags: ['隔离剧情', '高清样本', '测试标签'], has_preview: true, preview_url: previewPath,
 };
 const localSources: R18LocalSource[] = [
   { id: 'strm-70001', item_id: '70001', name: '本地高清测试版本.strm', library_name: '隔离本地资料库', container: 'mp4' },
@@ -26,7 +32,17 @@ const localSources: R18LocalSource[] = [
 ];
 type CatalogQuery = Record<string, string>;
 type LoginEnvironment = { baseURL: string; credentials: { username: string; password: string } };
-type ImageFailureOptions = { imageFailures?: number; singleItem?: boolean };
+type JavDBMockOptions = { imageFailures?: number; singleItem?: boolean; noPreview?: boolean; noTags?: boolean; previewSegment?: string };
+
+async function preparePreviewSample(output: string) {
+  // 从仓库样本生成本次独立报告中的 TS 片段；不依赖外站，也不改写或清理已有样本。
+  await promisify(execFile)(process.env.EMBY_E2E_FFMPEG || 'ffmpeg', [
+    '-nostdin', '-v', 'error', '-stream_loop', '11', '-i', samplePath,
+    '-t', '6', '-map', '0', '-c', 'copy', '-bsf:v', 'h264_mp4toannexb',
+    '-f', 'mpegts', output,
+  ], { windowsHide: true, timeout: 20_000 });
+  return output;
+}
 
 async function assertNoHorizontalOverflow(page: Page) {
   await expect.poll(() => page.evaluate(() => ({
@@ -35,7 +51,7 @@ async function assertNoHorizontalOverflow(page: Page) {
   }))).toEqual({ document: true, body: true });
 }
 
-async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, sources: R18LocalSource[] = [], options: ImageFailureOptions = {}) {
+async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, sources: R18LocalSource[] = [], options: JavDBMockOptions = {}) {
   const errors: string[] = [];
   const queries: CatalogQuery[] = [];
   const saved: Record<string, unknown>[] = [];
@@ -43,10 +59,21 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
   const externalRequests: string[] = [];
   const offlineRequests: string[] = [], localRequests: string[] = [], mediaRequests: string[] = [];
   const imageRequests: string[] = [];
-  const currentVideo = { ...video, has_local: sources.length > 0 };
+  const previewRequests: string[] = [], playbackRequests: string[] = [];
+  const currentVideo = {
+    ...video, has_local: sources.length > 0,
+    tags: options.noTags ? [] : video.tags,
+    has_preview: !options.noPreview, preview_url: options.noPreview ? '' : previewPath,
+  };
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => {
-    if (new URL(request.url()).origin !== baseURL) externalRequests.push('出现非隔离服务请求');
+    const url = new URL(request.url());
+    if (url.origin !== baseURL) externalRequests.push('出现非隔离服务请求');
+    // 请求监听独立于 mock 分支，错误的正片调用即使返回失败也不能漏检。
+    if (/^\/Items\/[^/]+\/PlaybackInfo$/u.test(url.pathname) || url.pathname.startsWith('/Videos/') ||
+      url.pathname.startsWith('/Sessions/Playing') || /^\/Users\/[^/]+\/PlayedItems(?:\/|$)/u.test(url.pathname)) {
+      playbackRequests.push(`${request.method()} ${url.pathname}`);
+    }
   });
   let library = { Id: libraryId, Name: 'JavDB 在线测试资料库', Path: '', SourceType: 'avdb_javdb', Revision: 7, Type: 'movies' };
 
@@ -54,7 +81,17 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
   await context.route(`${baseURL}/api/**`, async route => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname.startsWith(imageBase)) {
+    if (url.pathname === previewPath || url.pathname === previewSegmentPath) {
+      previewRequests.push(url.pathname + url.search);
+      if (options.noPreview || !options.previewSegment || request.method() !== 'GET' || url.search) {
+        unexpectedRequests.push('预览请求不符合隔离夹具契约');
+        await route.fulfill({ status: 404 });
+      } else if (url.pathname === previewPath) {
+        const manifest = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:6', '#EXT-X-MEDIA-SEQUENCE:0',
+          '#EXT-X-PLAYLIST-TYPE:VOD', '#EXTINF:6.000,', previewSegmentPath, '#EXT-X-ENDLIST', ''].join('\n');
+        await route.fulfill({ contentType: 'application/vnd.apple.mpegurl', body: manifest, headers: { 'Cache-Control': 'no-store' } });
+      } else await route.fulfill({ path: options.previewSegment, contentType: 'video/mp2t', headers: { 'Cache-Control': 'no-store' } });
+    } else if (url.pathname.startsWith(imageBase)) {
       imageRequests.push(url.pathname + url.search);
       // 单卡片夹具让同 URL 的失败次数可精确验证，不依赖浏览器合并多个图片请求。
       if (url.pathname === imageBase + 'poster' && imageRequests.length <= (options.imageFailures || 0)) {
@@ -121,12 +158,12 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
         unexpectedRequests.push(pathname); await route.fulfill({ status: 404 }); return;
       }
       mediaRequests.push(pathname);
-      await route.fulfill({ path: fileURLToPath(new URL('../../internal/server/testdata/probe-sample.mp4', import.meta.url)), contentType: 'video/mp4' });
+      await route.fulfill({ path: samplePath, contentType: 'video/mp4' });
     });
     await context.route(`${baseURL}/Sessions/Playing/**`, route => route.fulfill({ status: 204 }));
     await context.route(`${baseURL}/Users/*/PlayedItems/**`, route => route.fulfill({ status: 204 }));
   }
-  return { errors, queries, saved, unexpectedRequests, externalRequests, offlineRequests, localRequests, mediaRequests, imageRequests };
+  return { errors, queries, saved, unexpectedRequests, externalRequests, offlineRequests, localRequests, mediaRequests, imageRequests, previewRequests, playbackRequests };
 }
 type JavDBMock = Awaited<ReturnType<typeof mockJavDB>>;
 
@@ -159,6 +196,14 @@ function expectSafeMock(mock: JavDBMock) {
   expect(mock.errors).toEqual([]);
   expect(mock.unexpectedRequests).toEqual([]);
   expect(mock.externalRequests).toEqual([]);
+}
+
+function expectPreviewIsolation(mock: JavDBMock) {
+  expect(mock.offlineRequests).toEqual([]);
+  expect(mock.localRequests).toEqual([]);
+  expect(mock.mediaRequests).toEqual([]);
+  expect(mock.playbackRequests).toEqual([]);
+  expectSafeMock(mock);
 }
 
 test('JavDB 页码、每页数量与分类筛选排序变动保持一致', async ({ page, context, live }, info) => {
@@ -256,7 +301,7 @@ test('JavDB 详情返回恢复页码筛选，关键词搜索仅按相关性查�
   expectSafeMock(mock);
 });
 
-test('JavDB 完整剧照与留空 API Key 保存保持安全', async ({ page, context, live }, info) => {
+test('JavDB 共用剧照灯箱、影片标签与留空 API Key 保存保持安全', async ({ page, context, live }, info) => {
   test.setTimeout(60_000);
   const mock = await mockJavDB(context, page, live.baseURL);
   await login(page, live);
@@ -265,19 +310,60 @@ test('JavDB 完整剧照与留空 API Key 保存保持安全', async ({ page, co
   await expect(page.locator('.r18-detail-info')).toContainText(video.title);
   await expect(page.locator('.r18-resources')).toContainText('JavDB 磁力列表');
   await expect(page.locator('.r18-magnet-text')).toHaveText(magnet);
-  await expect(page.locator('.r18-gallery a')).toHaveCount(3);
-  await expect(page.locator('.r18-gallery img')).toHaveCount(3);
+  const thumbs = page.locator('.detail-artwork-grid button');
+  await expect(thumbs).toHaveCount(3);
+  await expect(page.locator('.detail-artwork-grid img')).toHaveCount(3);
   for (let index = 0; index < 3; index++) {
-    const link = page.locator('.r18-gallery a').nth(index);
-    await expect(link).toHaveAttribute('href', imageBase + index);
-    await expect(link).toHaveAttribute('target', '_blank');
-    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    const image = page.locator('.r18-gallery img').nth(index);
+    await expect(thumbs.nth(index)).toHaveAttribute('aria-label', `查看剧照 ${index + 1}`);
+    const image = thumbs.nth(index).locator('img');
     await image.scrollIntoViewIfNeeded();
     await expect(image).toHaveAttribute('src', imageBase + index);
     await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0)).toBe(true);
   }
-  await expect(page.locator('#content')).toContainText('3 张剧照');
+  const tags = page.locator('.r18-film-metadata .detail-meta-row dd');
+  await expect(tags).toHaveText(video.tags.join(' '));
+  await expect(page.locator('.r18-film-metadata button, .r18-film-metadata a')).toHaveCount(0);
+  await expect(page.locator('#item-trailer')).toBeVisible();
+  expect(mock.previewRequests).toEqual([]);
+
+  // 同一套灯箱在桌面与手机都覆盖视口，支持键盘、点击翻页与原触发按钮焦点恢复。
+  const opener = thumbs.nth(1);
+  await opener.click();
+  const overlay = page.locator('#artwork-overlay');
+  await expect(overlay.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
+  await expect(page.locator('#artwork-title')).toHaveText('剧照 2 / 3');
+  await expect(page.locator('.artwork-image')).toHaveAttribute('src', imageBase + '1');
+  await expect.poll(() => overlay.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    return { left: box.left, top: box.top, width: box.width === innerWidth, height: box.height === innerHeight };
+  })).toEqual({ left: 0, top: 0, width: true, height: true });
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#artwork-title')).toHaveText('剧照 3 / 3');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#artwork-title')).toHaveText('剧照 1 / 3');
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('#artwork-title')).toHaveText('剧照 3 / 3');
+  await page.locator('#artwork-prev').click();
+  await expect(page.locator('#artwork-title')).toHaveText('剧照 2 / 3');
+  await page.locator('#artwork-next').click();
+  await expect(page.locator('#artwork-title')).toHaveText('剧照 3 / 3');
+  await expect(page.locator('.artwork-image')).toHaveAttribute('src', imageBase + '2');
+  await expect.poll(() => page.locator('.artwork-image').evaluate(element => (element as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await page.locator('#artwork-close').focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.locator('#artwork-next')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#artwork-close')).toBeFocused();
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-gallery-lightbox.png'), animations: 'disabled' });
+  await page.locator('#artwork-close').click();
+  await expect(overlay).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await thumbs.first().click();
+  await page.locator('#artwork-next').click();
+  await page.keyboard.press('Escape');
+  await expect(overlay).toHaveCount(0);
+  await expect(thumbs.first()).toBeFocused();
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: info.outputPath('javdb-detail.png'), fullPage: true, animations: 'disabled' });
 
@@ -310,6 +396,89 @@ test('JavDB 完整剧照与留空 API Key 保存保持安全', async ({ page, co
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: info.outputPath('javdb-api-config.png'), fullPage: true, animations: 'disabled', mask: [page.locator('input[type=password]')] });
   expectSafeMock(mock);
+});
+
+test('JavDB 预览真实播放仅读取第一方HLS，不进入115或正片状态链', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  const previewSegment = await preparePreviewSample(info.outputPath('preview-sample.ts'));
+  const mock = await mockJavDB(context, page, live.baseURL, localSources, { previewSegment, singleItem: true });
+  await login(page, live);
+  await page.locator('.r18-card').first().click();
+  const preview = page.locator('#item-trailer');
+  await expect(preview).toBeVisible();
+  await expect(page.locator('#detail-play')).toHaveText('播放本地 STRM');
+  expect(mock.previewRequests).toEqual([]);
+  expectPreviewIsolation(mock);
+
+  await preview.click();
+  await expect(page.locator('#player-overlay')).toBeVisible();
+  await expect(page.locator('#player-title')).toHaveText('预览视频 · ' + video.title);
+  await expect.poll(() => mock.previewRequests).toEqual([previewPath, previewSegmentPath]);
+  const player = page.locator('#player-stage video');
+  await expect(player).toBeVisible();
+  await expect.poll(() => player.evaluate(element => (element as HTMLVideoElement).currentTime)).toBeGreaterThan(0);
+  await expect(page.locator('.player-track-toolbar')).toHaveCount(0);
+  expectPreviewIsolation(mock);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-preview-playing.png'), animations: 'disabled' });
+
+  // 结束与关闭都会触发普通影片状态回写；预览没有影片标识，必须在这两条路径上保持零写入。
+  await player.evaluate(element => element.dispatchEvent(new Event('ended')));
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#player-overlay')).toHaveCount(0);
+  await expect(preview).toBeFocused();
+  await page.waitForTimeout(200);
+  expectPreviewIsolation(mock);
+  expect(mock.previewRequests).toEqual([previewPath, previewSegmentPath]);
+});
+
+test('JavDB 缺少预览与影片标签时不渲染虚假入口', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  const mock = await mockJavDB(context, page, live.baseURL, localSources, { noPreview: true, noTags: true, singleItem: true });
+  await login(page, live);
+  await page.locator('.r18-card').first().click();
+  await expect(page.locator('.r18-detail-info')).toContainText(video.title);
+  await expect(page.locator('.detail-artwork-grid button')).toHaveCount(3);
+  await expect(page.locator('.r18-film-metadata')).toHaveCount(0);
+  await expect(page.locator('#item-trailer')).toHaveCount(0);
+  await expect(page.locator('#player-overlay')).toHaveCount(0);
+  await expect(page.locator('#detail-play')).toHaveText('播放本地 STRM');
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-detail-no-preview.png'), fullPage: true, animations: 'disabled' });
+  expect(mock.previewRequests).toEqual([]);
+  expectPreviewIsolation(mock);
+});
+
+test('JavDB 隐藏媒体图片后封面、剧照和预览缩略图零请求，预览仍可播放', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  await context.addInitScript(() => localStorage.setItem('emby_hide_media_images', 'true'));
+  const previewSegment = await preparePreviewSample(info.outputPath('preview-sample.ts'));
+  const mock = await mockJavDB(context, page, live.baseURL, localSources, { previewSegment, singleItem: true });
+  await login(page, live);
+  await expect(page.locator('html')).toHaveAttribute('data-hide-media', 'true');
+  await expect(page.locator('.r18-card img')).toHaveCount(0);
+  await page.locator('.r18-card').first().click();
+  await expect(page.locator('.r18-detail-info')).toContainText(video.title);
+  await expect(page.locator('.r18-detail-cover img')).toHaveCount(0);
+  await expect(page.locator('.detail-artwork-grid')).toHaveCount(0);
+  const preview = page.locator('#item-trailer');
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('img')).toHaveCount(0);
+  await expect(page.locator('.r18-film-metadata .detail-meta-row dd')).toHaveText(video.tags.join(' '));
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(750);
+  expect(mock.imageRequests).toEqual([]);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-images-hidden.png'), fullPage: true, animations: 'disabled' });
+
+  await preview.click();
+  await expect.poll(() => mock.previewRequests).toEqual([previewPath, previewSegmentPath]);
+  await expect.poll(() => page.locator('#player-stage video').evaluate(element => (element as HTMLVideoElement).currentTime)).toBeGreaterThan(0);
+  await page.locator('#player-close').click();
+  await expect(page.locator('#player-overlay')).toHaveCount(0);
+  await expect(preview).toBeFocused();
+  expect(mock.imageRequests).toEqual([]);
+  expectPreviewIsolation(mock);
 });
 
 test('JavDB 优先播放已存在的本地STRM，切换版本全过程零115请求', async ({ page, context, live }, info) => {

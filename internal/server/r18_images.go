@@ -45,13 +45,22 @@ func (a *App) cacheR18Video(l store.Library, v r18.Video, detail bool) {
 
 func (a *App) r18Presentation(l store.Library, v r18.Video) r18.Video {
 	a.cacheR18Video(l, v, false)
-	base := "/api/r18/libraries/" + strconv.FormatInt(l.ID, 10) + "/videos/" + v.ID + "/images/"
+	base := "/api/r18/libraries/" + strconv.FormatInt(l.ID, 10) + "/videos/" + v.ID
+	// 上游预览链接只留在私有资料缓存，浏览器始终使用第一方鉴权入口。
+	preview := v.PreviewURL
+	v.PreviewURL = ""
+	if v.HasPreview && r18.SafeHTTPURL(preview) != "" {
+		v.PreviewURL = base + "/preview" + r18PreviewExtension(preview)
+	}
+	if v.Tags == nil {
+		v.Tags = []string{}
+	}
 	if v.CoverURL != "" {
-		v.CoverURL = base + "poster"
+		v.CoverURL = base + "/images/poster"
 	}
 	images := make([]string, 0, len(v.Images))
 	for i := range v.Images {
-		images = append(images, base+strconv.Itoa(i))
+		images = append(images, base+"/images/"+strconv.Itoa(i))
 	}
 	v.Images = images
 	return v

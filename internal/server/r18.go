@@ -39,6 +39,12 @@ func (a *App) registerR18Routes(r *gin.Engine) {
 	browse.GET("/libraries/:lib/videos/:video/local-playback", a.bind((*App).r18LocalPlayback))
 	browse.GET("/libraries/:lib/videos/:video/images/:image", a.bind((*App).r18Image))
 	browse.HEAD("/libraries/:lib/videos/:video/images/:image", a.bind((*App).r18Image))
+	for _, extension := range []string{".m3u8", ".mp4"} {
+		browse.GET("/libraries/:lib/videos/:video/preview"+extension, a.bind((*App).r18Preview))
+		browse.HEAD("/libraries/:lib/videos/:video/preview"+extension, a.bind((*App).r18Preview))
+	}
+	browse.GET("/libraries/:lib/videos/:video/preview/:session/:resource", a.bind((*App).r18PreviewResource))
+	browse.HEAD("/libraries/:lib/videos/:video/preview/:session/:resource", a.bind((*App).r18PreviewResource))
 	admin := r.Group("/api/admin/r18", a.requireAuth, a.requireAdministrator, noStore)
 	admin.POST("/libraries", a.bind((*App).createR18Library))
 	admin.GET("/libraries/:id", a.bind((*App).r18LibraryConfig))

@@ -21,6 +21,9 @@ type Video struct {
 	Score         float64  `json:"score"`
 	MagnetsCount  int      `json:"magnets_count"`
 	HasLocal      bool     `json:"has_local"`
+	Tags          []string `json:"tags"`
+	HasPreview    bool     `json:"has_preview"`
+	PreviewURL    string   `json:"preview_url"`
 	CoverURL      string   `json:"cover_url"`
 	Images        []string `json:"images"`
 }
