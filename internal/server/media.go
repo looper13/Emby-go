@@ -1162,6 +1162,10 @@ func randomSessionID() string {
 }
 
 func (a *App) stream(c *gin.Context) {
+	if strings.HasPrefix(c.Param("id"), "r18-") {
+		a.r18Stream(c)
+		return
+	}
 	movie, sourcePath, ok := a.resolveStreamSource(c)
 	if !ok || !movie.IsVisible() {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})

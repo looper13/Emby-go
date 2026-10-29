@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, routerKey } from 'vue-router';
 import { adminApi } from '../api/admin';
 import { configLabels, systemConfigApi, type ConfigPatch } from '../api/system-config';
 import SystemConfigForm from '../components/settings/SystemConfigForm.vue';
+import Cloud115Settings from '../components/settings/Cloud115Settings.vue';
 import { useAdminRead } from '../composables/useAdminRead';
 import ReadState from '../components/common/ReadState.vue';
 const { data, loading, error, load } = useAdminRead(adminApi.settings);
@@ -56,4 +57,5 @@ const fields = computed(() => {
     <div v-if="data" class="table-wrap"><table><tbody><tr v-for="[label, value] in fields" :key="label"><th style="width:160px">{{ label }}</th><td class="mono" :data-private-path="label === '数据库' ? '' : undefined">{{ value }}</td></tr></tbody></table></div>
     <p class="hint">此处显示当前进程使用的配置。MetaTube、GFriends 与翻译选项请前往 <a href="#/scrape">刮削配置</a>。</p>
   </section>
+  <Cloud115Settings />
 </template>

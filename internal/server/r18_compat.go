@@ -112,6 +112,14 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 	}
 	// Seed only private source metadata; DTOs contain tags, never upstream URLs.
 	a.r18Presentation(l, v)
+	if sources := a.r18ReadySources(c, l, v.ID); len(sources) > 0 {
+		item["IsPlaceHolder"] = false
+		item["PlayAccess"] = "Full"
+		item["MediaSources"] = sources
+		item["LocationType"] = "Remote"
+		item["MediaStreams"] = sources[0]["MediaStreams"]
+		item["Overview"] = v.Number + " · " + l.Name + "\n115 已就绪播放源；下载和版本选择请在网页详情中管理。"
+	}
 	return item
 }
 
@@ -349,8 +357,35 @@ func (a *App) r18CompatItem(c *gin.Context) {
 }
 
 func (a *App) r18CompatPlayback(c *gin.Context) {
-	if _, _, ok := a.r18CompatVideo(c); ok {
-		c.JSON(200, gin.H{"MediaSources": []gin.H{}, "ErrorCode": "NoCompatibleStream", "Message": "R18 只读资料条目，播放接入待实现（TODO）"})
+	if l, v, ok := a.r18CompatVideo(c); ok {
+		sources := a.r18ReadySources(c, l, v.ID)
+		requested := c.Query("MediaSourceId")
+		if c.Request.Method == "POST" {
+			var body struct {
+				Source string `json:"MediaSourceId"`
+			}
+			if c.Request.ContentLength > 0 && c.ShouldBindJSON(&body) != nil {
+				c.Status(400)
+				return
+			}
+			if body.Source != "" {
+				requested = body.Source
+			}
+		}
+		if requested != "" {
+			selected := []gin.H{}
+			for _, s := range sources {
+				if s["Id"] == requested {
+					selected = append(selected, s)
+				}
+			}
+			sources = selected
+		}
+		if len(sources) == 0 {
+			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "R18 暂无就绪的 115 播放源，请管理员先完成离线下载和文件选择"})
+			return
+		}
+		c.JSON(200, gin.H{"MediaSources": sources, "PlaySessionId": randomSessionID()})
 	}
 }
 

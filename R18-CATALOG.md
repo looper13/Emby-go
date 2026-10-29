@@ -63,13 +63,32 @@ R18 来源现在进入 Emby 媒体库枚举；普通用户仍须授权该库。�
 - `GET /Users/{uid}/Items`、`/Items` 带该库 `ParentId` 可浏览，支持 `StartIndex`/`Limit`、`SearchTerm`（番号/内容 ID/标题）、年份、名称范围和排序。默认使用 `PremiereDate` / `Descending`，即 `release_date DESC NULLS LAST`；同日以内容 ID/来源稳定排序。客户端显式指定 `SortName` 时按标题、`PremiereDate`/`ProductionYear` 按发行日期排序，其它排序键（包括 `DateCreated`）回退发行日期；显式 `ContentId` 可按内容 ID 排。`Latest` 在 R18 库上下文始终按发行日期倒序返回，不表示真实入库时间。
 - 客户端 `TotalRecordCount` 是同条件下的实际计数，复用 30 秒计数缓存，不使用网页“源表约”的统计估计。偏移分页、标题排序/模糊搜索可能扫描大表，仍受单条 SQL 6 秒超时保护；超时返回可重试的 502，不修改源库索引。网页继续使用游标分页。
 - 影片 ID 为 `r18-{libraryID}-{原复合条目ID}`，区分不同库及 `(content_id, service_code)`；从列表取得的 ID 可用于 `/Items/{id}`、`/Users/{uid}/Items/{id}` 详情及 `/Items?Ids=...` 查询。列表与详情均保留 `dvd_id` 非空过滤。
-- 详情为不可播放的虚拟 Movie：`IsPlaceHolder=true`、`PlayAccess=None`、空 `MediaSources`/`MediaStreams`；不伪造播放地址、时长或入库时间。`PlaybackInfo` 返回 `NoCompatibleStream` 和空媒体源。磁力仍仅在网页详情展示。
+- 没有就绪文件时保持不可播放的虚拟 Movie：`IsPlaceHolder=true`、`PlayAccess=None`、空 `MediaSources`/`MediaStreams`，`PlaybackInfo` 返回 `NoCompatibleStream`。绑定已就绪的 115 文件后返回可播放来源和本服务签名播放入口，不伪造未知编码、时长或入库时间。
 - `/Items/{id}/Images` 提供图片标签；`/Images/Primary`、`Thumb` 及 `Backdrop/{index}` 经同一服务器代理返回，支持 GET/HEAD、ETag/304 和尺寸参数。Primary 在服务器裁成 2:3，横向封套取右侧正面，未指定尺寸时最大 `320×480`；其它图不裁剪。封面原图/派生尺寸使用上述两级缓存，剧照保留轻量内存缓存；转换复用既有像素上限及 CPU 并发限制，不支持解码的格式回退源图。
 - R18 图片须携带有效访问令牌（Header、api_key 等）或登录 Cookie；原有本地媒体的匿名图片兼容不变。所有 R18 图片缓存与 304 前重新检查授权，源站不收到客户端凭据。未建模的 Logo/Banner/Art 返回 404；已存在条目的相关推荐、合集、附加分段、特殊内容及时间轴预览返回空结果。
 
 ## 暂未实现（TODO）
 
-播放源接入、磁力下载、订阅及下载器集成均未实现。R18 不支持现有影片收藏、已看/进度和演员检索；不带 R18 `ParentId` 的跨库影片聚合、全局搜索、计数及首页推荐仍沿用本地 NFO 索引，不混入 PostgreSQL 来源。当前覆盖网页资料展示与 Emby 库内只读浏览，不把磁力当作 HTTP 视频流；具体 Yamby/Emby 客户端仍需实机确认。
+订阅、STRM 导出、视频代理/转码及其它下载器集成未实现。R18 不支持现有影片收藏、已看/进度和演员检索；不带 R18 `ParentId` 的跨库影片聚合、全局搜索、计数及首页推荐仍沿用本地 NFO 索引，不混入 PostgreSQL 来源。115 流程已接入但仍待真实网盘和具体 Yamby/Emby 客户端验收，不把磁力本身当作 HTTP 视频流。
+
+## 115 离线下载与播放
+
+1. 管理员进入“设置 / 115 连接”，填写 OAuth Access Token、Refresh Token 和现有非根工作文件夹 ID，点击“验证并保存”。不使用 Cookie；输入留空保留既有 Token，接口不回显。当前只支持同一共享账号更新凭证，不支持切换账号。
+2. 在 R18 详情资源卡片点击“115 离线下载”；服务端重新核验 article 资源归属，不使用浏览器传来的替代磁力。也可在详情的手动磁力框提交 BTIH 磁力（十六进制或 Base32），只允许管理员。
+3. 后台轮询 115，页面只查询本地任务。重复磁力复用同账号任务；提交超时或程序重启先对账，不自动再次提交。下载完成只扫描该任务结果目录，单个合格视频自动绑定，多个候选须选择“正片文件 / 设为默认播放源”。样片、图片和压缩包不作为视频。
+4. 页面“播放版本”选择已有来源；网页播放或外部客户端请求本服务 `/Videos/r18-.../stream`，权限和文件身份检查后按播放器实际 User-Agent 获取临时直链，返回 302。不传输视频正文、不转码，视频编码、出口 IP 或额外请求头限制需要真实客户端验收。可使用 PotPlayer 入口，浏览器本身可能不支持 MKV/H.265。
+
+队列有排队、提交/对账、下载、文件确认、待选、就绪、失败、超时、需要授权及已取消状态，显示阶段和脱敏原因。“取消本地等待”停止共享任务的本地等待，不取消或删除网盘任务/文件；重试回到当前阶段，不盲目从头下载。重新授权后在详情重试原任务。
+
+任务/凭证/文件绑定只存本地 SQLite，不写 PostgreSQL，不生成 NFO/STRM。绑定按媒体库配置修订隔离，换源后不会误用旧条目；每次播放重新检查账号启用和媒体库授权。旧目录库匿名流行为不变，115 来源必须登录或携带 6 小时的条目/来源/用户绑定播放票据；撤销授权或禁用账号立即拒绝，服务重启后旧票据失效。
+
+限流为同账号每个 HTTP 请求至少 1 秒；后台串行处理，每批最多 50 个到期任务，自适应轮询最高 300 秒，等待上限 24 小时。文件确认最多 10000 项/16 层，对账最多 100 页，超限提示未完成，不使用部分结果；失败退避最多 8 次后等待人工重试。临时直链不持久化、不使用封面缓存，每次播放重新获取。
+
+Token 使用 AES-GCM 加密，密钥位于 SQLite 同目录的 `.115.key`，Unix 0600 / Windows 受保护 DACL，仅当前服务账号和 SYSTEM 可读。**同时保密备份 SQLite 和 `.115.key`**；现有 `embybackup` 不自动复制此密钥，丢失密钥无法解密既有 Token。仓库忽略密钥，不把真实凭证放进配置样例、测试或截图。
+
+新增接口：`GET/PUT /api/admin/115/connection`；`GET/POST /api/r18/libraries/:lib/videos/:video/offline`；其下 `POST /selection`、`POST /tasks/:task/retry` 和 `POST /tasks/:task/cancel`。写接口仅管理员，查询普通用户只返回就绪来源，不暴露任务文件身份或 PickCode。
+
+2026-10-28 本地验证覆盖 SDK 夹具、真实 SQLite 关闭重开、队列/HTTP 权限及票据、前端单测和 1440/390 像素浏览器响应夹具。未使用真实 115 凭证提交任务，未进行真正视频 Range 播放、Linux 运行、生产部署或原生 Yamby 验收；详见 `codestable/issues/058-o-r18-115-offline-playback.md`。
 
 ## 验证方式
 

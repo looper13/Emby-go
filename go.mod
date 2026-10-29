@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.27.3
 
 require (
+	github.com/OpenListTeam/115-sdk-go v0.2.6
 	github.com/deepteams/webp v1.2.7
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.10.1
@@ -57,4 +58,5 @@ require (
 	modernc.org/libc v1.66.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+	resty.dev/v3 v3.0.0-beta.1 // indirect
 )

@@ -7,6 +7,8 @@ import { usePageRequest } from '../composables/usePageRequest';
 import { useToastStore } from '../stores/toasts';
 import MediaImage from '../components/media/MediaImage.vue';
 import R18Cover from '../components/media/R18Cover.vue';
+import R18OfflinePanel from '../components/media/R18OfflinePanel.vue';
+import { useAuthStore } from '../stores/auth';
 import ReadState from '../components/common/ReadState.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import { viewHistoryKey } from '../router/view-history';
@@ -14,6 +16,7 @@ import { viewHistoryKey } from '../router/view-history';
 const route = useRoute(), scope = usePageRequest(), resourceScope = usePageRequest(), toasts = useToastStore();
 const router = useRouter(), history = inject(viewHistoryKey, null);
 const video = ref<R18Video | null>(null), libraryName = ref('');
+const auth = useAuthStore(), offline = ref<InstanceType<typeof R18OfflinePanel> | null>(null);
 const loading = ref(false), error = ref(''), resourceLoading = ref(false), resourceError = ref('');
 const resources = ref<R18Resource[]>([]), hasMore = ref(false), offset = ref(0);
 const libraryId = computed(() => String(route.params.libraryId));
@@ -79,9 +82,10 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
         <h2>{{ video.title }}</h2>
         <p v-if="video.original_title && video.original_title !== video.title" class="r18-original">{{ video.original_title }}</p>
         <dl class="r18-facts"><div><dt>发行日期</dt><dd>{{ video.release_date || '未知' }}</dd></div><div><dt>内容 ID</dt><dd class="mono">{{ video.content_id }}</dd></div><div><dt>来源类型</dt><dd>{{ video.service_code }}</dd></div></dl>
-        <p class="r18-play-todo">播放接入待实现（TODO）。磁力仅供查看和复制，本期不启动播放器、下载器或订阅任务。</p>
+        <p class="r18-play-todo">管理员可将磁力提交到 115，离线完成后选择正片作为播放源。已有就绪版本供本库授权用户播放。</p>
       </div>
     </section>
+    <R18OfflinePanel ref="offline" :library="libraryId" :video="id" :title="video.title" />
     <section v-if="video.images.length" class="panel">
       <div class="panel-head"><h2>剧照</h2><span class="hint">当前资料提供的首末剧照</span></div>
       <div class="r18-gallery"><a v-for="image in video.images" :key="image" :href="image" target="_blank" rel="noopener noreferrer" aria-label="查看剧照原图"><MediaImage :src="image" alt="影片剧照" loading="lazy" referrerpolicy="no-referrer" /></a></div>
@@ -95,7 +99,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
         <div class="r18-resource-head"><h3>{{ r.title || r.number || '磁力资源' }}</h3><span>{{ size(r) }}</span></div>
         <div class="r18-resource-meta"><span>{{ r.website || '来源未知' }}</span><span>{{ r.date || '日期未知' }}</span><span v-for="tag in r.tags" :key="tag" class="r18-resource-tag">{{ tag }}</span></div>
         <code class="r18-magnet-text">{{ r.magnet }}</code>
-        <div class="r18-resource-actions"><button class="btn btn-sm btn-accent" @click="copy(r.magnet)"><Copy :size="14" aria-hidden="true" /> 复制磁力</button><a v-if="r.detail_url" class="btn btn-sm" :href="r.detail_url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" aria-hidden="true" /> 来源页面</a></div>
+        <div class="r18-resource-actions"><button v-if="auth.isAdministrator" class="btn btn-sm btn-accent" @click="offline?.submit(r.id)">115 离线下载</button><button class="btn btn-sm" @click="copy(r.magnet)"><Copy :size="14" aria-hidden="true" /> 复制磁力</button><a v-if="r.detail_url" class="btn btn-sm" :href="r.detail_url" target="_blank" rel="noopener noreferrer"><ExternalLink :size="14" aria-hidden="true" /> 来源页面</a></div>
       </article>
       <button v-if="hasMore" class="btn r18-more" :disabled="resourceLoading" @click="loadResources(true)">{{ resourceLoading ? '加载中…' : '加载更多资源' }}</button>
     </section>

@@ -16,10 +16,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"emby-go/internal/cache"
+	"emby-go/internal/cloud115"
 	"emby-go/internal/config"
 	"emby-go/internal/librarywatch"
 	"emby-go/internal/logging"
 	"emby-go/internal/metatube"
+	"emby-go/internal/offline"
 	"emby-go/internal/r18"
 	"emby-go/internal/scheduler"
 	"emby-go/internal/store"
@@ -134,6 +136,12 @@ type appState struct {
 	r18CoverWarnings   sync.Once
 	r18CoverMemory     *cache.Managed
 	r18CoverFiles      *cache.Files
+	cloud115Mu         sync.Mutex
+	cloud115Vault      *cloud115.Vault
+	cloud115Client     cloud115.Provider
+	cloud115Revision   int64
+	cloud115Open       func(cloud115.Tokens, func(cloud115.Tokens) error) cloud115.Provider
+	offlineService     *offline.Service
 }
 
 // scanStatus 管理端可轮询的扫描进度快照。
@@ -262,6 +270,7 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	// 启动自检：MetaTube 不可达只告警不阻断启动（与 ffprobe 探测的做法一致）——
 	// 元数据服务是外部依赖，它挂了不该让整个媒体库服务起不来。
 	go a.checkScrapeBackend()
+	a.offlineService = offline.New(a.rootCtx, db, a.cloudProvider)
 	ready = true
 	return a, nil
 }
@@ -288,6 +297,9 @@ func (a *App) checkScrapeBackend() {
 // 否则一次大库扫描会让停机一直卡到它自然结束。
 func (a *App) Close() {
 	a.rootCancel()
+	if a.offlineService != nil {
+		a.offlineService.Wait()
+	}
 	a.closeR18Clients()
 	a.mediaMu.Lock()
 	a.mediaMu.Unlock()
@@ -322,6 +334,7 @@ func (a *App) routes() {
 	r.POST("/api/auth/initialize", noStore, a.bind((*App).initialize))
 	r.GET("/api/browse/libraries", a.requireAuth, noStore, a.bind((*App).browseLibraries))
 	a.registerR18Routes(r)
+	a.registerCloud115Routes(r)
 	// Browser image requests use the read-only session cookie.
 	r.GET("/api/admin/scrape/image", a.requireAuth, a.requireAdministrator, a.bind((*App).adminScrapeImage))
 

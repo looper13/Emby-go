@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cloud115Api } from '../src/api/cloud115';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia } from 'pinia';
 import { reactive } from 'vue';
@@ -28,6 +29,7 @@ function render(component: typeof R18CatalogPage | typeof R18DetailPage | typeof
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); stores.splice(0).forEach(disposePinia); vi.restoreAllMocks(); router.push.mockReset(); router.replace.mockReset(); applyMediaVisibility(false); useCardSize().setSize('normal'); route.name = 'r18'; route.fullPath = '/r18?library_id=2'; route.query = { library_id: '2' }; route.params = {}; });
 
 describe('R18 library presentation', () => {
+  beforeEach(() => vi.spyOn(cloud115Api, 'state').mockResolvedValue({ configured: false, tasks: [], sources: [] }));
   it('shares card-size controls and saved preference with the media wall without reloading the catalog', async () => {
     vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
     const reads = vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
@@ -114,7 +116,7 @@ describe('R18 library presentation', () => {
     const write = vi.fn().mockResolvedValue(undefined); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: write } });
     const w = render(R18DetailPage); await flushPromises();
     expect(resources).toHaveBeenCalledWith('2', video.id, 0, expect.any(AbortSignal));
-    expect(w.text()).toContain('Article resource'); expect(w.text()).toContain('TODO');
+    expect(w.text()).toContain('Article resource'); expect(w.text()).toContain('115');
     expect(w.get('.r18-detail-cover img').attributes('src')).toBe(video.cover_url);
     expect(w.get('.r18-gallery a').attributes('href')).toBe(video.images[0]);
     expect(w.get('.r18-gallery img').attributes('src')).toBe(video.images[0]);

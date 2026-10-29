@@ -208,7 +208,7 @@ func (a *App) r18Video(c *gin.Context) {
 		a.r18Failure(c, "详情查询", e)
 		return
 	}
-	c.JSON(200, gin.H{"video": a.r18Presentation(l, v), "library_name": l.Name, "playable": false})
+	c.JSON(200, gin.H{"video": a.r18Presentation(l, v), "library_name": l.Name, "playable": len(a.r18ReadySources(c, l, v.ID)) > 0})
 }
 func (a *App) r18Resources(c *gin.Context) {
 	l, ok := a.r18Library(c)
