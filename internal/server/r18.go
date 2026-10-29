@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 type r18Source interface {
 	Check(context.Context) error
 	List(context.Context, r18.Query) (r18.Page, error)
+	Tags(context.Context, string) (r18.TagCatalog, error)
 	Get(context.Context, string) (r18.Video, error)
 	Resources(context.Context, r18.Video, int) (r18.ResourcePage, error)
 	Resource(context.Context, r18.Video, string) (r18.Resource, error)
@@ -33,6 +35,7 @@ type r18ClientEntry struct {
 func (a *App) registerR18Routes(r *gin.Engine) {
 	browse := r.Group("/api/r18", a.requireAuth, noStore)
 	browse.GET("/libraries", a.bind((*App).r18Libraries))
+	browse.GET("/libraries/:lib/tags", a.bind((*App).r18Tags))
 	browse.GET("/libraries/:lib/videos", a.bind((*App).r18Videos))
 	browse.GET("/libraries/:lib/videos/:video", a.bind((*App).r18Video))
 	browse.GET("/libraries/:lib/videos/:video/resources", a.bind((*App).r18Resources))
@@ -149,13 +152,9 @@ func (a *App) r18Libraries(c *gin.Context) {
 	c.JSON(200, gin.H{"items": items, "total": len(items)})
 }
 func r18BrowseQuery(c *gin.Context) (r18.Query, error) {
-	search := strings.TrimSpace(c.Query("search"))
-	defaultSort := "release"
-	if search != "" {
-		defaultSort = "relevance"
-	}
-	q := r18.Query{Search: search, Type: c.DefaultQuery("type", "all"), Filter: c.DefaultQuery("filter", "magnets"),
-		Sort: c.DefaultQuery("sort", defaultSort), Order: c.DefaultQuery("order", "desc"), Year: strings.TrimSpace(c.Query("year"))}
+	q := r18.Query{Search: c.Query("search"), Mode: c.Query("mode"), Type: c.Query("type"), Filter: c.Query("filter"),
+		Sort: c.Query("sort"), Order: c.Query("order"), Year: c.Query("year"), Period: c.Query("period"),
+		TagIDs: c.Query("tag_ids"), MainFilter: c.Query("main_filter"), Duration: c.Query("duration"), Month: c.Query("month")}
 	var err error
 	if q.Page, err = strconv.Atoi(c.DefaultQuery("page", "1")); err != nil || q.Page < 1 || q.Page > 9999 {
 		return q, errors.New("无效的页码")
@@ -163,10 +162,84 @@ func r18BrowseQuery(c *gin.Context) (r18.Query, error) {
 	if q.Limit, err = strconv.Atoi(c.DefaultQuery("limit", "24")); err != nil || q.Limit < 1 || q.Limit > 50 {
 		return q, errors.New("无效的每页条数")
 	}
-	return q, r18.ValidateQuery(q)
+	if raw, exists := c.GetQuery("ignore_watched"); exists {
+		switch raw {
+		case "true", "1":
+			q.IgnoreWatched = true
+		case "false", "0":
+		default:
+			return q, errors.New("无效的已看筛选条件")
+		}
+	}
+	if _, err = r18FreshRequested(c); err != nil {
+		return q, err
+	}
+	return r18.NormalizeQuery(q)
+}
+
+func r18FreshRequested(c *gin.Context) (bool, error) {
+	raw, exists := c.GetQuery("refresh")
+	if !exists || raw == "0" {
+		return false, nil
+	}
+	if raw == "1" {
+		return true, nil
+	}
+	return false, errors.New("无效的刷新条件")
+}
+
+func r18RequestContext(c *gin.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	if fresh, _ := r18FreshRequested(c); fresh {
+		ctx = r18.WithFresh(ctx)
+	}
+	// 上游查询与本地复查共享请求预算，不能查询完成后再累加超时。
+	c.Request = c.Request.WithContext(ctx)
+	return ctx, cancel
+}
+
+func r18Timing(c *gin.Context, upstream, local, total time.Duration) {
+	c.Header("Server-Timing", fmt.Sprintf("r18_upstream;dur=%.2f, r18_local;dur=%.2f, r18_total;dur=%.2f",
+		float64(upstream)/float64(time.Millisecond), float64(local)/float64(time.Millisecond), float64(total)/float64(time.Millisecond)))
+}
+
+func (a *App) r18Tags(c *gin.Context) {
+	started := time.Now()
+	library, ok := a.r18Library(c)
+	if !ok {
+		return
+	}
+	movieType := strings.TrimSpace(c.DefaultQuery("type", "all"))
+	if movieType != "all" && movieType != "0" && movieType != "1" && movieType != "2" && movieType != "3" && movieType != "4" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 JavDB 类别类型"})
+		return
+	}
+	if _, err := r18FreshRequested(c); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	client, err := a.r18Client(library)
+	if err != nil {
+		a.r18Failure(c, "连接", err)
+		return
+	}
+	ctx, cancel := r18RequestContext(c)
+	defer cancel()
+	upstreamStarted := time.Now()
+	catalog, err := client.Tags(ctx, movieType)
+	if err != nil {
+		a.r18Failure(c, "类别目录查询", err)
+		return
+	}
+	if catalog.Categories == nil {
+		catalog.Categories = []r18.TagCategory{}
+	}
+	r18Timing(c, time.Since(upstreamStarted), 0, time.Since(started))
+	c.JSON(http.StatusOK, catalog)
 }
 
 func (a *App) r18Videos(c *gin.Context) {
+	started := time.Now()
 	l, ok := a.r18Library(c)
 	if !ok {
 		return
@@ -181,24 +254,33 @@ func (a *App) r18Videos(c *gin.Context) {
 		a.r18Failure(c, "连接", e)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	ctx, cancel := r18RequestContext(c)
 	defer cancel()
+	upstreamStarted := time.Now()
 	page, e := client.List(ctx, q)
+	upstreamElapsed := time.Since(upstreamStarted)
 	if e != nil {
 		a.r18Failure(c, "列表查询", e)
 		return
 	}
+	localStarted := time.Now()
 	if e = a.prepareR18LocalSources(c, page.Items); e != nil {
 		a.r18Failure(c, "本地播放源查询", e)
 		return
 	}
+	localElapsed := time.Since(localStarted)
 	for i, v := range page.Items {
 		matches, _ := a.r18LocalMatches(c, v)
 		v.HasLocal = len(matches) > 0
 		page.Items[i] = a.r18Presentation(l, v)
 	}
 	l.Path = ""
-	c.JSON(200, gin.H{"items": page.Items, "page": page.Page, "page_size": page.PageSize, "has_more": page.HasMore, "has_previous": page.HasPrevious, "library": l})
+	result := gin.H{"items": page.Items, "page": page.Page, "page_size": page.PageSize, "has_more": page.HasMore, "has_previous": page.HasPrevious, "library": l}
+	if page.Total != nil {
+		result["total"] = *page.Total
+	}
+	r18Timing(c, upstreamElapsed, localElapsed, time.Since(started))
+	c.JSON(200, result)
 }
 func (a *App) r18Video(c *gin.Context) {
 	l, ok := a.r18Library(c)

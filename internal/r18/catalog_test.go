@@ -14,7 +14,7 @@ func TestR18APICatalogArbitraryOffsetsAcrossFiftyItemPages(t *testing.T) {
 	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
 		page, _ := strconv.Atoi(req.URL.Query().Get("page"))
 		requested = append(requested, page)
-		if req.URL.Path != "/api/v1/javdb/movies/tags" || req.URL.Query().Get("limit") != "50" || req.URL.Query().Get("sort_by") != "release" || req.URL.Query().Get("order_by") != "desc" {
+		if req.URL.Path != "/api/v1/javdb/movies/latest" || req.URL.Query().Get("filter_by") != "magnets" || req.URL.Query().Get("limit") != "50" || req.URL.Query().Get("sort_by") != "release" || req.URL.Query().Get("order_by") != "desc" {
 			t.Error("Emby偏移没有映射到有界上游页码")
 		}
 		movies := []apiMovie{}
@@ -35,8 +35,12 @@ func TestR18APICatalogArbitraryOffsetsAcrossFiftyItemPages(t *testing.T) {
 			t.Fatal("偏移起点漂移", tc)
 		}
 	}
-	if len(requested) != 6 || requested[1] != 1 || requested[2] != 2 {
+	if !reflect.DeepEqual(requested, []int{1, 2}) {
 		t.Fatal("跨页时上游请求范围不正确", requested)
+	}
+	fresh, err := client.CatalogPage(WithFresh(context.Background()), CatalogQuery{Start: 49, Limit: 4})
+	if err != nil || len(fresh.Items) != 4 || !fresh.HasMore || fresh.Items[0].ID != EncodeID(fixtureMovie(49).ID, "javdb") || !reflect.DeepEqual(requested, []int{1, 2, 1, 2}) {
+		t.Fatal("跨上游边界强制刷新没有重新读取两页或偏移位置漂移", err, requested)
 	}
 }
 

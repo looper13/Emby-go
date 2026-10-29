@@ -14,6 +14,7 @@ const magnet = `magnet:?xt=urn:btih:${magnetHash}`;
 const apiAddress = 'https://avdb.fixture.invalid';
 const poster = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900" viewBox="0 0 600 900"><rect width="600" height="900" fill="#183e4a"/><rect x="60" y="120" width="480" height="660" rx="24" fill="#cfb87c"/></svg>';
 const videosPath = `/api/r18/libraries/${libraryId}/videos`;
+const tagsPath = `/api/r18/libraries/${libraryId}/tags`;
 const detailPath = `${videosPath}/${videoId}`;
 const previewPath = `${detailPath}/preview.m3u8`;
 const previewSegmentPath = `${detailPath}/preview/e2e-session/segment-0`;
@@ -30,6 +31,26 @@ const localSources: R18LocalSource[] = [
   { id: 'strm-70001', item_id: '70001', name: '本地高清测试版本.strm', library_name: '隔离本地资料库', container: 'mp4' },
   { id: 'strm-70002', item_id: '70002', name: '本地第二测试版本.strm', library_name: '另一隔离资料库', container: 'mp4' },
 ];
+const tagCatalog = {
+  categories: [
+    { id: 'main', name: '基础条件', type: '0', tags: [
+      { id: 'p', name: '可预览', type: '0' }, { id: 'm', name: '有磁链', type: '0' },
+      { id: 'c', name: '中文字幕', type: '0' }, { id: 's', name: '单体影片', type: '0' },
+      { id: 'i', name: '高清图', type: '0' }, { id: 'v', name: '可播放', type: '0' },
+    ] },
+    { id: 'year', name: '年份', type: '0', tags: [{ id: '2024', name: '2024', type: '0' }] },
+    { id: 'month', name: '月份', type: '0', tags: [{ id: '12', name: '十二月', type: '0' }] },
+    { id: 'duration', name: '时长', type: '0', tags: [{ id: '45-90', name: '45 到 90 分钟', type: '0' }] },
+    { id: 'fixture-category-0', name: '测试题材', type: '0', tags: [
+      { id: '23', name: '隔离剧情', type: '0' }, { id: '1', name: '高清样本', type: '0' },
+      { id: '2', name: '测试类别二', type: '0' }, { id: '3', name: '测试类别三', type: '0' },
+      { id: '4', name: '测试类别四', type: '0' }, { id: '5', name: '测试类别五', type: '0' },
+    ] },
+    { id: 'fixture-category-1', name: '另一测试分类', type: '1', tags: [
+      { id: 'a-1', name: '另一隔离标签', type: '1' },
+    ] },
+  ],
+};
 type CatalogQuery = Record<string, string>;
 type LoginEnvironment = { baseURL: string; credentials: { username: string; password: string } };
 type JavDBMockOptions = { imageFailures?: number; singleItem?: boolean; noPreview?: boolean; noTags?: boolean; previewSegment?: string };
@@ -60,6 +81,7 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
   const offlineRequests: string[] = [], localRequests: string[] = [], mediaRequests: string[] = [];
   const imageRequests: string[] = [];
   const previewRequests: string[] = [], playbackRequests: string[] = [];
+  const tagQueries: CatalogQuery[] = [];
   const currentVideo = {
     ...video, has_local: sources.length > 0,
     tags: options.noTags ? [] : video.tags,
@@ -99,6 +121,12 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
       } else await route.fulfill({ contentType: 'image/svg+xml', body: poster, headers: { 'Cache-Control': 'no-store' } });
     } else if (url.pathname === '/api/admin/libraries' || url.pathname === '/api/r18/libraries') {
       await route.fulfill({ json: { items: [library], total: 1 } });
+    } else if (url.pathname === tagsPath) {
+      tagQueries.push(Object.fromEntries(url.searchParams));
+      if (![null, 'all', '0', '1', '2', '3', '4'].includes(url.searchParams.get('type')) || request.method() !== 'GET') {
+        unexpectedRequests.push('标签目录请求类型或方法不正确');
+        await route.fulfill({ status: 400, json: { error: '隔离夹具拒绝标签请求' } });
+      } else await route.fulfill({ json: tagCatalog });
     } else if (url.pathname === videosPath) {
       const query = Object.fromEntries(url.searchParams);
       queries.push(query);
@@ -109,14 +137,26 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
         return;
       }
       const currentPage = Number(query.page), pageSize = Number(query.limit);
-      const items = Array.from({ length: options.singleItem ? 1 : pageSize }, (_, index) => index === 0 ? currentVideo : {
+      const ranked = ['top250', 'ranking', 'playback', 'popular'].includes(query.mode || 'latest');
+      if (ranked && (query.filter !== 'all' || ['sort', 'order', 'tag_ids', 'main_filter'].some(key => url.searchParams.has(key)))) {
+        unexpectedRequests.push('榜单错误携带普通排序、分类或磁力过滤');
+        await route.fulfill({ status: 400, json: { error: '榜单参数不正确' } });
+        return;
+      }
+      const count = options.singleItem ? 1 : query.mode === 'top250' ? Math.max(0, Math.min(pageSize, 250 - (currentPage - 1) * pageSize)) : pageSize;
+      const items = Array.from({ length: count }, (_, index) => {
+        const item = index === 0 ? currentVideo : {
         ...currentVideo,
         id: Buffer.from(JSON.stringify([`fixture-${currentPage}-${index}`, 'javdb'])).toString('base64url'),
         content_id: `fixture-${currentPage}-${index}`,
         number: `TEST-${String(index + 1).padStart(3, '0')}`,
         title: `在线分页测试影片 ${currentPage}-${index + 1}`,
+        };
+        return ranked ? { ...item, rank: (currentPage - 1) * pageSize + index + 1 } : item;
       });
-      await route.fulfill({ json: { items, page: currentPage, page_size: pageSize, has_more: currentPage < 9999, has_previous: currentPage > 1 } });
+      await route.fulfill({ json: { items, page: currentPage, page_size: pageSize,
+        has_more: query.mode === 'top250' ? currentPage * pageSize < 250 : currentPage < 9999, has_previous: currentPage > 1,
+        ...(ranked && query.mode !== 'top250' ? { total: 96 } : {}) } });
     } else if (url.pathname === detailPath) {
       await route.fulfill({ json: { video: currentVideo, library_name: library.Name, playable: sources.length > 0, local_sources: sources } });
     } else if (url.pathname === `${detailPath}/local-playback`) {
@@ -163,7 +203,7 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
     await context.route(`${baseURL}/Sessions/Playing/**`, route => route.fulfill({ status: 204 }));
     await context.route(`${baseURL}/Users/*/PlayedItems/**`, route => route.fulfill({ status: 204 }));
   }
-  return { errors, queries, saved, unexpectedRequests, externalRequests, offlineRequests, localRequests, mediaRequests, imageRequests, previewRequests, playbackRequests };
+  return { errors, queries, saved, unexpectedRequests, externalRequests, offlineRequests, localRequests, mediaRequests, imageRequests, previewRequests, playbackRequests, tagQueries };
 }
 type JavDBMock = Awaited<ReturnType<typeof mockJavDB>>;
 
@@ -184,6 +224,18 @@ async function expectCatalog(page: Page, mock: JavDBMock, query: CatalogQuery) {
   await expect(page.locator('#r18-page-size')).toHaveValue(query.limit!);
   await expect(page.locator('#r18-jump-page')).toHaveValue(query.page!);
   await expect(page.locator('.r18-list-meta')).not.toContainText(/上游总数|源表|约\s*\d|共\s*\d+\s*条|估算/u);
+}
+
+async function expectRanking(page: Page, mock: JavDBMock, query: CatalogQuery, count = Number(query.limit)) {
+  await expect.poll(() => mock.queries.at(-1)).toEqual(query);
+  await expect(page.locator('.r18-grid')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('.r18-card')).toHaveCount(count);
+  await expect(page.locator('.r18-list-meta')).toContainText(`第 ${query.page} 页 · 本页 ${count} 条`);
+  await expect(page.locator('#r18-page-size')).toHaveValue(query.limit!);
+  await expect(page.locator('#r18-jump-page')).toHaveValue(query.page!);
+  await expect(page.locator(`#r18-mode-${query.mode}`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.r18-rank').first()).toHaveAttribute('data-rank', String((Number(query.page) - 1) * Number(query.limit) + 1));
+  for (const id of ['r18-filter', 'r18-sort', 'r18-order']) await expect(page.locator(`#${id}`)).toHaveCount(0);
 }
 
 async function jump(page: Page, mock: JavDBMock, query: CatalogQuery, target = '7') {
@@ -559,4 +611,153 @@ test('JavDB 封面两次503停止重试，手动列表刷新同URL后恢复', as
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: info.outputPath('javdb-image-manual-recovered.png'), fullPage: true, animations: 'disabled' });
   expectSafeMock(mock);
+});
+
+test('JavDB 分类标签与基础条件集中提交，最多五项并恢复详情返回条件', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  const mock = await mockJavDB(context, page, live.baseURL);
+  await login(page, live);
+  const latest = { type: 'all', filter: 'magnets', sort: 'release', order: 'desc', page: '1', limit: '24' };
+  await expectCatalog(page, mock, latest);
+  await page.locator('#r18-mode-categories').click();
+  let query: CatalogQuery = { ...latest, mode: 'categories' };
+  await expectCatalog(page, mock, query);
+  await expect.poll(() => mock.tagQueries).toEqual([{ type: 'all' }]);
+  const reads = mock.queries.length;
+  const group = page.locator('.r18-tag-group[data-r18-group="0-fixture-category-0"]');
+  await group.locator('summary').click();
+  for (const id of ['23', '1', '2', '3', '4']) await page.locator(`#r18-tag-0-${id}`).check();
+  await page.locator('#r18-tag-0-5').click();
+  await expect(page.locator('#r18-tag-0-5')).not.toBeChecked();
+  await expect(page.locator('#r18-category-warning')).toContainText('最多选 5');
+  for (const id of ['2', '3', '4']) await page.locator(`#r18-tag-0-${id}`).uncheck();
+  await page.locator('#r18-main-p').check();
+  await page.locator('#r18-main-m').check();
+  await page.locator('#r18-year').selectOption('2024');
+  await page.locator('#r18-month').selectOption('12');
+  await page.locator('#r18-duration').selectOption('45-90');
+  await page.locator('#r18-category-search').fill('隔离剧情');
+  await expect(page.locator('#r18-tag-0-23')).toBeVisible();
+  await expect(page.locator('#r18-tag-0-1')).toHaveCount(0);
+  await page.locator('#r18-category-search').fill('');
+  expect(mock.queries).toHaveLength(reads);
+  expect(mock.tagQueries).toHaveLength(1);
+  await page.locator('.r18-filters').getByRole('button', { name: '查询', exact: true }).click();
+  query = { ...query, year: '2024', month: '12', duration: '45-90', tag_ids: '0:1,0:23', main_filter: 'm,p' };
+  await expectCatalog(page, mock, query);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-categories-selected.png'), fullPage: true, animations: 'disabled' });
+  await jump(page, mock, query);
+  const categoryURL = page.url();
+  await page.locator('.r18-card').first().click();
+  await expect(page.locator('.r18-detail-info')).toContainText(video.title);
+  await page.getByRole('button', { name: '返回资料库', exact: true }).click();
+  await expect(page).toHaveURL(categoryURL);
+  await expectCatalog(page, mock, { ...query, page: '7' });
+  await expect(page.locator('#r18-year')).toHaveValue('2024');
+  await expect(page.locator('#r18-month')).toHaveValue('12');
+  await expect(page.locator('#r18-duration')).toHaveValue('45-90');
+  await expect(page.locator('.r18-selected-tags')).toContainText('0:1');
+  await expect(page.locator('.r18-selected-tags')).toContainText('0:23');
+
+  // 换类型只修改草稿，清空可能不适用于新类型的条件，查询时才重置第一页。
+  const beforeType = mock.queries.length;
+  await page.locator('#r18-type').selectOption('1');
+  await expect(page.locator('.r18-selected-tags')).toHaveCount(0);
+  for (const id of ['r18-year', 'r18-month', 'r18-duration']) await expect(page.locator(`#${id}`)).toHaveValue('');
+  expect(mock.queries).toHaveLength(beforeType);
+  await page.locator('.r18-filters').getByRole('button', { name: '查询', exact: true }).click();
+  await expectCatalog(page, mock, { ...latest, mode: 'categories', type: '1' });
+  expectSafeMock(mock);
+});
+
+test('JavDB TOP250保持真实排名和末页边界，榜单周期刷新与关键词切换互不混用', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  const mock = await mockJavDB(context, page, live.baseURL);
+  await login(page, live);
+  await page.locator('#r18-mode-top250').click();
+  let top: CatalogQuery = { mode: 'top250', type: 'all', filter: 'all', page: '1', limit: '24' };
+  await expectRanking(page, mock, top);
+  await expect(page.locator('.r18-list-meta')).not.toContainText(/榜单共|共\s*250/u);
+  await expect(page.locator('.r18-query-hint')).toContainText('官方榜单顺序');
+  await expect(page.locator('.r18-query-hint')).toContainText('不表示本次已获取全部影片');
+  await page.locator('#r18-page-size').selectOption('40');
+  top = { ...top, limit: '40' };
+  await expectRanking(page, mock, top);
+  await page.locator('#r18-jump-page').fill('7');
+  await page.locator('.r18-page-jump').getByRole('button', { name: '跳转', exact: true }).click();
+  top = { ...top, page: '7' };
+  await expectRanking(page, mock, top, 10);
+  await expect(page.locator('.r18-rank').last()).toHaveAttribute('data-rank', '250');
+  await expect(page.getByRole('navigation', { name: 'JavDB 分页' }).getByRole('button', { name: '下一页', exact: true })).toBeDisabled();
+  await expect(page.locator('#r18-jump-page')).toHaveAttribute('max', '7');
+  const beforeOverflow = mock.queries.length;
+  await page.locator('#r18-jump-page').fill('8');
+  await page.locator('.r18-page-jump').getByRole('button', { name: '跳转', exact: true }).click();
+  expect(mock.queries).toHaveLength(beforeOverflow);
+  await page.locator('#r18-jump-page').fill('7');
+  const topURL = page.url();
+  await page.screenshot({ path: info.outputPath('javdb-top250-last-page.png'), fullPage: true, animations: 'disabled' });
+  await page.locator('.r18-card').first().click();
+  await expect(page.locator('.r18-detail-info')).toContainText(video.title);
+  await page.getByRole('button', { name: '返回资料库', exact: true }).click();
+  await expect(page).toHaveURL(topURL);
+  await expectRanking(page, mock, top, 10);
+  await page.locator('#r18-ignore-watched').check();
+  top = { ...top, page: '1', ignore_watched: 'true' };
+  await expectRanking(page, mock, top);
+  await page.locator('#r18-year').fill('2024');
+  await page.locator('#r18-year').press('Tab');
+  top = { ...top, year: '2024' };
+  await expectRanking(page, mock, top);
+
+  await page.locator('#r18-mode-ranking').click();
+  let ranking: CatalogQuery = { mode: 'ranking', type: '0', filter: 'all', period: 'daily', page: '1', limit: '40' };
+  await expectRanking(page, mock, ranking);
+  await expect(page.locator('.r18-list-meta')).toContainText('榜单共 96 条');
+  await page.locator('#r18-period').selectOption('weekly');
+  ranking = { ...ranking, period: 'weekly' };
+  await expectRanking(page, mock, ranking);
+  await page.locator('#r18-type').selectOption('2');
+  ranking = { ...ranking, type: '2' };
+  await expectRanking(page, mock, ranking);
+  await page.locator('.r18-header').getByRole('button', { name: '刷新', exact: true }).click();
+  await expectRanking(page, mock, { ...ranking, refresh: '1' });
+  for (const mode of ['playback', 'popular']) {
+    await page.locator(`#r18-mode-${mode}`).click();
+    await expectRanking(page, mock, { mode, type: 'all', filter: 'all', period: 'daily', page: '1', limit: '40' });
+    await expect(page.locator('#r18-type')).toHaveCount(0);
+  }
+  await page.locator('#r18-search').fill('  TEST keywords  ');
+  await page.locator('.r18-filters').getByRole('button', { name: '查询', exact: true }).click();
+  await expectCatalog(page, mock, { type: 'all', filter: 'all', search: 'TEST keywords', page: '1', limit: '40' });
+  await expect(page.locator('#r18-mode-latest')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.r18-rank')).toHaveCount(0);
+  await expect(page.locator('#r18-period')).toHaveCount(0);
+  await assertNoHorizontalOverflow(page);
+  expectSafeMock(mock);
+});
+
+test('JavDB 隐藏图片时分类与榜单仍可快速浏览且不请求封面', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  await context.addInitScript(() => localStorage.setItem('emby_hide_media_images', 'true'));
+  const mock = await mockJavDB(context, page, live.baseURL);
+  await login(page, live);
+  await page.locator('#r18-mode-categories').click();
+  await expectCatalog(page, mock, { mode: 'categories', type: 'all', filter: 'magnets', sort: 'release', order: 'desc', page: '1', limit: '24' });
+  await expect.poll(() => mock.tagQueries).toEqual([{ type: 'all' }]);
+  await page.locator('#r18-category-search').fill('隔离剧情');
+  await page.locator('#r18-tag-0-23').check();
+  await page.locator('.r18-filters').getByRole('button', { name: '查询', exact: true }).click();
+  await expectCatalog(page, mock, { mode: 'categories', type: 'all', filter: 'magnets', sort: 'release', order: 'desc', page: '1', limit: '24', tag_ids: '0:23' });
+  await page.locator('#r18-mode-top250').click();
+  const query = { mode: 'top250', type: 'all', filter: 'all', page: '1', limit: '24' };
+  await expectRanking(page, mock, query);
+  await page.locator('.r18-header').getByRole('button', { name: '刷新', exact: true }).click();
+  await expectRanking(page, mock, { ...query, refresh: '1' });
+  await expect(page.locator('.r18-cover img')).toHaveCount(0);
+  expect(mock.imageRequests).toEqual([]);
+  expectPreviewIsolation(mock);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-ranking-images-hidden.png'), fullPage: true, animations: 'disabled' });
 });

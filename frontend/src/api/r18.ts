@@ -6,10 +6,15 @@ export interface R18Video {
   original_title: string; release_date: string; cover_url: string; images: string[];
   duration: number; score: number; magnets_count: number; has_local: boolean;
   tags: string[]; has_preview: boolean; preview_url: string;
+  rank?: number;
 }
 export interface R18Page {
   items: R18Video[]; page: number; page_size: number; has_more: boolean; has_previous: boolean;
+  total?: number | null;
 }
+export interface R18Tag { id: string; name: string; type: string }
+export interface R18TagCategory { id: string; name: string; type: string; tags: R18Tag[] }
+export interface R18Tags { categories: R18TagCategory[] }
 export interface R18Resource {
   id: string; title: string; number: string; date: string; magnet: string;
   website: string; detail_url: string; size_bytes: number; size_mb: number; tags: string[];
@@ -44,7 +49,8 @@ export function parseR18Video(v: unknown): R18Video {
     title: str(r.title), original_title: str(r.original_title), release_date: str(r.release_date),
     cover_url: safeR18ImageURL(str(r.cover_url)), images: list(r.images).map(str).map(safeR18ImageURL).filter(Boolean),
     duration: finite(r.duration), score: finite(r.score), magnets_count: num(r.magnets_count), has_local: bool(r.has_local),
-    tags: [...new Set(list(r.tags).map(str).map(tag => tag.trim()).filter(Boolean))], has_preview: bool(r.has_preview), preview_url: safeR18PreviewURL(str(r.preview_url)) };
+    tags: [...new Set(list(r.tags).map(str).map(tag => tag.trim()).filter(Boolean))], has_preview: bool(r.has_preview), preview_url: safeR18PreviewURL(str(r.preview_url)),
+    rank: r.rank === undefined ? 0 : num(r.rank) };
 }
 export function parseR18LocalSource(v: unknown): R18LocalSource {
   const r = record(v), id = str(r.id), itemId = str(r.item_id);
@@ -55,7 +61,18 @@ export function parseR18LocalSource(v: unknown): R18LocalSource {
 export function parseR18Page(v: unknown): R18Page {
   const r = record(v);
   return { items: list(r.items).map(parseR18Video), page: positive(r.page), page_size: positive(r.page_size),
-    has_more: bool(r.has_more), has_previous: bool(r.has_previous) };
+    has_more: bool(r.has_more), has_previous: bool(r.has_previous), total: r.total === undefined || r.total === null ? null : num(r.total) };
+}
+export function parseR18Tags(v: unknown): R18Tags {
+  const r = record(v);
+  function identity(value: unknown) { const id = str(value); if (!/^[A-Za-z0-9_-]{1,120}$/u.test(id)) throw new Error('JavDB 分类标识不正确'); return id; }
+  function tagType(value: unknown) { const type = str(value); if (!/^[0-4]$/u.test(type)) throw new Error('JavDB 分类类型不正确'); return type; }
+  return { categories: list(r.categories).map(value => {
+    const category = record(value);
+    return { id: identity(category.id), name: str(category.name), type: tagType(category.type), tags: list(category.tags).map(value => {
+      const tag = record(value); return { id: identity(tag.id), name: str(tag.name), type: tagType(tag.type) };
+    }) };
+  }) };
 }
 export function parseR18Resources(v: unknown): R18Resources {
   const r = record(v);
@@ -74,6 +91,11 @@ export function parseR18Resources(v: unknown): R18Resources {
 function base(id: string | number) { return `/api/r18/libraries/${encodeURIComponent(id)}/videos`; }
 export const r18Api = {
   async libraries(signal?: AbortSignal) { return parseLibraries(await apiClient.request('/api/r18/libraries', { auth: 'required', signal, timeoutMs: 22000 })); },
+  async tags(id: string, type = 'all', signal?: AbortSignal, refresh = false) {
+    if (!['all', '0', '1', '2', '3', '4'].includes(type)) throw new Error('JavDB 分类类型不正确');
+    const query = new URLSearchParams({ type }); if (refresh) query.set('refresh', '1');
+    return parseR18Tags(await apiClient.request(`/api/r18/libraries/${encodeURIComponent(id)}/tags?${query}`, { auth: 'required', signal, timeoutMs: 22000 }));
+  },
   async videos(id: string, query: URLSearchParams, signal?: AbortSignal) {
     // 路由用 page_size 保存选择，后端在线列表接口使用 limit。
     const params = new URLSearchParams(query);

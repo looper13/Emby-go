@@ -98,10 +98,10 @@ describe('R18 library presentation', () => {
     expect(w.get('.r18-card-copy').text()).toContain('120 分钟');
     expect(w.get('.r18-card-copy').text()).toContain('上游磁力 8');
     expect(w.get('.r18-card-copy').text()).toContain('评分 4.3');
-    expect(w.get('#r18-type').findAll('option').map(v => v.attributes('value'))).toEqual(['all', '0', '1', '2', '3']);
+    expect(w.get('#r18-type').findAll('option').map(v => v.attributes('value'))).toEqual(['all', '0', '1', '2', '3', '4']);
     expect(w.get('#r18-filter').findAll('option').map(v => v.attributes('value'))).toEqual(['all', 'magnets', 'subtitle', 'can_play']);
     expect(w.get('#r18-filter').text()).toContain('JavDB 上游可播放');
-    expect(w.get('#r18-sort').findAll('option').map(v => v.attributes('value'))).toEqual(['release', 'score', 'hit', 'want_watch_count', 'watched_count']);
+    expect(w.get('#r18-sort').findAll('option').map(v => v.attributes('value'))).toEqual(['release', 'update', 'score', 'hit', 'want_watch_count', 'watched_count']);
     expect((w.get('#r18-order').element as HTMLSelectElement).value).toBe('desc');
     expect(reads.mock.calls[0]?.[1].get('order')).toBe('desc');
     expect(Object.fromEntries(reads.mock.calls[0]![1])).toEqual({ type: 'all', filter: 'magnets', sort: 'release', order: 'desc', page: '1', page_size: '24' });

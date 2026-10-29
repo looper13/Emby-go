@@ -44,7 +44,13 @@ func TestR18APIExplicitPagesAndFilterSortForwarding(t *testing.T) {
 	if err != nil || last.Page != 9999 || last.HasMore || !last.HasPrevious {
 		t.Fatal("最大页码仍允许越界下一页", err)
 	}
-	want := []int{1, 2, 1, 37, 9999}
+	query.Page = 1
+	fresh, err := client.List(WithFresh(context.Background()), query)
+	if err != nil || len(fresh.Items) != len(first.Items) || fresh.Items[0].ID != first.Items[0].ID {
+		t.Fatal("强制刷新没有重新获取相同筛选的首页", err)
+	}
+	// 普通返回首页复用缓存，只有显式刷新才再次访问上游。
+	want := []int{1, 2, 37, 9999, 1}
 	if len(requested) != len(want) {
 		t.Fatal("显式页码访问次数不正确", requested)
 	}
@@ -58,7 +64,7 @@ func TestR18APIExplicitPagesAndFilterSortForwarding(t *testing.T) {
 func TestR18APIQueryDefaultsAndPageResponse(t *testing.T) {
 	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
 		q := req.URL.Query()
-		if q.Get("page") != "1" || q.Get("limit") != "24" || q.Get("type") != "all" || q.Get("movie_filter_by") != "magnets" || q.Get("sort_by") != "release" || q.Get("order_by") != "desc" || q.Has("year") {
+		if req.URL.Path != "/api/v1/javdb/movies/latest" || q.Get("page") != "1" || q.Get("limit") != "24" || q.Get("type") != "all" || q.Get("filter_by") != "magnets" || q.Get("sort_by") != "release" || q.Get("order_by") != "desc" || q.Has("year") || q.Has("movie_filter_by") {
 			t.Error("默认列表没有采用第一页、24条、磁力筛选和发行倒序")
 		}
 		writeFixtureResponse(w, map[string]any{"movies": []apiMovie{fixtureMovie(1)}, "current_page": 1, "has_next": false})
@@ -90,12 +96,16 @@ func TestR18APIBrowseTypesFiltersAndSorts(t *testing.T) {
 	current := Query{}
 	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
 		q := req.URL.Query()
-		if q.Get("type") != current.Type || q.Get("movie_filter_by") != current.Filter || q.Get("sort_by") != current.Sort || q.Get("order_by") != current.Order {
+		path, filterKey := "/api/v1/javdb/movies/tags", "movie_filter_by"
+		if current.Sort == "release" || current.Sort == "update" {
+			path, filterKey = "/api/v1/javdb/movies/latest", "filter_by"
+		}
+		if req.URL.Path != path || q.Get("type") != current.Type || q.Get(filterKey) != current.Filter || q.Get("sort_by") != current.Sort || q.Get("order_by") != current.Order {
 			t.Error("筛选排序参数没有按请求传给上游")
 		}
 		writeFixtureResponse(w, map[string]any{"movies": []apiMovie{}, "current_page": 1, "has_next": false})
 	})
-	for _, movieType := range []string{"all", "0", "1", "2", "3"} {
+	for _, movieType := range []string{"all", "0", "1", "2", "3", "4"} {
 		for _, filter := range []string{"all", "magnets", "subtitle", "can_play"} {
 			current = Query{Type: movieType, Filter: filter, Sort: "release", Order: "desc", Limit: 2}
 			if ValidateQuery(current) != nil {
@@ -106,7 +116,7 @@ func TestR18APIBrowseTypesFiltersAndSorts(t *testing.T) {
 			}
 		}
 	}
-	for _, sort := range []string{"release", "score", "hit", "want_watch_count", "watched_count"} {
+	for _, sort := range []string{"release", "update", "score", "hit", "want_watch_count", "watched_count"} {
 		current = Query{Type: "all", Filter: "magnets", Sort: sort, Order: "asc", Limit: 2}
 		if ValidateQuery(current) != nil {
 			t.Fatal("拒绝合法列表排序", sort)

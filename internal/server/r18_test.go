@@ -24,6 +24,10 @@ type fakeR18 struct {
 	checkError    error
 	checkDeadline time.Duration
 	listQueries   []r18.Query
+	tagTypes      []string
+	tagDeadline   time.Duration
+	tagCatalog    r18.TagCatalog
+	tagError      error
 }
 
 func TestR18ErrorRedactsEncodedAPIKeys(t *testing.T) {
@@ -42,6 +46,16 @@ func (f *fakeR18) Check(ctx context.Context) error {
 	return f.checkError
 }
 func (f *fakeR18) Close() error { return nil }
+func (f *fakeR18) Tags(ctx context.Context, movieType string) (r18.TagCatalog, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.tagDeadline = time.Until(deadline)
+	}
+	f.tagTypes = append(f.tagTypes, movieType)
+	if f.tagCatalog.Categories == nil {
+		return r18.TagCatalog{Categories: []r18.TagCategory{}}, f.tagError
+	}
+	return f.tagCatalog, f.tagError
+}
 func (f *fakeR18) List(_ context.Context, q r18.Query) (r18.Page, error) {
 	f.reads++
 	f.listQueries = append(f.listQueries, q)

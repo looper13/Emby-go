@@ -89,7 +89,7 @@ func TestR18APIConfigAndPrefixedBaseURL(t *testing.T) {
 		}
 	}
 	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path != "/prefix/api/v1/javdb/movies/tags" || req.URL.Query().Get("limit") != "1" {
+		if req.URL.Path != "/prefix/api/v1/javdb/movies/latest" || req.URL.Query().Get("limit") != "1" {
 			t.Error("基础路径前缀或只读连接探针丢失")
 		}
 		writeFixtureResponse(w, map[string]any{"movies": []apiMovie{}, "current_page": 1, "has_next": false})
@@ -234,7 +234,7 @@ func TestR18LiveMovieOverrideUsesSpecifiedResources(t *testing.T) {
 	details, resources := 0, 0
 	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
-		case "/api/v1/javdb/movies/tags":
+		case "/api/v1/javdb/movies/latest":
 			writeFixtureResponse(w, map[string]any{"movies": []apiMovie{fixtureMovie(1)}, "current_page": 1, "has_next": false})
 		case "/api/v1/javdb/movies/movie009":
 			details++

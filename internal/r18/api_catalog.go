@@ -10,7 +10,7 @@ import (
 var ErrUnsupportedCatalogQuery = errors.New("JavDB API 不支持此列表筛选或排序：浏览可按发行日期或评分排序、筛选单一年份；搜索仅支持相关度排序")
 
 func catalogQuery(q CatalogQuery) (Query, error) {
-	query := Query{Search: strings.TrimSpace(q.Search), Type: "all", Filter: "magnets", Limit: 50, Page: 1, Order: "asc"}
+	query := Query{Mode: "latest", Search: strings.TrimSpace(q.Search), Type: "all", Filter: "magnets", Limit: 50, Page: 1, Order: "asc"}
 	if q.Descending || q.Sort == "" {
 		query.Order = "desc"
 	}
@@ -43,7 +43,7 @@ func catalogQuery(q CatalogQuery) (Query, error) {
 		}
 		query.Year = strconv.Itoa(q.Years[0])
 	}
-	return query, ValidateQuery(query)
+	return normalizeQuery(query)
 }
 
 func (c *Client) CatalogPage(ctx context.Context, q CatalogQuery) (CatalogPage, error) {

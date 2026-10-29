@@ -61,9 +61,8 @@ func TestR18APIListRejectsMalformedPages(t *testing.T) {
 		badID.ID = "../invalid"
 		writeFixtureResponse(w, map[string]any{"movies": []apiMovie{invalid, badID, fixtureMovie(1)}, "current_page": 1, "has_next": false})
 	})
-	page, err := client.List(context.Background(), Query{})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Number != "TEST-001" {
-		t.Fatal("没有过滤缺失番号或非法身份的影片", err)
+	if _, err := client.List(context.Background(), Query{}); err == nil {
+		t.Fatal("接受了缺失番号或非法身份的影片，无法安全缓存或保证分页位置")
 	}
 }
 

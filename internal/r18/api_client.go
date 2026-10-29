@@ -43,8 +43,9 @@ func (c *Config) Validate() error {
 }
 
 type Client struct {
-	cfg  Config
-	http *http.Client
+	cfg    Config
+	http   *http.Client
+	browse *browseCache
 }
 
 func Open(c Config) (*Client, error) {
@@ -52,7 +53,7 @@ func Open(c Config) (*Client, error) {
 		return nil, err
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	return &Client{cfg: c, http: &http.Client{
+	return &Client{cfg: c, browse: newBrowseCache(), http: &http.Client{
 		Transport: transport,
 		Timeout:   15 * time.Second,
 		// API 凭据只发给配置的服务，不跟随上游重定向。
@@ -61,6 +62,9 @@ func Open(c Config) (*Client, error) {
 }
 
 func (c *Client) Close() error {
+	if c.browse != nil {
+		c.browse.close()
+	}
 	c.http.CloseIdleConnections()
 	return nil
 }
@@ -123,6 +127,7 @@ type apiMovie struct {
 	Duration     int      `json:"duration"`
 	Score        apiScore `json:"score"`
 	MagnetsCount int      `json:"magnets_count"`
+	Ranking      int      `json:"ranking"`
 	Tags         []struct {
 		Name string `json:"name"`
 	} `json:"tags"`
@@ -164,7 +169,7 @@ func (m apiMovie) video() (Video, bool) {
 	v := Video{ContentID: m.ID, ServiceCode: "javdb", Number: strings.TrimSpace(m.Number), Title: m.Title,
 		OriginalTitle: m.OriginTitle, ReleaseDate: m.ReleaseDate, CoverURL: SafeHTTPURL(m.CoverURL), Images: []string{},
 		Tags: []string{}, HasPreview: m.HasPreviewVideo, PreviewURL: SafeHTTPURL(m.PreviewVideoURL),
-		Duration: max(m.Duration, 0), Score: max(float64(m.Score), 0), MagnetsCount: max(m.MagnetsCount, 0)}
+		Duration: max(m.Duration, 0), Score: max(float64(m.Score), 0), MagnetsCount: max(m.MagnetsCount, 0), Rank: max(m.Ranking, 0)}
 	if !movieIdentity.MatchString(m.ID) || v.Number == "" {
 		return v, false
 	}
@@ -223,84 +228,29 @@ type moviesPayload struct {
 	HasNext     *bool      `json:"has_next"`
 }
 
-func normalizeQuery(q Query) (Query, error) {
-	q.Search = strings.TrimSpace(q.Search)
-	q.Type, q.Filter, q.Sort = strings.TrimSpace(q.Type), strings.TrimSpace(q.Filter), strings.TrimSpace(q.Sort)
-	q.Order, q.Year = strings.TrimSpace(q.Order), strings.TrimSpace(q.Year)
-	if q.Page == 0 {
-		q.Page = 1
-	}
-	if q.Limit == 0 {
-		q.Limit = 24
-	}
-	if q.Order == "" {
-		q.Order = "desc"
-	}
-	if q.Type == "" {
-		q.Type = "all"
-	}
-	if q.Filter == "" {
-		q.Filter = "magnets"
-	}
-	if q.Sort == "" {
-		q.Sort = "release"
-		if q.Search != "" {
-			q.Sort = "relevance"
-		}
-	}
-	if q.Page < 1 || q.Page > 9999 || q.Limit < 1 || q.Limit > 50 || len([]rune(q.Search)) > 120 || strings.ContainsAny(q.Search, "\x00\r\n") ||
-		(q.Order != "asc" && q.Order != "desc") || (q.Type != "all" && q.Type != "0" && q.Type != "1" && q.Type != "2" && q.Type != "3") ||
-		(q.Filter != "all" && q.Filter != "magnets" && q.Filter != "subtitle" && q.Filter != "can_play") {
-		return q, errors.New("无效的 JavDB 查询条件")
-	}
-	if q.Year != "" {
-		year, err := strconv.Atoi(q.Year)
-		if err != nil || year < 1 || year > 9999 || strconv.Itoa(year) != q.Year {
-			return q, errors.New("JavDB 年份必须为 1 到 9999 的整数")
-		}
-	}
-	if q.Search != "" {
-		if q.Sort != "relevance" || q.Year != "" {
-			return q, errors.New("JavDB 搜索仅支持相关度排序，不支持年份筛选")
-		}
-	} else {
-		switch q.Sort {
-		case "release", "score", "hit", "want_watch_count", "watched_count":
-		default:
-			return q, errors.New("无效的 JavDB 列表排序")
-		}
-	}
-	return q, nil
-}
-
-func ValidateQuery(q Query) error {
-	_, err := normalizeQuery(q)
-	return err
-}
-
-func (c *Client) movies(ctx context.Context, q Query) (moviesPayload, error) {
+func (c *Client) moviesUncached(ctx context.Context, q Query) (moviesPayload, error) {
 	var data moviesPayload
-	params := url.Values{"page": {strconv.Itoa(q.Page)}, "limit": {strconv.Itoa(q.Limit)}, "movie_filter_by": {q.Filter}}
-	path := "/api/v1/javdb/movies/tags"
-	if q.Search != "" {
-		path = "/api/v1/javdb/search"
-		params.Set("q", q.Search)
-		params.Set("type", "movie")
-		params.Set("movie_type", q.Type)
-		params.Set("movie_sort_by", q.Sort)
-	} else {
-		params.Set("type", q.Type)
-		params.Set("sort_by", q.Sort)
-		params.Set("order_by", q.Order)
-		if q.Year != "" {
-			params.Set("year", q.Year)
-		}
-	}
+	path, params := browseRequest(q)
 	if err := c.request(ctx, path, params, &data); err != nil {
 		return data, err
 	}
-	if data.Movies == nil || len(data.Movies) > q.Limit || (data.CurrentPage != 0 && data.CurrentPage != q.Page) {
+	maxItems := q.Limit
+	if q.Mode == "top250" {
+		maxItems = min(maxItems, 250-(q.Page-1)*q.Limit)
+	}
+	if data.Movies == nil || len(data.Movies) > maxItems || (data.CurrentPage != 0 && data.CurrentPage != q.Page) {
 		return data, errors.New("JavDB 列表响应格式不正确")
+	}
+	if q.Mode == "top250" {
+		if err := validateTopMovies(data.Movies); err != nil {
+			return data, err
+		}
+	} else {
+		for _, m := range data.Movies {
+			if _, ok := m.video(); !ok {
+				return data, errors.New("JavDB 列表包含无效影片身份或番号")
+			}
+		}
 	}
 	return data, nil
 }
@@ -324,6 +274,9 @@ func (c *Client) List(ctx context.Context, q Query) (Page, error) {
 		return result, err
 	}
 	result.Page, result.PageSize = q.Page, q.Limit
+	if rankedMode(q.Mode) {
+		return c.rankingPage(ctx, q)
+	}
 	data, err := c.movies(ctx, q)
 	if err != nil {
 		return result, err
@@ -334,6 +287,13 @@ func (c *Client) List(ctx context.Context, q Query) (Page, error) {
 		}
 	}
 	result.HasMore = q.Page < 9999 && hasNext(data, q.Limit)
+	if q.Mode == "top250" {
+		lastRank := 0
+		if len(data.Movies) > 0 {
+			lastRank = data.Movies[len(data.Movies)-1].Ranking
+		}
+		result.HasMore = result.HasMore && q.Page*q.Limit < 250 && lastRank < 250
+	}
 	result.HasPrevious = q.Page > 1
 	return result, nil
 }

@@ -20,6 +20,7 @@ type Video struct {
 	Duration      int      `json:"duration"`
 	Score         float64  `json:"score"`
 	MagnetsCount  int      `json:"magnets_count"`
+	Rank          int      `json:"rank,omitempty"`
 	HasLocal      bool     `json:"has_local"`
 	Tags          []string `json:"tags"`
 	HasPreview    bool     `json:"has_preview"`
@@ -46,6 +47,9 @@ func DecodeID(id string) (string, string, error) {
 
 type Query struct {
 	Search, Type, Filter, Sort, Order, Year string
+	Mode, Period, TagIDs, MainFilter        string
+	Duration, Month                         string
+	IgnoreWatched                           bool
 	Page, Limit                             int
 }
 type Page struct {
@@ -54,6 +58,24 @@ type Page struct {
 	PageSize    int     `json:"page_size"`
 	HasMore     bool    `json:"has_more"`
 	HasPrevious bool    `json:"has_previous"`
+	Total       *int    `json:"total,omitempty"`
+}
+
+type TagCatalog struct {
+	Categories []TagCategory `json:"categories"`
+}
+
+type TagCategory struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Tags []Tag  `json:"tags"`
+}
+
+type Tag struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 type Resource struct {

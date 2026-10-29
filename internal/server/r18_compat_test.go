@@ -371,7 +371,7 @@ func TestR18EmbyOnlinePaginationHasUnknownCount(t *testing.T) {
 func TestR18EmbyOffsetPaginationUsesOnlyOnlineAPIPages(t *testing.T) {
 	requests := []url.Values{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodGet || req.URL.Path != "/api/v1/javdb/movies/tags" || req.Header.Get("X-API-Key") != "fixture-key" {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/v1/javdb/movies/latest" || req.Header.Get("X-API-Key") != "fixture-key" {
 			t.Error("unexpected online catalog request")
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -380,7 +380,7 @@ func TestR18EmbyOffsetPaginationUsesOnlyOnlineAPIPages(t *testing.T) {
 		requests = append(requests, params)
 		page, pageErr := strconv.Atoi(params.Get("page"))
 		limit, limitErr := strconv.Atoi(params.Get("limit"))
-		if pageErr != nil || limitErr != nil || page < 1 || limit != 50 || params.Get("sort_by") != "release" || params.Get("order_by") != "desc" || params.Get("movie_filter_by") != "magnets" {
+		if pageErr != nil || limitErr != nil || page < 1 || limit != 50 || params.Get("type") != "all" || params.Get("sort_by") != "release" || params.Get("order_by") != "desc" || params.Get("filter_by") != "magnets" || params.Get("movie_filter_by") != "" {
 			t.Error("offset adapter did not use bounded API pages and online defaults")
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -427,7 +427,8 @@ func TestR18EmbyOffsetPaginationUsesOnlyOnlineAPIPages(t *testing.T) {
 			t.Fatal("unsupported online API query was not rejected", query, resp.StatusCode)
 		}
 	}
-	if len(requests) != 3 || requests[0].Get("page") != "1" || requests[1].Get("page") != "2" || requests[2].Get("page") != "2" {
+	// 后一个任意偏移请求复用前一个请求的原始第二页，不应再次访问上游。
+	if len(requests) != 2 || requests[0].Get("page") != "1" || requests[1].Get("page") != "2" {
 		t.Fatal("offset pagination performed unnecessary online requests", len(requests))
 	}
 }
