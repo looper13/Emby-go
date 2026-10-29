@@ -14,14 +14,27 @@ import (
 
 type cacheFixture struct {
 	providerFixture
-	entries      map[string]cloud115.File
-	deleted      []string
-	removed      int
-	deleteError  error
-	mkdirTimeout bool
+	entries            map[string]cloud115.File
+	deleted            []string
+	removed            int
+	deleteError        error
+	mkdirTimeout       bool
+	infoErrors         map[string]error
+	removeError        error
+	clearOnRemoveError bool
+	keepRemote         bool
+	onRemove           func()
+	onReadInfo         func(string)
+	newCacheID         string
 }
 
 func (p *cacheFixture) Info(_ context.Context, id string) (cloud115.File, error) {
+	if p.onReadInfo != nil {
+		p.onReadInfo(id)
+	}
+	if err := p.infoErrors[id]; err != nil {
+		return cloud115.File{}, err
+	}
 	f, ok := p.entries[id]
 	if !ok {
 		return cloud115.File{}, &cloud115.Error{Message: "missing", Missing: true}
@@ -38,11 +51,15 @@ func (p *cacheFixture) List(_ context.Context, id string, _ int) ([]cloud115.Fil
 	return files, false, nil
 }
 func (p *cacheFixture) Mkdir(_ context.Context, parent, name string) (string, error) {
-	p.entries["cache"] = cloud115.File{ID: "cache", Name: name, ParentID: parent, Directory: true}
+	id := p.newCacheID
+	if id == "" {
+		id = "cache"
+	}
+	p.entries[id] = cloud115.File{ID: id, Name: name, ParentID: parent, Directory: true}
 	if p.mkdirTimeout {
 		return "", &cloud115.Error{Message: "mkdir timed out after write", Retryable: true}
 	}
-	return "cache", nil
+	return id, nil
 }
 func (p *cacheFixture) Delete(_ context.Context, id string) error {
 	p.deleted = append(p.deleted, id)
@@ -54,12 +71,42 @@ func (p *cacheFixture) Delete(_ context.Context, id string) error {
 }
 func (p *cacheFixture) RemoveTask(context.Context, string) error {
 	p.removed++
-	p.remote = nil
-	return nil
+	if p.removeError == nil && !p.keepRemote || p.removeError != nil && p.clearOnRemoveError {
+		p.remote = nil
+	}
+	if p.onRemove != nil {
+		p.onRemove()
+	}
+	return p.removeError
 }
 func newCacheFixture() *cacheFixture {
 	return &cacheFixture{entries: map[string]cloud115.File{"work": {ID: "work", ParentID: "0", Name: cloud115.CacheFolderName, Directory: true}}}
 }
+
+func TestCacheCleanupReconcileErrorDoesNotRemoveTaskOrFiles(t *testing.T) {
+	s, l, video := setup(t)
+	task := create(t, s, l, video)
+	task.Status, task.CacheFolderID, task.ExpiresAt = "cancelled", "cache", time.Now().Add(-time.Second).Unix()
+	if err := s.UpdateOfflineTask(task, task.Version); err != nil {
+		t.Fatal(err)
+	}
+	p := newCacheFixture()
+	p.entries["cache"] = cloud115.File{ID: "cache", ParentID: "work", Name: "emby-go-" + task.ID, Directory: true}
+	p.remote = &cloud115.RemoteTask{FolderID: "cache"}
+	p.findError = &cloud115.Error{Message: "filtered query incomplete", Retryable: true}
+	service := &Service{db: s, ctx: context.Background()}
+	service.cleanup(p, read(t, s, task.ID))
+	task = read(t, s, task.ID)
+	if len(p.deleted) != 0 || p.removed != 0 || task.Status != "cleanup_pending" || !strings.Contains(task.Error, "filtered query incomplete") || task.NextPoll <= time.Now().Unix() {
+		t.Fatal("query failure must defer cleanup without remote writes", task, p.deleted, p.removed)
+	}
+	p.findError = nil
+	service.cleanup(p, task)
+	if len(p.deleted) != 1 || p.removed != 1 || read(t, s, task.ID).Status != "expired" {
+		t.Fatal("cleanup did not recover after a complete query", p.deleted, p.removed)
+	}
+}
+
 func TestCacheExpiryCleanupRestartAndResubmit(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "restart.db")
 	s, err := store.Open(file)
@@ -198,13 +245,13 @@ func TestCacheRefusesExternalMagnetAndResult(t *testing.T) {
 	task := create(t, s, l, video)
 	p := newCacheFixture()
 	p.remote = &cloud115.RemoteTask{Status: 2, FolderID: "external", ResultID: "external-file"}
+	p.entries["external-file"] = cloud115.File{ID: "external-file", ParentID: "0", Name: "permanent.mp4", Size: 100, PickCode: "private"}
 	service := &Service{db: s, ctx: context.Background()}
 	service.process(p, task)
 	task = read(t, s, task.ID)
 	if task.Status != "failed" || task.Stage != "cache" || p.adds != 0 {
 		t.Fatal(task)
 	}
-	p.entries["external-file"] = cloud115.File{ID: "external-file", ParentID: "0", Name: "permanent.mp4", Size: 100, PickCode: "private"}
 	task.Status, task.ResultID = "discovering", "external-file"
 	s.UpdateOfflineTask(task, task.Version)
 	service.process(p, read(t, s, task.ID))

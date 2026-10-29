@@ -16,27 +16,32 @@ type Cloud115Connection struct {
 	Secrets   []byte `json:"-"`
 }
 type OfflineTask struct {
-	ID            string          `json:"id"`
-	AccountID     string          `json:"account_id"`
-	InfoHash      string          `json:"info_hash"`
-	Magnet        string          `json:"magnet"`
-	FolderID      string          `json:"folder_id"`
-	Status        string          `json:"status"`
-	Resume        string          `json:"resume"`
-	Stage         string          `json:"stage"`
-	Error         string          `json:"error"`
-	Retryable     bool            `json:"retryable"`
-	Progress      int             `json:"progress"`
-	ResultID      string          `json:"result_id"`
-	Attempts      int             `json:"attempts"`
-	NextPoll      int64           `json:"next_poll"`
-	CreatedAt     int64           `json:"created_at"`
-	Deadline      int64           `json:"deadline"`
-	UpdatedAt     int64           `json:"updated_at"`
-	Version       int64           `json:"version"`
-	Files         []cloud115.File `json:"files"`
-	CacheFolderID string          `json:"cache_folder_id,omitempty"`
-	ExpiresAt     int64           `json:"expires_at,omitempty"`
+	ID               string          `json:"id"`
+	AccountID        string          `json:"account_id"`
+	InfoHash         string          `json:"info_hash"`
+	Magnet           string          `json:"magnet"`
+	FolderID         string          `json:"folder_id"`
+	Status           string          `json:"status"`
+	Resume           string          `json:"resume"`
+	Stage            string          `json:"stage"`
+	Error            string          `json:"error"`
+	Retryable        bool            `json:"retryable"`
+	Progress         int             `json:"progress"`
+	ResultID         string          `json:"result_id"`
+	Attempts         int             `json:"attempts"`
+	NextPoll         int64           `json:"next_poll"`
+	CreatedAt        int64           `json:"created_at"`
+	Deadline         int64           `json:"deadline"`
+	UpdatedAt        int64           `json:"updated_at"`
+	Version          int64           `json:"version"`
+	Files            []cloud115.File `json:"files"`
+	CacheFolderID    string          `json:"cache_folder_id,omitempty"`
+	ExpiresAt        int64           `json:"expires_at,omitempty"`
+	RecoveryFileID   string          `json:"recovery_file_id,omitempty"`
+	RecoveryResultID string          `json:"recovery_result_id,omitempty"`
+	RecoveryFolderID string          `json:"recovery_folder_id,omitempty"`
+	RecoveryRemoved  bool            `json:"recovery_removed,omitempty"`
+	Recoveries       int             `json:"recoveries,omitempty"`
 }
 
 func (t OfflineTask) CacheExpired(now int64) bool {
@@ -149,7 +154,7 @@ func (s *Store) UpdateOfflineTask(t OfflineTask, expected int64) error {
 			return err
 		}
 	}
-	if t.CacheExpired(time.Now().Unix()) {
+	if t.CacheExpired(time.Now().Unix()) || t.Status == "queued" || t.Status == "submitting" || t.Status == "discovering" {
 		if _, err = tx.Exec("UPDATE r18_offline_bindings SET file_id='',is_default=0 WHERE task_id=?", t.ID); err != nil {
 			return err
 		}

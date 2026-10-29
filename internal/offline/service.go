@@ -100,6 +100,9 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		s.cleanup(p, t)
 		return
 	}
+	if t.Status != "queued" && t.Status != "submitting" && t.Status != "downloading" && t.Status != "discovering" {
+		return
+	}
 	deadline := t.Deadline
 	if deadline == 0 {
 		deadline = t.CreatedAt + 24*3600
@@ -113,7 +116,11 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		_ = s.save(t, expected)
 		return
 	}
-	if t.Status == "queued" && t.CacheFolderID == "" {
+	if t.RecoveryResultID != "" {
+		s.recoverResult(ctx, p, t)
+		return
+	}
+	if t.Status == "queued" {
 		cache, ok := p.(cloud115.CacheProvider)
 		if !ok {
 			s.fail(t, expected, "configuration", &cloud115.Error{Message: "请更新为 Cookie 连接后提交缓存任务", Auth: true})
@@ -128,49 +135,89 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 			s.fail(t, expected, "cache", &cloud115.Error{Message: "115 缓存根目录身份变化，请重新验证 Cookie 连接"})
 			return
 		}
-		// Persist expiry before mkdir: even a timeout or cancellation that loses
-		// the returned folder ID must leave a recoverable cleanup intent.
-		if t.ExpiresAt == 0 {
-			t.ExpiresAt = time.Now().Add(cloud115.CacheLifetime).Unix()
+		if t.CacheFolderID != "" {
+			child, err := p.Info(ctx, t.CacheFolderID)
+			if err == nil && (child.ID != t.CacheFolderID || !child.Directory || child.ParentID != t.FolderID || child.Name != "emby-go-"+t.ID) {
+				err = &cloud115.Error{Message: "115 任务缓存子目录身份不匹配"}
+			}
+			if err != nil && !isMissing(err) {
+				s.fail(t, expected, "cache", err)
+				return
+			}
+			if isMissing(err) {
+				t.CacheFolderID = ""
+				if s.save(t, expected) != nil {
+					return
+				}
+				expected++
+				t.Version = expected
+			}
+		}
+		if t.CacheFolderID == "" {
+			// Persist expiry before mkdir: even a timeout or cancellation that loses
+			// the returned folder ID must leave a recoverable cleanup intent.
+			if t.ExpiresAt == 0 {
+				t.ExpiresAt = time.Now().Add(cloud115.CacheLifetime).Unix()
+				if s.save(t, expected) != nil {
+					return
+				}
+				expected++
+				t.Version = expected
+			}
+			id, err := findTaskCacheFolder(ctx, p, t)
+			if err == nil && id == "" {
+				id, err = cache.Mkdir(ctx, t.FolderID, "emby-go-"+t.ID)
+			}
+			if err != nil {
+				s.fail(t, expected, "cache", err)
+				return
+			}
+			child, err := p.Info(ctx, id)
+			if err != nil {
+				s.fail(t, expected, "cache", err)
+				return
+			}
+			if child.ID != id || id == "" || id == "0" || id == t.FolderID || !child.Directory || child.ParentID != t.FolderID || child.Name != "emby-go-"+t.ID {
+				s.fail(t, expected, "cache", &cloud115.Error{Message: "115 任务缓存子目录身份不匹配"})
+				return
+			}
+			t.CacheFolderID = id
 			if s.save(t, expected) != nil {
 				return
 			}
 			expected++
 			t.Version = expected
 		}
-		id, err := findTaskCacheFolder(ctx, p, t)
-		if err == nil && id == "" {
-			id, err = cache.Mkdir(ctx, t.FolderID, "emby-go-"+t.ID)
-		}
-		if err != nil {
-			s.fail(t, expected, "cache", err)
-			return
-		}
-		child, err := p.Info(ctx, id)
-		if err != nil {
-			s.fail(t, expected, "cache", err)
-			return
-		}
-		if child.ID != id || id == "" || id == "0" || id == t.FolderID || !child.Directory || child.ParentID != t.FolderID || child.Name != "emby-go-"+t.ID {
-			s.fail(t, expected, "cache", &cloud115.Error{Message: "115 任务缓存子目录身份不匹配"})
-			return
-		}
-		t.CacheFolderID = id
-		if s.save(t, expected) != nil {
-			return
-		}
-		expected++
-		t.Version = expected
 	}
 	if t.Status == "discovering" {
+		if t.RecoveryFileID != "" {
+			gone, err := resultGone(ctx, p, t.RecoveryFileID)
+			if err != nil {
+				s.fail(t, expected, "file", err)
+				return
+			}
+			if gone {
+				s.recoverDiscovery(ctx, p, t, t.RecoveryFileID)
+				return
+			}
+			t.RecoveryFileID = ""
+		}
 		if t.CacheFolderID != "" {
 			if err := verifyCacheResult(ctx, p, t); err != nil {
+				if isMissing(err) {
+					s.recoverDiscovery(ctx, p, t, t.ResultID)
+					return
+				}
 				s.fail(t, expected, "cache", err)
 				return
 			}
 		}
 		files, err := cloud115.Discover(ctx, p, t.ResultID, t.FolderID)
 		if err != nil {
+			if isMissing(err) {
+				s.recoverDiscovery(ctx, p, t, t.ResultID)
+				return
+			}
 			s.fail(t, expected, "discover", err)
 			return
 		}
@@ -192,6 +239,32 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		return
 	}
 	if remote != nil {
+		if remote.Status == 2 {
+			if remote.ResultID == "" || remote.ResultID == "0" || remote.ResultID == t.FolderID {
+				s.fail(t, expected, "file", &cloud115.Error{Message: "115 未返回独立结果文件或目录，未重新提交", Retryable: true})
+				return
+			}
+			result, err := p.Info(ctx, remote.ResultID)
+			if isMissing(err) {
+				s.prepareRecovery(ctx, p, t, remote, remote.ResultID)
+				return
+			}
+			if err != nil {
+				s.fail(t, expected, "file", err)
+				return
+			}
+			if result.Directory && remote.FolderID != t.CacheFolderID {
+				gone, err := resultGone(ctx, p, remote.ResultID)
+				if err != nil {
+					s.fail(t, expected, "file", err)
+					return
+				}
+				if gone {
+					s.prepareRecovery(ctx, p, t, remote, remote.ResultID)
+					return
+				}
+			}
+		}
 		if t.CacheFolderID != "" && remote.FolderID != t.CacheFolderID {
 			s.fail(t, expected, "cache", &cloud115.Error{Message: "该磁力已有任务，但不在本服务缓存子目录；不会使用或删除既有网盘文件"})
 			return
@@ -222,6 +295,10 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 	}
 	if t.Status != "queued" {
 		s.fail(t, expected, "reconcile", &cloud115.Error{Message: "暂未找到 115 任务；提交结果可能不明确，未再次提交", Retryable: true})
+		return
+	}
+	if t.CacheExpired(time.Now().Unix()) {
+		s.cleanup(p, t)
 		return
 	}
 	// Persist the uncertain boundary before the remote write. A restart or timeout

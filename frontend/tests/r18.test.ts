@@ -14,6 +14,8 @@ import { applyMediaVisibility } from '../src/composables/useMediaVisibility';
 import { useCardSize } from '../src/composables/useCardSize';
 import { sanitizeReturnTo } from '../src/router/legacy-url';
 import { viewHistoryKey } from '../src/router/view-history';
+import { useAuthStore } from '../src/stores/auth';
+import { usePlayerStore } from '../src/stores/player';
 
 const route = reactive({ name: 'r18', fullPath: '/r18?library_id=2', query: { library_id: '2' } as Record<string, string>, params: {} as Record<string, string> });
 const router = { push: vi.fn(), replace: vi.fn() };
@@ -142,6 +144,32 @@ describe('R18 library presentation', () => {
     await w.get('.r18-back').trigger('click');
     expect(backTo).toHaveBeenCalledExactlyOnceWith('/r18?library_id=2&order=desc');
     expect(router.push).not.toHaveBeenCalled();
+  });
+  it('shows distinct magnet versions near the hero, plays a ready version and submits the selected new version', async () => {
+    route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
+    const hash = 'a'.repeat(40), nextHash = 'b'.repeat(40);
+    const resource = { id: '1', title: '4K', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 0, tags: [] };
+    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false });
+    vi.spyOn(r18Api, 'resources').mockResolvedValue({ items: [resource, { ...resource, id: 'alias' }, { ...resource, id: '2', title: '1080p', magnet: `magnet:?xt=urn:btih:${nextHash}` }], has_more: false, next_offset: 3 });
+    const source = { Id: '115-ready', InfoHash: hash, ResourceId: '1', Name: 'movie.mp4', DirectStreamUrl: '/Videos/r18-2-id/stream?MediaSourceId=115-ready&playback_token=fixture', Container: 'mp4', Default: true };
+    const state = { configured: true, tasks: [], sources: [source] };
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue(state);
+    vi.spyOn(cloud115Api, 'prepare').mockResolvedValue(state);
+    const submit = vi.spyOn(cloud115Api, 'submit').mockResolvedValue({ ...state, tasks: [{ id: 'new', info_hash: nextHash, resource_id: '2', status: 'downloading', progress: 0, files: [], file_id: '', stage: '', error: '', retryable: false, version: 1 }] });
+    const w = render(R18DetailPage); const pinia = stores.at(-1)!;
+    useAuthStore(pinia).user = { Policy: { IsAdministrator: true } } as never;
+    await flushPromises();
+    expect(w.findAll('.r18-resource')).toHaveLength(2); expect(w.findAll('#r18-play-version option')).toHaveLength(2);
+    expect(w.get('#detail-play').attributes('disabled')).toBeUndefined(); expect(submit).not.toHaveBeenCalled();
+    await w.get('#detail-play').trigger('click'); await flushPromises();
+    expect(usePlayerStore(pinia).current?.url).toBe(source.DirectStreamUrl);
+    usePlayerStore(pinia).close();
+    await w.get('#r18-play-version').setValue(nextHash);
+    await w.get('#detail-play').trigger('click'); await flushPromises();
+    expect(submit).toHaveBeenCalledExactlyOnceWith('2', video.id, { resource_id: '2' }, expect.any(AbortSignal));
+    expect(w.get('#detail-play').text()).toContain('准备播放中'); expect(usePlayerStore(pinia).current).toBeNull();
+    await w.findAll('button').find(b => b.text() === '停止自动播放')!.trigger('click');
+    expect(w.get('#detail-play').text()).toBe('播放');
   });
   it('keeps video detail visible when article fails and retries only the resources', async () => {
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };

@@ -433,7 +433,7 @@ func Discover(ctx context.Context, p Provider, root, workFolder string) ([]File,
 		}
 	}
 	if len(files) == 0 {
-		return nil, &Error{Message: "任务完成，但未找到可用视频（图片、压缩包和样片不作为正片）", Retryable: true}
+		return nil, &Error{Message: "任务完成，但未找到可用视频（图片、压缩包和样片不作为正片）", Retryable: true, Missing: scanned == 0}
 	}
 	return files, nil
 }

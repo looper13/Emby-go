@@ -3,6 +3,7 @@ package cloud115
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,9 @@ import (
 
 const CacheFolderName = "缓存-24h自动删除"
 const CacheLifetime = 24 * time.Hour
+
+const cookieOfflineAppVersion = "27.0.5.7"
+const cookieOfflineUserAgent = "Mozilla/5.0 115disk/" + cookieOfflineAppVersion + " 115Browser/" + cookieOfflineAppVersion + " 115wangpan_android/" + cookieOfflineAppVersion
 
 // Cache operations are separate from legacy OAuth providers. Only dedicated,
 // service-owned children of the named cache root may be removed by the worker.
@@ -88,13 +92,14 @@ func (s *scalar) UnmarshalJSON(b []byte) error {
 func (s scalar) integer() int64 { n, _ := strconv.ParseInt(string(s), 10, 64); return n }
 
 type cookieResponse struct {
-	State   *bool           `json:"state"`
-	Code    scalar          `json:"code"`
-	Errno   scalar          `json:"errno"`
-	Errcode scalar          `json:"errcode"`
-	Message string          `json:"message"`
-	Error   string          `json:"error"`
-	Data    json.RawMessage `json:"data"`
+	State    *bool           `json:"state"`
+	Code     scalar          `json:"code"`
+	Errno    scalar          `json:"errno"`
+	Errcode  scalar          `json:"errcode"`
+	Message  string          `json:"message"`
+	Error    string          `json:"error"`
+	ErrorMsg string          `json:"error_msg"`
+	Data     json.RawMessage `json:"data"`
 }
 
 func (c *CookieClient) request(ctx context.Context, method, raw string, form url.Values, ua string, out any) error {
@@ -138,6 +143,9 @@ func (c *CookieClient) request(ctx context.Context, method, raw string, form url
 		message := envelope.Message
 		if message == "" {
 			message = envelope.Error
+		}
+		if message == "" {
+			message = envelope.ErrorMsg
 		}
 		if auth {
 			message = "Cookie 已失效或需要网盘验证，请更新 Cookie 后重试"
@@ -254,31 +262,45 @@ func (c *CookieClient) RemoveTask(ctx context.Context, hash string) error {
 	return c.request(ctx, "POST", "https://lixian.115.com/lixian/?ct=lixian&ac=task_del", url.Values{"hash[0]": {hash}, "flag": {"0"}}, "Mozilla/5.0", nil)
 }
 func (c *CookieClient) Find(ctx context.Context, hash string) (*RemoteTask, error) {
-	for page := 1; page <= 100; page++ {
-		var r struct {
-			Pages scalar `json:"page_count"`
-			Tasks []struct {
-				Hash     string  `json:"info_hash"`
-				Status   int     `json:"status"`
-				Progress float64 `json:"percentDone"`
-				Result   scalar  `json:"file_id"`
-				Folder   scalar  `json:"wp_path_id"`
-			} `json:"tasks"`
-		}
-		raw := "https://lixian.115.com/lixian/?ct=lixian&ac=task_lists&page=" + strconv.Itoa(page)
-		if err := c.request(ctx, "POST", raw, nil, "Mozilla/5.0", &r); err != nil {
-			return nil, err
-		}
-		for _, t := range r.Tasks {
-			if strings.EqualFold(t.Hash, hash) {
-				return &RemoteTask{Hash: hash, Status: t.Status, Progress: int(t.Progress), ResultID: string(t.Result), FolderID: string(t.Folder)}, nil
-			}
-		}
-		if int64(page) >= r.Pages.integer() {
-			return nil, nil
-		}
+	if len(hash) != 40 {
+		return nil, &Error{Message: "115 任务 InfoHash 格式不正确"}
 	}
-	return nil, &Error{Message: "115 任务超过 100 页，无法完整对账，未重复提交"}
+	if _, err := hex.DecodeString(hash); err != nil {
+		return nil, &Error{Message: "115 任务 InfoHash 格式不正确"}
+	}
+	// InfoHash is unique and the server's filter is case-sensitive. Never fall
+	// back to account history: an incomplete query is not evidence of absence.
+	hash = strings.ToLower(hash)
+	var r struct {
+		Page  scalar `json:"page"`
+		Count scalar `json:"count"`
+		Pages scalar `json:"page_count"`
+		Tasks []struct {
+			Hash     string  `json:"info_hash"`
+			Status   int     `json:"status"`
+			Progress float64 `json:"percentDone"`
+			Result   scalar  `json:"file_id"`
+			Folder   scalar  `json:"wp_path_id"`
+		} `json:"tasks"`
+	}
+	q := url.Values{"ct": {"lixian"}, "ac": {"task_lists"}, "info_hash": {hash}, "page": {"1"}, "page_size": {"1"}}
+	if err := c.request(ctx, "POST", "https://lixian.115.com/lixian/?"+q.Encode(), nil, "Mozilla/5.0", &r); err != nil {
+		return nil, err
+	}
+	page, pageErr := strconv.ParseInt(string(r.Page), 10, 64)
+	count, countErr := strconv.ParseInt(string(r.Count), 10, 64)
+	pages, pagesErr := strconv.ParseInt(string(r.Pages), 10, 64)
+	if pageErr != nil || countErr != nil || pagesErr != nil || page != 1 || count < 0 || count > 1 || pages < 0 || pages > 1 || r.Tasks == nil || int64(len(r.Tasks)) != count || count == 1 && pages != 1 {
+		return nil, &Error{Message: "115 按 InfoHash 查询返回不完整或未过滤的任务列表，未扫描历史、未重复提交", Retryable: true}
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	t := r.Tasks[0]
+	if !strings.EqualFold(t.Hash, hash) {
+		return nil, &Error{Message: "115 未按 InfoHash 返回目标任务，未扫描历史、未重复提交", Retryable: true}
+	}
+	return &RemoteTask{Hash: hash, Status: t.Status, Progress: int(t.Progress), ResultID: string(t.Result), FolderID: string(t.Folder)}, nil
 }
 
 // The upstream decoder panics on short/malformed RSA payloads; turn that into a
@@ -330,7 +352,9 @@ func (c *CookieClient) Add(ctx context.Context, magnet, folder string) error {
 			Code  scalar `json:"errcode"`
 		} `json:"result"`
 	}
-	err := c.encrypted(ctx, "https://lixian.115.com/lixianssp/?ac=add_task_urls", map[string]string{"ac": "add_task_urls", "wp_path_id": folder, "app_ver": "27.0.5.7", "uid": uid, "url[0]": magnet}, "Mozilla/5.0", &r)
+	// This endpoint selects its RSA protocol using the app User-Agent. A generic
+	// browser UA returns plaintext "decode fail!" even with a valid Cookie.
+	err := c.encrypted(ctx, "https://lixian.115.com/lixianssp/?ac=add_task_urls", map[string]string{"ac": "add_task_urls", "wp_path_id": folder, "app_ver": cookieOfflineAppVersion, "uid": uid, "url[0]": magnet}, cookieOfflineUserAgent, &r)
 	if err != nil {
 		return err
 	}

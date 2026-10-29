@@ -26,6 +26,7 @@ func (a *App) registerCloud115Routes(r *gin.Engine) {
 	admin.PUT("/connection", a.bind((*App).saveCloud115Config))
 	browse := r.Group("/api/r18/libraries/:lib/videos/:video/offline", a.requireAuth, noStore)
 	browse.GET("", a.bind((*App).r18Offline))
+	browse.GET("/prepare", a.bind((*App).prepareR18Offline))
 	browse.POST("", a.requireAdministrator, a.bind((*App).createR18Offline))
 	browse.POST("/selection", a.requireAdministrator, a.bind((*App).selectR18Offline))
 	browse.POST("/tasks/:task/:action", a.requireAdministrator, a.bind((*App).changeR18Offline))
@@ -226,7 +227,7 @@ func (a *App) r18Offline(c *gin.Context) {
 					message = t.Error
 				}
 			}
-			tasks = append(tasks, gin.H{"id": t.ID, "resource_id": b.ResourceID, "status": status, "progress": t.Progress, "stage": t.Stage, "error": message, "retryable": retryable, "version": t.Version, "files": files, "file_id": b.FileID, "expires_at": t.ExpiresAt})
+			tasks = append(tasks, gin.H{"id": t.ID, "resource_id": b.ResourceID, "magnet": t.Magnet, "info_hash": t.InfoHash, "status": status, "progress": t.Progress, "stage": t.Stage, "error": message, "retryable": retryable, "version": t.Version, "files": files, "file_id": b.FileID, "expires_at": t.ExpiresAt})
 		}
 	}
 	c.JSON(200, gin.H{"configured": true, "tasks": tasks, "sources": a.r18ReadySources(c, l, c.Param("video"))})
@@ -292,6 +293,20 @@ func (a *App) createR18Offline(c *gin.Context) {
 	}
 	a.offlineService.Wake()
 	a.r18Offline(c)
+}
+func (a *App) prepareR18Offline(c *gin.Context) {
+	l, v, _, ok := a.offlineItem(c)
+	if !ok {
+		return
+	}
+	source := c.Query("source_id")
+	if !strings.HasPrefix(source, "115-") || len(source) > 128 {
+		c.JSON(400, gin.H{"error": "请指定播放版本"})
+		return
+	}
+	if _, _, ok = a.cloudPlaybackFile(c, l, v.ID, source, true); ok {
+		a.r18Offline(c)
+	}
 }
 func (a *App) boundTask(c *gin.Context, l store.Library, id string) bool {
 	conn, err := a.db.Cloud115Connection()
@@ -399,6 +414,7 @@ func (a *App) r18ReadySources(c *gin.Context, l store.Library, video string) []g
 			id := "115-" + b.Task.ID
 			u := a.cloudStreamURL(l, video, id)
 			source := gin.H{"Id": id, "Name": f.Name, "Type": "Default", "Protocol": "Http", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(f.Name)), "."), "Size": f.Size, "Path": u, "DirectStreamUrl": u, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "IsRemote": true, "AddApiKeyToDirectStreamUrl": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []gin.H{{"Type": "Video", "Index": 0, "IsDefault": true}}, "Default": b.Default}
+			source["InfoHash"], source["ResourceId"] = b.Task.InfoHash, b.ResourceID
 			if f.Duration > 0 && f.Duration <= 922337203685 {
 				source["RunTimeTicks"] = f.Duration * 10000000
 			}
@@ -454,19 +470,44 @@ func (a *App) r18Stream(c *gin.Context) {
 		c.Status(404)
 		return
 	}
+	p, fresh, ok := a.cloudPlaybackFile(c, l, video, c.Query("MediaSourceId"), false)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+	defer cancel()
+	raw, err := p.URL(ctx, fresh.PickCode, c.Request.UserAgent())
+	if err != nil {
+		c.JSON(502, gin.H{"error": "115 直链获取失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
+		return
+	}
+	// No long-lived signed URL cache; each playback uses the actual client's UA.
+	u, e := url.Parse(raw)
+	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || strings.ContainsAny(raw, "\r\n\\") {
+		c.Status(502)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Header("Referrer-Policy", "no-referrer")
+	c.Header("Location", raw)
+	c.Status(http.StatusFound)
+}
+
+// The page preflight and the stream use identical file-identity/recovery checks.
+// A preflight never obtains a signed URL: the actual player still supplies its UA.
+func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requested string, preparing bool) (cloud115.Provider, cloud115.File, bool) {
 	p, account, err := a.cloudProvider()
 	if err != nil {
 		c.JSON(503, gin.H{"error": "115 凭证不可用，请管理员检查配置"})
-		return
+		return nil, cloud115.File{}, false
 	}
 	bindings, err := a.db.OfflineBindings(l, video, account)
 	if err != nil {
 		c.Status(500)
-		return
+		return nil, cloud115.File{}, false
 	}
 	var chosen *cloud115.File
 	var task store.OfflineTask
-	requested := c.Query("MediaSourceId")
 	for _, b := range bindings {
 		if b.Task.Status != "ready" || b.Task.CacheExpired(time.Now().Unix()) || requested != "" && requested != "115-"+b.Task.ID {
 			continue
@@ -484,10 +525,18 @@ func (a *App) r18Stream(c *gin.Context) {
 		}
 	}
 	if chosen == nil {
-		c.JSON(404, gin.H{"error": "当前影片没有所选的就绪播放源"})
-		return
+		if preparing {
+			a.r18Offline(c)
+		} else {
+			c.JSON(404, gin.H{"error": "当前影片没有所选的就绪播放源"})
+		}
+		return nil, cloud115.File{}, false
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+	timeout := 45 * time.Second
+	if preparing {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 	fresh, err := p.Info(ctx, chosen.ID)
 	if err == nil && (fresh.ID != chosen.ID || fresh.Directory || fresh.PickCode == "" || chosen.SHA1 != "" && fresh.SHA1 != chosen.SHA1) {
@@ -496,29 +545,26 @@ func (a *App) r18Stream(c *gin.Context) {
 	if err != nil {
 		var e *cloud115.Error
 		if errors.As(err, &e) && e.Missing {
-			task.Status = "failed"
-			task.Resume = "discovering"
+			task.Status = "discovering"
+			task.Resume = ""
 			task.Stage = "file"
-			task.Error = "115 文件已删除，请恢复文件后重试确认"
+			task.Error = "115 文件已删除，正在确认并自动重新下载，请稍后刷新状态"
 			task.Retryable = true
-			_ = a.db.UpdateOfflineTask(task, task.Version)
+			task.RecoveryFileID = chosen.ID
+			task.Files = []cloud115.File{}
+			task.NextPoll = 0
+			if a.db.UpdateOfflineTask(task, task.Version) == nil {
+				a.offlineService.Wake()
+				if preparing {
+					a.r18Offline(c)
+				} else {
+					c.JSON(502, gin.H{"error": task.Error})
+				}
+				return nil, cloud115.File{}, false
+			}
 		}
 		c.JSON(502, gin.H{"error": "115 文件确认失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
-		return
+		return nil, cloud115.File{}, false
 	}
-	raw, err := p.URL(ctx, fresh.PickCode, c.Request.UserAgent())
-	if err != nil {
-		c.JSON(502, gin.H{"error": "115 直链获取失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
-		return
-	}
-	// No long-lived signed URL cache; each playback uses the actual client's UA.
-	u, e := url.Parse(raw)
-	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || strings.ContainsAny(raw, "\r\n\\") {
-		c.Status(502)
-		return
-	}
-	c.Header("Cache-Control", "no-store")
-	c.Header("Referrer-Policy", "no-referrer")
-	c.Header("Location", raw)
-	c.Status(http.StatusFound)
+	return p, fresh, true
 }

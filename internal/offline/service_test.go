@@ -19,13 +19,14 @@ type providerFixture struct {
 	remote    *cloud115.RemoteTask
 	files     []cloud115.File
 	addError  error
+	findError error
 	onInfo    func()
 	cacheName string
 }
 
 func (p *providerFixture) Check(context.Context, string) (string, error) { return "account", nil }
 func (p *providerFixture) Find(context.Context, string) (*cloud115.RemoteTask, error) {
-	return p.remote, nil
+	return p.remote, p.findError
 }
 func (p *providerFixture) Add(context.Context, string, string) error { p.adds++; return p.addError }
 func (p *providerFixture) Info(_ context.Context, id string) (cloud115.File, error) {
@@ -150,6 +151,31 @@ func TestOfflineUncertainSubmissionRecoveryNeverResubmits(t *testing.T) {
 	task = read(t, s, task.ID)
 	if task.Status != "downloading" || task.Progress != 42 {
 		t.Fatal(task)
+	}
+}
+
+func TestOfflineReconcileErrorDoesNotSubmit(t *testing.T) {
+	for _, status := range []string{"queued", "submitting"} {
+		t.Run(status, func(t *testing.T) {
+			s, l, video := setup(t)
+			task := create(t, s, l, video)
+			task.Status, task.CacheFolderID, task.ExpiresAt = status, "cache", time.Now().Add(24*time.Hour).Unix()
+			if err := s.UpdateOfflineTask(task, task.Version); err != nil {
+				t.Fatal(err)
+			}
+			service := &Service{db: s, ctx: context.Background()}
+			p := &providerFixture{cacheName: "emby-go-" + task.ID, findError: &cloud115.Error{Message: "filtered query incomplete", Retryable: true}}
+			service.process(p, read(t, s, task.ID))
+			task = read(t, s, task.ID)
+			if p.adds != 0 || task.Status != status || task.Stage != "reconcile" || task.Error != "filtered query incomplete" || !task.Retryable || task.NextPoll <= time.Now().Unix() {
+				t.Fatal("query failure must preserve state and back off without submitting", task, p.adds)
+			}
+			p.findError = nil
+			service.process(p, task)
+			if status == "queued" && p.adds != 1 || status == "submitting" && p.adds != 0 {
+				t.Fatal("only a never-submitted task may submit after a complete absent result", p.adds)
+			}
+		})
 	}
 }
 func TestOfflineCancellationCASAuthAndRetry(t *testing.T) {

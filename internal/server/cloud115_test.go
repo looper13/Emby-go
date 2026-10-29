@@ -20,6 +20,7 @@ type cloudFixture struct {
 	infos, urls int
 	ua          string
 	missing     bool
+	infoErr     error
 }
 
 func (f *cloudFixture) Check(context.Context, string) (string, error)              { return "115-account", nil }
@@ -27,6 +28,9 @@ func (f *cloudFixture) Find(context.Context, string) (*cloud115.RemoteTask, erro
 func (f *cloudFixture) Add(context.Context, string, string) error                  { return nil }
 func (f *cloudFixture) Info(_ context.Context, id string) (cloud115.File, error) {
 	f.infos++
+	if f.infoErr != nil {
+		return cloud115.File{}, f.infoErr
+	}
 	if f.missing {
 		return cloud115.File{}, &cloud115.Error{Message: "file not found", Missing: true}
 	}
@@ -100,7 +104,12 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 	item := r18ItemID(l.ID, fake.video.ID)
 	call("POST", base, token, map[string]any{"resource_id": "forged"}, 404)
 	call("POST", base, token, map[string]any{"resource_id": "1", "magnet": "bad"}, 400)
-	call("POST", base, token, map[string]any{"resource_id": "1"}, 200)
+	_, created := call("POST", base, token, map[string]any{"resource_id": "1"}, 200)
+	createdTask := created["tasks"].([]any)[0].(map[string]any)
+	_, createdHash, normalizeErr := cloud115.NormalizeMagnet(createdTask["magnet"].(string))
+	if normalizeErr != nil || createdTask["info_hash"] != "0123456789012345678901234567890123456789" || createdHash != createdTask["info_hash"] {
+		t.Fatal("missing playback version identity", createdTask)
+	}
 	list, err := a.db.OfflineBindings(l, fake.video.ID, conn.AccountID)
 	if err != nil || len(list) != 1 {
 		t.Fatal(list, err)
@@ -112,6 +121,7 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 		t.Fatal("duplicate binding")
 	}
 	task.Status = "waiting_selection"
+	task.ResultID = "result"
 	task.Files = []cloud115.File{{ID: "file", Name: "movie.mkv", PickCode: "private-code", SHA1: "file-sha", Size: 100}}
 	if err = a.db.UpdateOfflineTask(task, task.Version); err != nil {
 		t.Fatal(err)
@@ -131,6 +141,25 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 	if len(out["tasks"].([]any)) != 0 || len(out["sources"].([]any)) != 1 {
 		t.Fatal(out)
 	}
+	readySource := out["sources"].([]any)[0].(map[string]any)
+	if readySource["InfoHash"] != task.InfoHash || readySource["ResourceId"] != "1" {
+		t.Fatal("ready version identity missing for authorized reader", readySource)
+	}
+	preparePath := base + "/prepare?source_id=" + readySource["Id"].(string)
+	call("GET", preparePath, "", nil, 401)
+	call("GET", base+"/prepare?source_id=forged", token, nil, 400)
+	beforePrepare := p.urls
+	_, prepared := call("GET", preparePath, "cloud-reader-token", nil, 200)
+	if p.urls != beforePrepare || len(prepared["sources"].([]any)) != 1 || len(prepared["tasks"].([]any)) != 0 {
+		t.Fatal("preflight must not issue signed URLs or expose administrator tasks", prepared, p)
+	}
+	p.infoErr = &cloud115.Error{Message: "temporary network failure", Retryable: true}
+	call("GET", preparePath, token, nil, 502)
+	unchanged, _ := a.db.OfflineTask(task.ID)
+	if unchanged.Status != "ready" {
+		t.Fatal("preflight network failure triggered redownload", unchanged)
+	}
+	p.infoErr = nil
 	_, out = call("GET", "/Items/"+item+"/PlaybackInfo", "cloud-reader-token", nil, 200)
 	source := out["MediaSources"].([]any)[0].(map[string]any)
 	ticketURL := source["DirectStreamUrl"].(string)
@@ -166,10 +195,31 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 	}
 	reader.SaveLibraryAccessPolicy(store.LibraryAccessPolicy{LibraryIDs: []int64{l.ID}})
 	p.missing = true
-	call("GET", ticketURL, "", nil, 502)
+	_, missingOut := call("GET", ticketURL, "", nil, 502)
+	if !strings.Contains(missingOut["error"].(string), "自动重新下载") {
+		t.Fatal("missing file did not explain automatic recovery", missingOut)
+	}
 	call("GET", "/Items/"+item+"/PlaybackInfo", "cloud-reader-token", nil, 200)
 	current, _ := a.db.OfflineTask(task.ID)
-	if current.Stage != "file" || current.Status != "failed" {
+	if current.Stage != "file" || current.Status != "discovering" || current.RecoveryFileID != "file" || len(current.Files) != 0 {
 		t.Fatal(current)
+	}
+	bindings, _ := a.db.OfflineBindings(l, fake.video.ID, conn.AccountID)
+	if len(bindings) != 1 || bindings[0].FileID != "" || bindings[0].Default {
+		t.Fatal("deleted source binding was not invalidated", bindings)
+	}
+	current.Status = "ready"
+	current.Files = task.Files
+	if err := a.db.UpdateOfflineTask(current, current.Version); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", base+"/selection", token, map[string]any{"task_id": task.ID, "file_id": "file", "default": false}, 200)
+	_, repairing := call("GET", preparePath, "cloud-reader-token", nil, 200)
+	if len(repairing["sources"].([]any)) != 0 || len(repairing["tasks"].([]any)) != 0 {
+		t.Fatal("missing preflight retained a deleted source", repairing)
+	}
+	recovering, _ := a.db.OfflineTask(task.ID)
+	if recovering.Status != "discovering" || recovering.RecoveryFileID != "file" {
+		t.Fatal("preflight did not enter automatic recovery", recovering)
 	}
 }

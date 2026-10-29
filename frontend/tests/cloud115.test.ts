@@ -21,10 +21,12 @@ describe('115 workflow', () => {
     vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [task] });
     const submit = vi.spyOn(cloud115Api, 'submit').mockResolvedValue({ ...empty, tasks: [task] });
     const select = vi.spyOn(cloud115Api, 'select').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'ready', file_id: 'file' }], sources: [source] });
+    vi.spyOn(cloud115Api, 'prepare').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'ready', file_id: 'file' }], sources: [source] });
     const w = panel(); await flushPromises(); expect(submit).not.toHaveBeenCalled(); expect(w.text()).toContain('请选择正片文件');
     await w.findAll('button').find(b => b.text() === '设为默认播放源')!.trigger('click'); await flushPromises();
     expect(select).toHaveBeenCalledWith('2', 'id', 'task', 'file', expect.any(AbortSignal));
     await w.findAll('button').find(b => b.text() === '播放')!.trigger('click');
+    await flushPromises();
     expect(usePlayerStore().current?.url).toBe(source.DirectStreamUrl); expect(usePlayerStore().current?.itemId).toBeUndefined();
   });
   it('preserves visible tasks on refresh failure and hides writes from ordinary users', async () => {
