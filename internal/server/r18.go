@@ -21,6 +21,7 @@ type r18Source interface {
 	List(context.Context, r18.Query) (r18.Page, error)
 	Get(context.Context, string) (r18.Video, error)
 	Resources(context.Context, r18.Video, int) (r18.ResourcePage, error)
+	Resource(context.Context, r18.Video, string) (r18.Resource, error)
 	Estimate(context.Context) (int64, error)
 	CatalogCount(context.Context, r18.CatalogQuery) (int64, error)
 	CatalogList(context.Context, r18.CatalogQuery) ([]r18.Video, error)

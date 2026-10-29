@@ -175,24 +175,21 @@ type limitedTransport struct {
 	base     http.RoundTripper
 	next     time.Time
 	interval time.Duration
+	queue    []*transportWaiter
+	changed  chan struct{}
+	bypasses int
 }
 
 func (t *limitedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	t.mu.Lock()
-	wait := time.Until(t.next)
-	if wait > 0 {
-		timer := time.NewTimer(wait)
-		select {
-		case <-r.Context().Done():
-			timer.Stop()
-			t.mu.Unlock()
-			return nil, r.Context().Err()
-		case <-timer.C:
-		}
+	started := time.Now()
+	if err := t.admit(r.Context()); err != nil {
+		logRequestTiming(r, time.Since(started), 0, true)
+		return nil, err
 	}
-	t.next = time.Now().Add(t.interval)
-	t.mu.Unlock()
+	waited := time.Since(started)
+	network := time.Now()
 	response, err := t.base.RoundTrip(r)
+	logRequestTiming(r, waited, time.Since(network), err != nil || response != nil && response.StatusCode >= 400)
 	if err == nil && response.StatusCode >= 400 {
 		response.Body.Close()
 		return nil, &Error{Message: fmt.Sprintf("115 HTTP %d", response.StatusCode), Auth: response.StatusCode == 401, Retryable: response.StatusCode == 401 || response.StatusCode == 429 || response.StatusCode >= 500}
@@ -373,6 +370,15 @@ func Discover(ctx context.Context, p Provider, root, workFolder string) ([]File,
 	first, err := p.Info(ctx, root)
 	if err != nil {
 		return nil, err
+	}
+	return DiscoverFrom(ctx, p, root, workFolder, first)
+}
+
+// DiscoverFrom reuses metadata fetched in this operation, not a persisted cache.
+// The caller still verifies cache ancestry; pagination and scan limits are unchanged.
+func DiscoverFrom(ctx context.Context, p Provider, root, workFolder string, first File) ([]File, error) {
+	if root == "" || root == "0" || root == workFolder {
+		return nil, &Error{Message: "115 未提供独立结果目录，拒绝扫描整个工作目录", Retryable: true}
 	}
 	if first.ID != root {
 		return nil, &Error{Message: "115 返回的结果文件身份不匹配"}

@@ -4,8 +4,8 @@ import { catalogApi } from '../src/api/catalog';
 import { useMediaWallStore } from '../src/stores/media-wall';
 import { parseDetail, parseWall, type MovieDto } from '../src/api/contracts';
 import { apiClient } from '../src/api/client';
-import wallFixture from '../../vue-migration/fixtures/json/items-wall.json';
-import detailFixture from '../../vue-migration/fixtures/json/item-detail.json';
+import wallFixture from './fixtures/json/items-wall.json';
+import detailFixture from './fixtures/json/item-detail.json';
 function batch(offset: number, count = 100) {
   return { total: 350, image_tags: {}, items: Array.from({ length: count }, (_, i) => ({ ...detailFixture.movie, id: offset + i + 1 } as MovieDto)) };
 }

@@ -5,7 +5,7 @@ import { parseConfigState, systemConfigApi, type ConfigState } from '../src/api/
 import SystemConfigForm from '../src/components/settings/SystemConfigForm.vue';
 import SettingsPage from '../src/pages/SettingsPage.vue';
 import { adminApi } from '../src/api/admin';
-import settings from '../../vue-migration/fixtures/json/settings.json';
+import settings from './fixtures/json/settings.json';
 
 const wrappers: VueWrapper[] = [];
 afterEach(() => { for (const w of wrappers.splice(0)) w.unmount(); });

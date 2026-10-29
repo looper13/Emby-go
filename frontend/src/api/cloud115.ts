@@ -35,15 +35,15 @@ export const cloud115Api = {
   async save(value: { cookie: string; revision: number }, signal?: AbortSignal) {
     await apiClient.request('/api/admin/115/connection', { auth: 'required', method: 'PUT', json: value, signal, timeoutMs: 65000 });
   },
-  async state(library: string, video: string, signal?: AbortSignal) { return parseOfflineState(await apiClient.request(base(library, video), { auth: 'required', signal })); },
+  async state(library: string, video: string, signal?: AbortSignal) { return parseOfflineState(await apiClient.request(base(library, video), { auth: 'required', signal, timeoutMs: 10000 })); },
   async prepare(library: string, video: string, source: string, signal?: AbortSignal) {
     return parseOfflineState(await apiClient.request(`${base(library, video)}/prepare?${new URLSearchParams({ source_id: source })}`, { auth: 'required', signal, timeoutMs: 25000 }));
   },
   async submit(library: string, video: string, value: { resource_id?: string; magnet?: string }, signal?: AbortSignal) {
     return parseOfflineState(await apiClient.request(base(library, video), { auth: 'required', method: 'POST', json: value, signal, timeoutMs: 15000 }));
   },
-  async select(library: string, video: string, task: string, file: string, signal?: AbortSignal, makeDefault = true) {
-    return parseOfflineState(await apiClient.request(`${base(library, video)}/selection`, { auth: 'required', method: 'POST', json: { task_id: task, file_id: file, default: makeDefault }, signal }));
+  async select(library: string, video: string, task: string, file: string, signal?: AbortSignal, makeDefault = true, prepare = false) {
+    return parseOfflineState(await apiClient.request(`${base(library, video)}/selection`, { auth: 'required', method: 'POST', json: { task_id: task, file_id: file, default: makeDefault, prepare }, signal, timeoutMs: prepare ? 25000 : 10000 }));
   },
   async change(library: string, video: string, task: OfflineTask, action: 'retry' | 'cancel', signal?: AbortSignal) {
     return parseOfflineState(await apiClient.request(`${base(library, video)}/tasks/${encodeURIComponent(task.id)}/${action}`, { auth: 'required', method: 'POST', json: { version: task.version }, signal }));

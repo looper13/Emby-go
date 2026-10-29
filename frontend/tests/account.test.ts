@@ -8,7 +8,7 @@ import { apiClient } from '../src/api/client';
 import { parseUser } from '../src/api/contracts';
 import { TOKEN_KEY, useAuthStore } from '../src/stores/auth';
 import { useMediaWallStore } from '../src/stores/media-wall';
-import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
+import authFixture from './fixtures/json/auth-login.json';
 
 function fixture() {
   return {

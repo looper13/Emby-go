@@ -4,9 +4,9 @@ import { flushPromises } from '@vue/test-utils';
 import { taskApi, parseScanProgress } from '../src/api/tasks';
 import { useTasksStore } from '../src/stores/tasks';
 import { useToastStore } from '../src/stores/toasts';
-import progress from '../../vue-migration/fixtures/json/scan-progress-running.json';
-import ended from '../../vue-migration/fixtures/json/scan-progress.json';
-import result from '../../vue-migration/fixtures/json/scan-result.json';
+import progress from './fixtures/json/scan-progress-running.json';
+import ended from './fixtures/json/scan-progress.json';
+import result from './fixtures/json/scan-result.json';
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { resolve, promise }; }
 let pinia: Pinia;
 beforeEach(() => { vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); });

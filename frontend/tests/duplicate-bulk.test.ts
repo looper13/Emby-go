@@ -5,7 +5,7 @@ import DuplicateBulkDeleteDialog from '../src/components/libraries/DuplicateBulk
 import { ApiError, apiClient } from '../src/api/client';
 import { duplicatesApi, parseDuplicateSelection, type DuplicateSelection, type DuplicateSelectionItem, type DuplicateDeletePreview } from '../src/api/duplicates';
 import { parseLibraries } from '../src/api/contracts';
-import librariesFixture from '../../vue-migration/fixtures/json/libraries.json';
+import librariesFixture from './fixtures/json/libraries.json';
 
 const libraries=parseLibraries(librariesFixture).items || [];
 const keeper={id:500,library_id:1,library_name:'Main',number:'ALDN-001',title:'Keep',source_path:'/films/keep.strm',status:'success',additional_parts:[],created_at:'2020-01-01T00:00:00Z',path_length:16};

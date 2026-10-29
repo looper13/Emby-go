@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, createApiClient } from '../src/api/client';
 import { parseItemsTotal, parseLibraries, parseLogin, parseStatus } from '../src/api/contracts';
 import { createPageRequestScope } from '../src/composables/usePageRequest';
-import librariesFixture from '../../vue-migration/fixtures/json/libraries.json';
-import itemsFixture from '../../vue-migration/fixtures/json/items-wall.json';
+import librariesFixture from './fixtures/json/libraries.json';
+import itemsFixture from './fixtures/json/items-wall.json';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

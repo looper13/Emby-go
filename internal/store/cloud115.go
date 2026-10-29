@@ -30,6 +30,7 @@ type OfflineTask struct {
 	ResultID         string          `json:"result_id"`
 	Attempts         int             `json:"attempts"`
 	NextPoll         int64           `json:"next_poll"`
+	VisibilityUntil  int64           `json:"visibility_until,omitempty"`
 	CreatedAt        int64           `json:"created_at"`
 	Deadline         int64           `json:"deadline"`
 	UpdatedAt        int64           `json:"updated_at"`
@@ -183,7 +184,7 @@ func (s *Store) DueOfflineCleanup(account string, now int64) ([]OfflineTask, err
 	return list, rows.Err()
 }
 func (s *Store) DueOfflineTasks(account string, now int64) ([]OfflineTask, error) {
-	rows, err := s.db.Query("SELECT data FROM offline_tasks WHERE account_id=? AND status IN ('queued','submitting','downloading','discovering') AND next_poll<=? ORDER BY next_poll,id LIMIT 50", account, now)
+	rows, err := s.db.Query("SELECT data FROM offline_tasks WHERE account_id=? AND status IN ('queued','submitting','downloading','discovering') AND next_poll<=? AND (COALESCE(json_extract(data,'$.expires_at'),0)<=0 OR json_extract(data,'$.expires_at')>?) ORDER BY next_poll,id LIMIT 50", account, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +229,11 @@ func (s *Store) SelectOfflineFile(l Library, video, taskID, fileID string, makeD
 		return err
 	}
 	defer tx.Rollback()
+	// Reserve the writer before reading: upgrading a deferred read snapshot can
+	// return SQLITE_BUSY immediately when progress/backfill writes concurrently.
+	if _, err = tx.Exec("UPDATE offline_tasks SET version=version WHERE id=?", taskID); err != nil {
+		return err
+	}
 	var data string
 	if err = tx.QueryRow("SELECT data FROM offline_tasks WHERE id=? AND status IN ('ready','waiting_selection')", taskID).Scan(&data); err != nil {
 		return err

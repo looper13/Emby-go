@@ -7,7 +7,7 @@ import { catalogApi } from '../src/api/catalog';
 import type { WallDto } from '../src/api/contracts';
 import { useMediaWallStore } from '../src/stores/media-wall';
 import { viewHistoryKey } from '../src/router/view-history';
-import detail from '../../vue-migration/fixtures/json/item-detail.json';
+import detail from './fixtures/json/item-detail.json';
 
 let pinia: Pinia, wrapper: VueWrapper | undefined;
 function batch(offset: number): WallDto {

@@ -7,11 +7,11 @@ import { apiClient } from '../src/api/client';
 import { createAppRouter } from '../src/router';
 import { viewHistories, viewHistoryKey } from '../src/router/view-history';
 import { TOKEN_KEY, useAuthStore } from '../src/stores/auth';
-import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
-import librariesFixture from '../../vue-migration/fixtures/json/libraries.json';
-import statusFixture from '../../vue-migration/fixtures/json/status.json';
-import itemsFixture from '../../vue-migration/fixtures/json/items-wall.json';
-import scanFixture from '../../vue-migration/fixtures/json/scan-progress.json';
+import authFixture from './fixtures/json/auth-login.json';
+import librariesFixture from './fixtures/json/libraries.json';
+import statusFixture from './fixtures/json/status.json';
+import itemsFixture from './fixtures/json/items-wall.json';
+import scanFixture from './fixtures/json/scan-progress.json';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { 'Content-Type': 'application/json' },

@@ -8,7 +8,7 @@ import { favoriteDestination, favoriteEntityId, favoritesApi, parseFavoriteItem,
 import { apiClient } from '../src/api/client';
 import { useToastStore } from '../src/stores/toasts';
 import { useAuthStore } from '../src/stores/auth';
-import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
+import authFixture from './fixtures/json/auth-login.json';
 import { parseUser } from '../src/api/contracts';
 
 let pinia: Pinia;

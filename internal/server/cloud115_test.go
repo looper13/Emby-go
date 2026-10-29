@@ -21,6 +21,7 @@ type cloudFixture struct {
 	ua          string
 	missing     bool
 	infoErr     error
+	urlErr      error
 }
 
 func (f *cloudFixture) Check(context.Context, string) (string, error)              { return "115-account", nil }
@@ -44,6 +45,9 @@ func (f *cloudFixture) Delete(context.Context, string) error                  { 
 func (f *cloudFixture) RemoveTask(context.Context, string) error              { return nil }
 func (f *cloudFixture) URL(_ context.Context, code, ua string) (string, error) {
 	f.urls++
+	if f.urlErr != nil {
+		return "", f.urlErr
+	}
 	f.ua = ua
 	return "https://cdn.example/movie?sign=private", nil
 }

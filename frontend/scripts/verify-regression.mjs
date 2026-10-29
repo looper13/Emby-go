@@ -5,9 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const phase = process.env.EMBY_MIGRATION_PHASE ?? 'P1';
-if (!/^P[0-7]$/.test(phase)) throw new Error('EMBY_MIGRATION_PHASE must be P0 through P7');
-const output = path.join(root, 'vue-migration/artifacts', phase, 'go-regression.json');
+const output = path.join(root, 'frontend/test-results/go-regression.json');
 // This existing test clears a hard-coded local Redis database, so never run it here.
 const args = ['test', '-json', '-count=1', '-skip', '^TestRedisBehavior$', './...'];
 const child = spawn('go', args, { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

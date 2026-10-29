@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -230,9 +231,13 @@ func (a *App) r18Offline(c *gin.Context) {
 			tasks = append(tasks, gin.H{"id": t.ID, "resource_id": b.ResourceID, "magnet": t.Magnet, "info_hash": t.InfoHash, "status": status, "progress": t.Progress, "stage": t.Stage, "error": message, "retryable": retryable, "version": t.Version, "files": files, "file_id": b.FileID, "expires_at": t.ExpiresAt})
 		}
 	}
-	c.JSON(200, gin.H{"configured": true, "tasks": tasks, "sources": a.r18ReadySources(c, l, c.Param("video"))})
+	c.JSON(200, gin.H{"configured": true, "tasks": tasks, "sources": a.r18SourcesFromBindings(c, l, c.Param("video"), bindings)})
 }
 func (a *App) createR18Offline(c *gin.Context) {
+	started := time.Now()
+	defer func() {
+		slog.Debug("115 播放阶段耗时", "stage", "local_submit", "elapsed_ms", time.Since(started).Milliseconds())
+	}()
 	l, v, client, ok := a.offlineItem(c)
 	if !ok {
 		return
@@ -249,32 +254,18 @@ func (a *App) createR18Offline(c *gin.Context) {
 	if req.ResourceID != "" {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 		defer cancel()
-		found := false
-		for offset := 0; offset <= 10000; {
-			page, err := client.Resources(ctx, v, offset)
-			if err != nil {
-				a.r18Failure(c, "磁力资源查询", err)
-				return
-			}
-			for _, resource := range page.Items {
-				if resource.ID == req.ResourceID {
-					magnet = resource.Magnet
-					found = true
-					break
-				}
-			}
-			if found || !page.HasMore {
-				break
-			}
-			if page.NextOffset <= offset {
-				break
-			}
-			offset = page.NextOffset
-		}
-		if !found {
+		started := time.Now()
+		resource, err := client.Resource(ctx, v, req.ResourceID)
+		slog.Debug("115 播放阶段耗时", "stage", "resource_lookup", "elapsed_ms", time.Since(started).Milliseconds())
+		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(404, gin.H{"error": "资源不存在、已拒绝或不属于当前影片"})
 			return
 		}
+		if err != nil {
+			a.r18Failure(c, "磁力资源查询", err)
+			return
+		}
+		magnet = resource.Magnet
 	}
 	magnet, hash, err := cloud115.NormalizeMagnet(magnet)
 	if err != nil {
@@ -295,6 +286,10 @@ func (a *App) createR18Offline(c *gin.Context) {
 	a.r18Offline(c)
 }
 func (a *App) prepareR18Offline(c *gin.Context) {
+	started := time.Now()
+	defer func() {
+		slog.Debug("115 播放阶段耗时", "stage", "prepare", "elapsed_ms", time.Since(started).Milliseconds())
+	}()
 	l, v, _, ok := a.offlineItem(c)
 	if !ok {
 		return
@@ -325,7 +320,11 @@ func (a *App) boundTask(c *gin.Context, l store.Library, id string) bool {
 	return false
 }
 func (a *App) selectR18Offline(c *gin.Context) {
-	l, _, _, ok := a.offlineItem(c)
+	started := time.Now()
+	defer func() {
+		slog.Debug("115 播放阶段耗时", "stage", "selection", "elapsed_ms", time.Since(started).Milliseconds())
+	}()
+	l, v, _, ok := a.offlineItem(c)
 	if !ok {
 		return
 	}
@@ -333,6 +332,7 @@ func (a *App) selectR18Offline(c *gin.Context) {
 		Task    string `json:"task_id"`
 		File    string `json:"file_id"`
 		Default bool   `json:"default"`
+		Prepare bool   `json:"prepare"`
 	}
 	if c.ShouldBindJSON(&req) != nil || !a.boundTask(c, l, req.Task) {
 		c.JSON(404, gin.H{"error": "任务不属于当前影片"})
@@ -341,6 +341,11 @@ func (a *App) selectR18Offline(c *gin.Context) {
 	if err := a.db.SelectOfflineFile(l, c.Param("video"), req.Task, req.File, req.Default); err != nil {
 		c.JSON(409, gin.H{"error": "所选文件不属于该任务或任务状态已变化"})
 		return
+	}
+	if req.Prepare {
+		if _, _, ok := a.cloudPlaybackFile(c, l, v.ID, "115-"+req.Task, true); !ok {
+			return
+		}
 	}
 	a.r18Offline(c)
 }
@@ -394,15 +399,19 @@ func (a *App) cloudStreamURL(l store.Library, video, source string) string {
 	return streamURL(id) + "?" + url.Values{"MediaSourceId": {source}, "playback_token": {ticket}, "Static": {"true"}}.Encode()
 }
 func (a *App) r18ReadySources(c *gin.Context, l store.Library, video string) []gin.H {
-	list := []gin.H{}
 	conn, err := a.db.Cloud115Connection()
 	if err != nil {
-		return list
+		return []gin.H{}
 	}
 	bindings, err := a.db.OfflineBindings(l, video, conn.AccountID)
 	if err != nil {
-		return list
+		return []gin.H{}
 	}
+	return a.r18SourcesFromBindings(c, l, video, bindings)
+}
+
+func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video string, bindings []store.OfflineBinding) []gin.H {
+	list := []gin.H{}
 	for _, b := range bindings {
 		if b.Task.Status != "ready" || b.Task.CacheExpired(time.Now().Unix()) {
 			continue
@@ -413,6 +422,12 @@ func (a *App) r18ReadySources(c *gin.Context, l store.Library, video string) []g
 			}
 			id := "115-" + b.Task.ID
 			u := a.cloudStreamURL(l, video, id)
+			if prepared, ok := c.Get("cloud115Preparation"); ok {
+				proof := prepared.(preparedCloudFile)
+				if proof.Task == b.Task.ID && proof.Version == b.Task.Version && proof.File.ID == f.ID {
+					u += "&preparation_token=" + proof.Nonce
+				}
+			}
 			source := gin.H{"Id": id, "Name": f.Name, "Type": "Default", "Protocol": "Http", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(f.Name)), "."), "Size": f.Size, "Path": u, "DirectStreamUrl": u, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "IsRemote": true, "AddApiKeyToDirectStreamUrl": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []gin.H{{"Type": "Video", "Index": 0, "IsDefault": true}}, "Default": b.Default}
 			source["InfoHash"], source["ResourceId"] = b.Task.InfoHash, b.ResourceID
 			if f.Duration > 0 && f.Duration <= 922337203685 {
@@ -424,6 +439,10 @@ func (a *App) r18ReadySources(c *gin.Context, l store.Library, video string) []g
 	return list
 }
 func (a *App) r18Stream(c *gin.Context) {
+	started := time.Now()
+	defer func() {
+		slog.Debug("115 播放阶段耗时", "stage", "stream", "elapsed_ms", time.Since(started).Milliseconds())
+	}()
 	library, video, ok := parseR18ItemID(c.Param("id"))
 	if !ok {
 		c.Status(404)
@@ -476,8 +495,15 @@ func (a *App) r18Stream(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 	defer cancel()
-	raw, err := p.URL(ctx, fresh.PickCode, c.Request.UserAgent())
+	raw, err := p.URL(cloud115.WithInteractive(ctx), fresh.PickCode, c.Request.UserAgent())
 	if err != nil {
+		var cloudErr *cloud115.Error
+		if errors.As(err, &cloudErr) && cloudErr.Missing && !cloudErr.Auth {
+			// A file can disappear after preflight; recheck before entering recovery.
+			if _, _, ok := a.cloudPlaybackFile(c, l, video, c.Query("MediaSourceId"), false); !ok {
+				return
+			}
+		}
 		c.JSON(502, gin.H{"error": "115 直链获取失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
 		return
 	}
@@ -532,19 +558,25 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 		}
 		return nil, cloud115.File{}, false
 	}
+	if !preparing {
+		if fresh, ok := a.takeCloudPreparation(c, l, video, task, *chosen); ok {
+			slog.Debug("115 播放复用本次新鲜文件核验", "stage", "file_info_reused")
+			return p, fresh, true
+		}
+	}
 	timeout := 45 * time.Second
 	if preparing {
 		timeout = 15 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
-	fresh, err := p.Info(ctx, chosen.ID)
+	fresh, err := p.Info(cloud115.WithInteractive(ctx), chosen.ID)
 	if err == nil && (fresh.ID != chosen.ID || fresh.Directory || fresh.PickCode == "" || chosen.SHA1 != "" && fresh.SHA1 != chosen.SHA1) {
 		err = &cloud115.Error{Message: "115 文件身份变化或文件不可播放"}
 	}
 	if err != nil {
 		var e *cloud115.Error
-		if errors.As(err, &e) && e.Missing {
+		if errors.As(err, &e) && e.Missing && !e.Auth {
 			task.Status = "discovering"
 			task.Resume = ""
 			task.Stage = "file"
@@ -565,6 +597,9 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 		}
 		c.JSON(502, gin.H{"error": "115 文件确认失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
 		return nil, cloud115.File{}, false
+	}
+	if preparing {
+		a.prepareCloudFile(c, l, video, task, fresh)
 	}
 	return p, fresh, true
 }

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { startLiveEnvironment } from '../../vue-migration/tools/live-env/environment.mjs';
-import { loadPlaywright, sanitizeTrace } from '../../vue-migration/tools/live-env/browser-baseline.mjs';
+import { startLiveEnvironment } from '../test-support/live-env/environment.mjs';
+import { loadPlaywright, sanitizeTrace } from '../test-support/live-env/browser-tools.mjs';
 
 type Live = Awaited<ReturnType<typeof startLiveEnvironment>>;
 const repo = fileURLToPath(new URL('../../', import.meta.url));

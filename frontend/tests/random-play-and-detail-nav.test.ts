@@ -13,8 +13,8 @@ import { usePlayerStore } from '../src/stores/player';
 import { useAuthStore } from '../src/stores/auth';
 import { parseDetail, parseUser } from '../src/api/contracts';
 import { viewHistoryKey } from '../src/router/view-history';
-import detailFixture from '../../vue-migration/fixtures/json/item-detail.json';
-import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
+import detailFixture from './fixtures/json/item-detail.json';
+import authFixture from './fixtures/json/auth-login.json';
 
 let pinia: Pinia;
 let wrapper: VueWrapper | undefined;

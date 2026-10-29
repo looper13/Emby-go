@@ -28,7 +28,7 @@ func TestRequestLogsRedactCredentialsWithoutChangingRequests(t *testing.T) {
 			}
 			c.Status(200)
 		})
-		request := httptest.NewRequest("POST", "/Users/AuthenticateByName?api_key=FAKE_QUERY_KEY&ApiKey=FAKE_ALT_KEY&X-Emby-Token=FAKE_URL_TOKEN&%61ccess_token=FAKE_ACCESS_TOKEN&limit=10", strings.NewReader(body))
+		request := httptest.NewRequest("POST", "/Users/AuthenticateByName?api_key=FAKE_QUERY_KEY&ApiKey=FAKE_ALT_KEY&X-Emby-Token=FAKE_URL_TOKEN&%61ccess_token=FAKE_ACCESS_TOKEN&preparation_token=FAKE_PREPARATION_TOKEN&limit=10", strings.NewReader(body))
 		request.Header.Set("X-Emby-Token", "FAKE_HEADER_TOKEN")
 		request.Header.Set("X-MediaBrowser-Token", "FAKE_MEDIA_TOKEN")
 		request.Header.Set("Authorization", "Bearer FAKE_AUTHORIZATION")
@@ -36,7 +36,7 @@ func TestRequestLogsRedactCredentialsWithoutChangingRequests(t *testing.T) {
 		request.Header.Set("Cookie", "token=FAKE_COOKIE")
 		router.ServeHTTP(httptest.NewRecorder(), request)
 		log := output.String()
-		for _, secret := range []string{"FAKE_QUERY_KEY", "FAKE_ALT_KEY", "FAKE_URL_TOKEN", "FAKE_ACCESS_TOKEN", "FAKE_PASSWORD", "FAKE_BODY_KEY", "FAKE_HEADER_TOKEN", "FAKE_MEDIA_TOKEN", "FAKE_AUTHORIZATION", "FAKE_EMBY_AUTH", "FAKE_COOKIE"} {
+		for _, secret := range []string{"FAKE_QUERY_KEY", "FAKE_ALT_KEY", "FAKE_URL_TOKEN", "FAKE_ACCESS_TOKEN", "FAKE_PREPARATION_TOKEN", "FAKE_PASSWORD", "FAKE_BODY_KEY", "FAKE_HEADER_TOKEN", "FAKE_MEDIA_TOKEN", "FAKE_AUTHORIZATION", "FAKE_EMBY_AUTH", "FAKE_COOKIE"} {
 			if strings.Contains(log, secret) {
 				t.Errorf("debug=%v leaked %s", debug, secret)
 			}

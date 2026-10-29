@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestVueMigrationEntityContract(t *testing.T) {
-	data, err := os.ReadFile("../../vue-migration/fixtures/ct/ct-02-entity-id.json")
+func TestFrontendEntityContract(t *testing.T) {
+	data, err := os.ReadFile("../../frontend/tests/fixtures/ct/ct-02-entity-id.json")
 	if err != nil {
 		t.Fatal(err)
 	}

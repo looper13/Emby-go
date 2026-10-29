@@ -283,57 +283,83 @@ func NumberCandidates(v Video) []string {
 	return result
 }
 
+const resourceColumns = `tid,COALESCE(title,''),COALESCE(number,''),COALESCE(to_char(publish_date,'YYYY-MM-DD'),''),magnet,COALESCE(website,''),COALESCE(detail_url,''),COALESCE(size_bytes,0),COALESCE(size,0),COALESCE(resource_tags,'[]')`
+
+func resourceScope(v Video, first int) (string, []any) {
+	args := []any{}
+	holders := []string{}
+	for _, n := range NumberCandidates(v) {
+		holders = append(holders, fmt.Sprintf("$%d", first+len(args)))
+		args = append(args, n)
+	}
+	if len(args) == 0 {
+		return "false", args
+	}
+	return `number IN (` + strings.Join(holders, ",") + `) AND COALESCE(rejected,false)=false AND magnet IS NOT NULL AND magnet<>''`, args
+}
+
+func readResource(row interface{ Scan(...any) error }) (Resource, error) {
+	var r Resource
+	var id int64
+	var tags string
+	if err := row.Scan(&id, &r.Title, &r.Number, &r.Date, &r.Magnet, &r.Website, &r.DetailURL, &r.SizeBytes, &r.SizeMB, &tags); err != nil {
+		return r, err
+	}
+	r.Magnet = SafeMagnet(r.Magnet)
+	if r.Magnet == "" {
+		return Resource{}, sql.ErrNoRows
+	}
+	r.ID, r.DetailURL = strconv.FormatInt(id, 10), SafeHTTPURL(r.DetailURL)
+	r.SizeBytes, r.SizeMB = max(r.SizeBytes, 0), max(r.SizeMB, 0)
+	_ = json.Unmarshal([]byte(tags), &r.Tags)
+	if r.Tags == nil {
+		r.Tags = []string{}
+	}
+	return r, nil
+}
+
 func (c *Client) Resources(ctx context.Context, v Video, offset int) (ResourcePage, error) {
 	page := ResourcePage{Items: []Resource{}}
 	if offset < 0 || offset > 10000 {
 		return page, errors.New("invalid resource offset")
 	}
-	args := []any{}
-	holders := []string{}
-	for _, n := range NumberCandidates(v) {
-		args = append(args, n)
-		holders = append(holders, fmt.Sprintf("$%d", len(args)))
-	}
+	scope, args := resourceScope(v, 1)
 	args = append(args, offset)
-	query := `SELECT tid,COALESCE(title,''),COALESCE(number,''),COALESCE(to_char(publish_date,'YYYY-MM-DD'),''),magnet,COALESCE(website,''),COALESCE(detail_url,''),COALESCE(size_bytes,0),COALESCE(size,0),COALESCE(resource_tags,'[]') FROM public.article WHERE number IN (` + strings.Join(holders, ",") + `) AND COALESCE(rejected,false)=false AND magnet IS NOT NULL AND magnet<>'' ORDER BY publish_date DESC NULLS LAST,tid DESC LIMIT 51 OFFSET ` + fmt.Sprintf("$%d", len(args))
-	rows, e := c.db.QueryContext(ctx, query, args...)
-	if e != nil {
-		return page, e
+	query := `SELECT ` + resourceColumns + ` FROM public.article WHERE ` + scope + ` ORDER BY publish_date DESC NULLS LAST,tid DESC LIMIT 51 OFFSET ` + fmt.Sprintf("$%d", len(args))
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return page, err
 	}
 	defer rows.Close()
 	count := 0
 	for rows.Next() {
-		var r Resource
-		var id int64
-		var tags string
-		if e = rows.Scan(&id, &r.Title, &r.Number, &r.Date, &r.Magnet, &r.Website, &r.DetailURL, &r.SizeBytes, &r.SizeMB, &tags); e != nil {
-			return page, e
+		r, err := readResource(rows)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return page, err
 		}
 		count++
 		if count > 50 {
 			page.HasMore = true
 			break
 		}
-		r.Magnet = SafeMagnet(r.Magnet)
-		if r.Magnet == "" {
-			continue
+		if err == nil {
+			page.Items = append(page.Items, r)
 		}
-		r.SizeBytes = max(r.SizeBytes, 0)
-		r.SizeMB = max(r.SizeMB, 0)
-		r.ID = strconv.FormatInt(id, 10)
-		r.DetailURL = SafeHTTPURL(r.DetailURL)
-		r.Tags = []string{}
-		_ = json.Unmarshal([]byte(tags), &r.Tags)
-		if r.Tags == nil {
-			r.Tags = []string{}
-		}
-		page.Items = append(page.Items, r)
 	}
 	page.NextOffset = offset + min(count, 50)
 	page.HasMore = page.HasMore && page.NextOffset <= 10000
 	return page, rows.Err()
 }
 
+// Resource shares list ownership/filter rules without replaying any pages.
+func (c *Client) Resource(ctx context.Context, v Video, id string) (Resource, error) {
+	tid, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || tid <= 0 {
+		return Resource{}, sql.ErrNoRows
+	}
+	scope, args := resourceScope(v, 2)
+	return readResource(c.db.QueryRowContext(ctx, `SELECT `+resourceColumns+` FROM public.article WHERE tid=$1 AND `+scope, append([]any{tid}, args...)...))
+}
 func SafeHTTPURL(raw string) string {
 	u, e := url.Parse(strings.TrimSpace(raw))
 	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {

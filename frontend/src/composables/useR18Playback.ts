@@ -4,7 +4,8 @@ import type { R18Resource } from '../api/r18';
 import { useAuthStore } from '../stores/auth';
 import { usePlayerStore } from '../stores/player';
 import { mainVideo, offlineActive, offlineLabels, playbackVersions, type R18PlaybackVersion } from '../lib/r18-playback';
-import { playbackType } from '../lib/player';
+import { loadPlayerFactory, playbackType } from '../lib/player';
+import { startPlaybackTiming, type PlaybackStage } from '../lib/playback-timing';
 import { usePageRequest } from './usePageRequest';
 
 export function useR18Playback(item: () => { library: string; video: string; title: string }, resources: Ref<R18Resource[]> = ref([])) {
@@ -16,6 +17,7 @@ export function useR18Playback(item: () => { library: string; video: string; tit
   const pending = computed(() => versions.value.find(v => v.id === waiting.value));
   const message = computed(() => waiting.value ? busy.value ? '正在准备播放…' : `${offlineLabels[pending.value?.task?.status || 'queued']} · ${pending.value?.task?.progress || 0}% · 就绪后自动播放` : '');
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timing: (stage: PlaybackStage) => void = () => {};
   function accept(next: OfflineState) {
     state.value = next; loaded.value = true;
     for (const t of next.tasks) {
@@ -25,21 +27,23 @@ export function useR18Playback(item: () => { library: string; video: string; tit
   function schedule() {
     clearTimeout(timer);
     if (waiting.value || state.value.tasks.some(t => offlineActive(t) || t.status === 'cleanup_pending' || !!t.expires_at && t.status !== 'expired')) {
-      timer = setTimeout(() => { if (document.hidden) schedule(); else void load(); }, 5000);
+      timer = setTimeout(() => { if (document.hidden) schedule(); else void load(); }, waiting.value ? 1000 : 5000);
     }
   }
   function open(source: CloudSource) {
     waiting.value = '';
-    player.open({ title: item().title, url: source.DirectStreamUrl, type: playbackType(source.Container) });
+    const trace = timing;
+    player.open({ title: item().title, url: source.DirectStreamUrl, type: playbackType(source.Container), onLoaded: () => trace('player_loaded'), onFirstFrame: () => trace('first_frame') });
   }
   async function advance(signal: AbortSignal, current: () => boolean) {
     const version = pending.value;
     if (!version || !current()) return;
     if (version.source) {
+      timing('source_ready');
       const next = await cloud115Api.prepare(item().library, item().video, version.source.Id, signal);
       if (!current()) return;
       accept(next);
-      if (waiting.value === version.id && pending.value?.source) open(pending.value.source);
+      if (waiting.value === version.id && pending.value?.source) { timing('prepared'); open(pending.value.source); }
       return;
     }
     const task = version.task;
@@ -48,13 +52,14 @@ export function useR18Playback(item: () => { library: string; video: string; tit
       const file = task.files.find(f => f.id === task.file_id) ?? mainVideo(task.files);
       if (!file) return;
       // Automatic binding keeps the library default unchanged; manual selection can change it.
-      const next = await cloud115Api.select(item().library, item().video, task.id, file.id, signal, false);
+      timing('source_ready');
+      const next = await cloud115Api.select(item().library, item().video, task.id, file.id, signal, false, true);
       if (!current()) return;
       accept(next);
       if (waiting.value !== version.id) return;
       const source = pending.value?.source;
-      if (source) await advance(signal, current);
-      else { waiting.value = ''; error.value = '播放源尚未就绪，请刷新状态后重试'; }
+      if (source) { timing('prepared'); open(source); }
+      else if (!pending.value?.task || !offlineActive(pending.value.task)) { waiting.value = ''; error.value = '播放源尚未就绪，请刷新状态后重试'; }
     } else if (!offlineActive(task)) {
       waiting.value = ''; error.value = task.error || `${offlineLabels[task.status]}，请处理任务后重新播放`;
     }
@@ -75,11 +80,14 @@ export function useR18Playback(item: () => { library: string; video: string; tit
   }
   async function play(version: R18PlaybackVersion) {
     if (busy.value) return;
+    timing = startPlaybackTiming();
+    void loadPlayerFactory().catch(() => {});
     waiting.value = version.id;
     return run(async (signal, current) => {
       try {
         // Re-read local state before acting: avoid stale sources/tickets and duplicate submissions.
         acceptIfCurrent(await cloud115Api.state(item().library, item().video, signal), current);
+        if (current()) timing('local_state');
         if (!current() || waiting.value !== version.id) return;
         const chosen = versions.value.find(v => v.id === version.id) ?? version;
         if (chosen.source) { await advance(signal, current); return; }
@@ -88,6 +96,7 @@ export function useR18Playback(item: () => { library: string; video: string; tit
         if (!chosen.task || chosen.task.status === 'expired') {
           const value = chosen.resourceId ? { resource_id: chosen.resourceId } : { magnet: chosen.magnet };
           acceptIfCurrent(await cloud115Api.submit(item().library, item().video, value, signal), current);
+          if (current()) timing('task_submitted');
         } else if (chosen.task.retryable && !offlineActive(chosen.task) && !['ready', 'waiting_selection', 'cleanup_pending'].includes(chosen.task.status)) {
           acceptIfCurrent(await cloud115Api.change(item().library, item().video, chosen.task, 'retry', signal), current);
         }
@@ -105,8 +114,9 @@ export function useR18Playback(item: () => { library: string; video: string; tit
   function stopWaiting() { waiting.value = ''; schedule(); }
   async function select(task: OfflineTask) {
     return run(async (signal, current) => {
-      acceptIfCurrent(await cloud115Api.select(item().library, item().video, task.id, selections.value[task.id]!, signal), current);
-      if (current()) await advance(signal, current);
+      const preparing = pending.value?.task?.id === task.id;
+      acceptIfCurrent(await cloud115Api.select(item().library, item().video, task.id, selections.value[task.id]!, signal, true, preparing), current);
+      if (current() && preparing && pending.value?.task?.id === task.id && pending.value.source) { timing('prepared'); open(pending.value.source); }
     });
   }
   async function change(task: OfflineTask, action: 'retry' | 'cancel') {

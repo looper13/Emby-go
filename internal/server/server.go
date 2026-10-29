@@ -141,6 +141,8 @@ type appState struct {
 	cloud115Client     cloud115.Provider
 	cloud115Revision   int64
 	cloud115Open       func(cloud115.Tokens, func(cloud115.Tokens) error) cloud115.Provider
+	cloud115PrepareMu  sync.Mutex
+	cloud115Prepared   *cache.Memory
 	offlineService     *offline.Service
 }
 

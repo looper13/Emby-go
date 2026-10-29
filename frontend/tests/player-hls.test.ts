@@ -5,7 +5,7 @@ import { loadPlayerFactory, managePlayer, playbackType } from '../src/lib/player
 import { usePlayerStore } from '../src/stores/player';
 import type { PlayerHandle } from '../src/lib/player';
 import type { TrackEngine } from '../src/lib/player-tracks';
-import movie from '../../vue-migration/fixtures/json/item-detail.json';
+import movie from './fixtures/json/item-detail.json';
 
 const mocks = vi.hoisted(() => {
   const engines: {

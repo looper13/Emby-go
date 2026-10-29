@@ -8,7 +8,7 @@ import { actorsApi, parseActors, type ActorsResult } from '../src/api/actors';
 import { scrapeApi, parseScrapeSettings } from '../src/api/scrape';
 import { adminApi } from '../src/api/admin';
 import { backgroundApi, parseBackgroundProgress } from '../src/api/background';
-import fixture from '../../vue-migration/fixtures/json/scrape-settings.json';
+import fixture from './fixtures/json/scrape-settings.json';
 
 let pinia: Pinia;
 const cleanup: (() => void)[] = [];

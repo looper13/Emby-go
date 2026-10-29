@@ -35,7 +35,10 @@ func findTaskCacheFolder(ctx context.Context, p cloud115.Provider, t store.Offli
 	return "", &cloud115.Error{Message: "115 缓存目录超过 10000 项，无法确认任务子目录"}
 }
 
-func verifyCacheResult(ctx context.Context, p cloud115.Provider, t store.OfflineTask) error {
+func verifyCacheResult(ctx context.Context, p cloud115.Provider, t store.OfflineTask, result cloud115.File) error {
+	if result.ID != t.ResultID {
+		return &cloud115.Error{Message: "115 结果文件身份不匹配，拒绝扫描或发布播放源"}
+	}
 	id := t.ResultID
 	seen := map[string]bool{}
 	for depth := 0; depth <= 16 && id != "" && id != "0" && !seen[id]; depth++ {
@@ -43,9 +46,13 @@ func verifyCacheResult(ctx context.Context, p cloud115.Provider, t store.Offline
 			return nil
 		}
 		seen[id] = true
-		f, err := p.Info(ctx, id)
-		if err != nil {
-			return err
+		f := result
+		if id != result.ID {
+			var err error
+			f, err = p.Info(ctx, id)
+			if err != nil {
+				return err
+			}
 		}
 		if f.ID != id {
 			break
@@ -61,6 +68,7 @@ func (s *Service) cleanup(p cloud115.Provider, t store.OfflineTask) {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 90*time.Second)
 	defer cancel()
+	ctx = cloud115.WithCleanup(ctx)
 	if t.Status != "cleanup_pending" {
 		t.Status = "cleanup_pending"
 		t.Stage = "cleanup"

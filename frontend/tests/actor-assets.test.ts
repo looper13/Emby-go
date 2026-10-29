@@ -6,7 +6,7 @@ import { backgroundApi, parseBackgroundProgress } from '../src/api/background';
 import { apiClient } from '../src/api/client';
 import ActorSettingsForm from '../src/components/scrape/ActorSettingsForm.vue';
 import ActorImportPanel from '../src/components/scrape/ActorImportPanel.vue';
-import fixture from '../../vue-migration/fixtures/json/scrape-settings.json';
+import fixture from './fixtures/json/scrape-settings.json';
 
 let pinia: Pinia;
 beforeEach(() => { pinia=createPinia();setActivePinia(pinia); });

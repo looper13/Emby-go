@@ -25,8 +25,8 @@ created: 2026-10-21
 - 验证：`go test ./... -count=1 -skip '^Test(RedisBehavior|MediaProbe|ProbeCircuitBreaker)$' -timeout 240s` 通过；危险 Redis 测试和已知异常探测测试没有执行。新增用户/账号/动漫收藏定向回归另行执行。`go vet ./internal/store ./internal/server` 通过。
 - 前端：全套 268/269 通过，原有 CSS 字节冻结差异保留；类型检查与正式构建通过，保留现有 HLS 大块提示。没有修改全局冻结 CSS。
 - 浏览器：隔离 Go/Redis/307 源文件环境，创建用户默认零可见；授权后 304 条可见，测试视频达到 ended/readyState=4，收藏与播放状态只改变普通用户。维护路由重定向，禁用后旧登录失效，启用后重新登录成功。1440x1000 和 390x844 用户管理截图及溢出检查通过，证据位于 `output/playwright/multiuser-*.png`。
-- 未验项：真实 Emby 客户端、Linux、生产、长时间多设备播放与 race。高级家长控制、设备/远程访问策略及新增管理员不在本次范围；资源交付与独立 API 密钥边界已写入 `ACCOUNT-ACCESS.md`。
-- 制度记忆影响：新增本记录；同步 README 与 `ACCOUNT-ACCESS.md` 当前实现说明，不关闭或改写 028。
+- 未验项：真实 Emby 客户端、Linux、生产、长时间多设备播放与 race。高级家长控制、设备/远程访问策略及新增管理员不在本次范围；资源交付与独立 API 密钥边界已写入 `docs/ACCOUNT-ACCESS.md`。
+- 制度记忆影响：新增本记录；同步 README 与 `docs/ACCOUNT-ACCESS.md` 当前实现说明，不关闭或改写 028。
 
 ## 2026-10-21 交付补记
 

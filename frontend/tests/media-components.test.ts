@@ -7,7 +7,7 @@ import { useToastStore } from '../src/stores/toasts';
 import { readViewPosition, saveViewPosition } from '../src/router/view-history';
 import { imageURL } from '../src/lib/image-url';
 import { applyMediaVisibility } from '../src/composables/useMediaVisibility';
-import fixture from '../../vue-migration/fixtures/json/item-detail.json';
+import fixture from './fixtures/json/item-detail.json';
 afterEach(() => {
   vi.useRealTimers();
   applyMediaVisibility(false);

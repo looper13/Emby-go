@@ -6,7 +6,7 @@ import DuplicateStrmViewer from '../src/components/libraries/DuplicateStrmConten
 import { ApiError, apiClient } from '../src/api/client';
 import { duplicatesApi, parseDuplicateGroups, parseDuplicateMembers, parseDuplicateDeletePreview, parseDuplicateStrmContents, type DuplicateGroups, type DuplicateMembers, type DuplicateDeletePreview, type DuplicateStrmContents } from '../src/api/duplicates';
 import { parseLibraries } from '../src/api/contracts';
-import librariesFixture from '../../vue-migration/fixtures/json/libraries.json';
+import librariesFixture from './fixtures/json/libraries.json';
 
 const libraries = parseLibraries(librariesFixture).items || [];
 const groups: DuplicateGroups = {items:[{key:'ALDN001',number:'ALDN-001',count:2},{key:'ABF018',number:'ABF-018',count:2}],total:2,total_movies:4,extra_copies:2};

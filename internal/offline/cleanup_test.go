@@ -135,7 +135,7 @@ func TestCacheExpiryCleanupRestartAndResubmit(t *testing.T) {
 	if task.Status != "ready" {
 		t.Fatal(task)
 	}
-	service.tick()
+	service.tickCleanup()
 	if len(p.deleted) != 0 {
 		t.Fatal("deleted before expiry")
 	}
@@ -148,7 +148,7 @@ func TestCacheExpiryCleanupRestartAndResubmit(t *testing.T) {
 		t.Fatal("expiry extended by retry")
 	}
 	p.deleteError = &cloud115.Error{Message: "network down", Retryable: true}
-	service.tick()
+	service.tickCleanup()
 	task = read(t, s, task.ID)
 	if task.Status != "cleanup_pending" || len(p.deleted) != 1 || p.deleted[0] != "cache" || p.removed != 1 {
 		t.Fatal(task, p)
@@ -166,7 +166,7 @@ func TestCacheExpiryCleanupRestartAndResubmit(t *testing.T) {
 	task.NextPoll = 0
 	reopened.UpdateOfflineTask(task, task.Version)
 	p.deleteError = nil
-	service.tick()
+	service.tickCleanup()
 	task = read(t, reopened, task.ID)
 	if task.Status != "expired" || len(task.Files) != 0 || len(p.deleted) != 2 {
 		t.Fatal(task, p.deleted)

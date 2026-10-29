@@ -13,6 +13,7 @@
     "typecheck": "vue-tsc --noEmit",
     "test:unit": "vitest",
     "test:build": "node --test scripts/build.test.mjs",
+    "test:support": "node --test test-support/live-env/live-env.test.mjs",
     "test:e2e": "playwright test",
     "dev:isolated": "node scripts/preview-local.mjs",
     "test:go-build": "node scripts/verify-go.mjs",

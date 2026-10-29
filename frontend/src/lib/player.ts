@@ -1,6 +1,6 @@
 import type { TrackEngine, TrackSelection } from './player-tracks';
 import { bindNativeTracks } from './player-tracks';
-export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; sourceItemId?: string; resumeTicks?: number; selection?: TrackSelection; onTracks?: (engine: TrackEngine) => void; hlsStartPosition?: number }
+export interface PlayerOptions { title: string; url: string; type: string; proxyURL?: string; itemId?: string; sourceItemId?: string; resumeTicks?: number; selection?: TrackSelection; onTracks?: (engine: TrackEngine) => void; hlsStartPosition?: number; onLoaded?: () => void; onFirstFrame?: () => void }
 export interface PlayerHandle { url: string; muted: boolean; video?: HTMLVideoElement; on: (name: string, callback: () => void) => void; play: () => Promise<unknown>; destroy: () => void }
 export type PlayerFactory = (stage: HTMLElement, options: PlayerOptions) => PlayerHandle;
 export function playbackType(containerOrURL: unknown = '') {
@@ -18,6 +18,13 @@ export function playbackErrorMessage(code: number | undefined, url: string, prot
 }
 export function managePlayer(stage: HTMLElement, options: PlayerOptions, factory: PlayerFactory, report: (message: string) => void) {
   const player = factory(stage, options); let active = true; let usedProxy = false; let reported = false;
+  options.onLoaded?.();
+  let frame: number | undefined;
+  const firstFrame = () => { if (active) options.onFirstFrame?.(); };
+  if (options.onFirstFrame && player.video) {
+    if (typeof player.video.requestVideoFrameCallback === 'function') frame = player.video.requestVideoFrameCallback(firstFrame);
+    else player.video.addEventListener('playing', firstFrame, { once: true });
+  }
   player.on('error', () => {
     if (!active) return;
     if (!options.proxyURL || usedProxy) {
@@ -35,7 +42,7 @@ export function managePlayer(stage: HTMLElement, options: PlayerOptions, factory
     player.url = options.proxyURL;
     if (!state?.paused) try { void player.play().catch(() => {}); } catch { /* Manual playback remains available. */ }
   });
-  return { player, destroy() { if (!active) return; active = false; try { player.destroy(); } catch { /* Dispose the lifetime even if vendor cleanup fails. */ } } };
+  return { player, destroy() { if (!active) return; active = false; if (frame !== undefined) player.video?.cancelVideoFrameCallback(frame); player.video?.removeEventListener('playing', firstFrame); try { player.destroy(); } catch { /* Dispose the lifetime even if vendor cleanup fails. */ } } };
 }
 export async function loadPlayerFactory(type = 'mp4'): Promise<PlayerFactory> {
   const module = await import('../vendor/artplayer.min.js');

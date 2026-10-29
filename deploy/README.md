@@ -31,7 +31,7 @@ VERSION=1.0.0 OUT_DIR=dist bash build.sh
 
 脚本先执行前端锁文件安装、类型与单元检查、Vite 构建及资源校验，再以 `-tags embedui` 编译。不要把默认 `go build` 生成的开发二进制作为发行版：默认构建不嵌入 Vue 资源。正式入口 `/`、`/web`、`/admin`、`/web/index.html` 已切换为 Vue；`/admin-vue` 重定向至 `/admin`。运行机无需 Node/npm。
 
-当前五平台交叉编译及 Windows 隔离回滚验证见 [P7 实施记录](../vue-migration/P7/progress.md)；Linux systemd 冒烟和 Linux 旧二进制回滚尚未运行，不能据此声称 Linux 部署已验收。
+旧迁移阶段记录已随工作区退役；现行五平台构建和隔离回滚验证入口见 [项目说明](../docs/README.md)。Linux systemd 冒烟和 Linux 旧二进制回滚尚未运行，不能据此声称 Linux 部署已验收。
 
 交叉编译后把二进制、`config.example.yaml` 和 `deploy/emby-go.service` 传到 Linux 主机，安装时保持下列命令使用的相对路径。
 
@@ -131,7 +131,7 @@ sudo systemctl status emby-go --no-pager
 
 升级只替换二进制，不覆盖私人配置、数据库或媒体文件。自定义 `db_path`、演员头像目录和媒体库不在默认备份范围时，应另外备份；发生数据库迁移后，回滚不能只替换旧二进制，还要恢复对应版本的数据备份。
 
-演员资料默认位于数据库同级 `actors/`（默认部署为 `/var/lib/emby-go/actors`），通过顶层 `actors_dir` 修改，重启生效且不会自动搬迁。目录需由服务账号可写，且一个根目录只允许一个实例写入。备份应包含 `people/`、未完成的 `pending.json`、`migrations/` 及仍在使用的旧 `avatars/`；自定义路径需额外加入备份。恢复数据库后扫描 NFO 可重新关联本地人物头像，无需联网下载。回滚旧版本仍可使用保留的旧头像，但旧版本不认识新资料目录，详见 [演员资料与回滚说明](../ACTOR-ASSETS.md)。
+演员资料默认位于数据库同级 `actors/`（默认部署为 `/var/lib/emby-go/actors`），通过顶层 `actors_dir` 修改，重启生效且不会自动搬迁。目录需由服务账号可写，且一个根目录只允许一个实例写入。备份应包含 `people/`、未完成的 `pending.json`、`migrations/` 及仍在使用的旧 `avatars/`；自定义路径需额外加入备份。恢复数据库后扫描 NFO 可重新关联本地人物头像，无需联网下载。回滚旧版本仍可使用保留的旧头像，但旧版本不认识新资料目录，详见 [演员资料与回滚说明](../docs/ACTOR-ASSETS.md)。
 
 本次 Vue 迁移没有数据库迁移。需要退回旧 UI 时，在任务结束后停服，把预先保存的旧二进制恢复至 `/usr/local/bin/emby-go` 后启动服务；确认 `/` 可重新登录、`/admin#items` 可浏览媒体墙与详情，认证 API 仍返回 JSON。新 UI 已执行的 NFO、图片或业务写入不会因回滚二进制而撤销。这个 Linux 演练仍待实际环境验证。
 

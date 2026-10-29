@@ -10,7 +10,7 @@ import { gzipSync } from 'node:zlib';
 const run = promisify(execFile);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const temporary = await mkdtemp(path.join(tmpdir(), 'emby-release-verify-'));
-const output = path.join(root, 'vue-migration/artifacts/P7/release');
+const output = path.join(root, 'frontend/test-results/release');
 const previousRef = process.env.EMBY_RELEASE_PREVIOUS_REF || '5c457893698e74928277d013931f55a2aafb1c84';
 const report = { sourceKind: 'clean export of current tracked and non-ignored untracked source; not a committed checkout', targets: [], resources: [], runtime: process.version };
 const options = { windowsHide: true, timeout: 300_000, maxBuffer: 8 * 1024 * 1024 };
@@ -24,9 +24,11 @@ try {
   report.commit = (await execute('git', ['rev-parse', 'HEAD'], root)).trim();
   report.goVersion = (await execute('go', ['version'], root)).trim();
   const listing = await run('git', ['ls-files', '-co', '--exclude-standard', '-z'], { ...options, cwd: root });
+  const removed = await run('git', ['ls-files', '--deleted', '-z'], { ...options, cwd: root });
+  const deleted = new Set(removed.stdout.split('\0').filter(Boolean));
   const paths = [...new Set(listing.stdout.split('\0').filter(Boolean))];
   for (const file of paths) {
-    if (file.startsWith('vue-migration/artifacts/')) continue;
+    if (deleted.has(file) || file.startsWith('frontend/test-results/')) continue;
     const target = path.join(temporary, file);
     await mkdir(path.dirname(target), { recursive: true });
     await cp(path.join(root, file), target);

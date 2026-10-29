@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile, readdir, stat, rm } from 'node:fs/promises'
 import path from 'node:path';
 import type { Page } from '@playwright/test';
 
-type Live = Awaited<ReturnType<typeof import('../../vue-migration/tools/live-env/environment.mjs').startLiveEnvironment>>;
+type Live = Awaited<ReturnType<typeof import('../test-support/live-env/environment.mjs').startLiveEnvironment>>;
 export async function login(page: Page, live: Live, target = '/scrape') {
   await page.goto(`${live.baseURL}/admin#${target}`);
   await page.locator('#auth-user').fill(live.credentials.username);

@@ -94,6 +94,7 @@ func (s *Service) recoverResult(ctx context.Context, p cloud115.Provider, t stor
 	clearIntent := func(status string) {
 		t.RecoveryFileID, t.RecoveryResultID, t.RecoveryFolderID = "", "", ""
 		t.RecoveryRemoved = false
+		t.VisibilityUntil = 0
 		t.Status, t.Resume, t.Stage, t.Error = status, "", "", ""
 		t.NextPoll, t.Attempts = 0, 0
 		_ = s.save(t, t.Version)
@@ -122,6 +123,9 @@ func (s *Service) recoverResult(ctx context.Context, p cloud115.Provider, t stor
 		return
 	}
 	if t.RecoveryRemoved {
+		if s.waitForVisibility(t, t.Version, "recover", "失效记录已移除，等待 115 状态同步后重新下载") {
+			return
+		}
 		s.fail(t, t.Version, "recover", &cloud115.Error{Message: "失效记录仍未从 115 消失，等待对账后重新下载，未重复提交", Retryable: true})
 		return
 	}
@@ -151,7 +155,8 @@ func (s *Service) recoverResult(ctx context.Context, p cloud115.Provider, t stor
 	}
 	t.Error = "失效记录已移除，等待对账后重新下载"
 	t.RecoveryRemoved = true
-	t.NextPoll = time.Now().Add(5 * time.Second).Unix()
+	t.VisibilityUntil = time.Now().Add(visibilityGrace).Unix()
+	t.NextPoll = time.Now().Add(pollInterval).Unix()
 	t.Attempts = 0
 	_ = s.save(t, t.Version)
 }

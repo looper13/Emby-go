@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -47,6 +48,16 @@ func (f *fakeR18) CatalogList(context.Context, r18.CatalogQuery) ([]r18.Video, e
 func (f *fakeR18) Resources(context.Context, r18.Video, int) (r18.ResourcePage, error) {
 	f.reads++
 	return r18.ResourcePage{Items: []r18.Resource{{ID: "1", Title: "Resource", Number: "TEST-001", Magnet: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789", Tags: []string{}}}}, nil
+}
+
+func (f *fakeR18) Resource(ctx context.Context, v r18.Video, id string) (r18.Resource, error) {
+	page, err := f.Resources(ctx, v, 0)
+	for _, r := range page.Items {
+		if r.ID == id {
+			return r, err
+		}
+	}
+	return r18.Resource{}, sql.ErrNoRows
 }
 
 func TestR18RoutesReadOnlyCredentialsAndUserAccess(t *testing.T) {

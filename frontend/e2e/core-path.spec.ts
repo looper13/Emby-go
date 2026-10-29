@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { startLiveEnvironment } from '../../vue-migration/tools/live-env/environment.mjs';
+import { startLiveEnvironment } from '../test-support/live-env/environment.mjs';
 async function login(page: Page, live: { baseURL: string; credentials: { username: string; password: string } }, target = '/items?status=success', expected = target) {
   await page.goto(`${live.baseURL}/admin#${target}`);
   await expect(page.locator('#auth-form')).toBeVisible();

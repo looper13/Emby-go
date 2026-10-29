@@ -108,8 +108,6 @@ func TestOfflineDedupeLifecycleAndSelection(t *testing.T) {
 		t.Fatal(task, p.adds)
 	}
 	p.remote = &cloud115.RemoteTask{Status: 2, Progress: 100, ResultID: "result", FolderID: "cache"}
-	service.process(p, task)
-	task = read(t, s, task.ID)
 	p.files = []cloud115.File{{ID: "a", Name: "one.mp4", PickCode: "pick-a", Size: 100}, {ID: "b", Name: "two.mkv", PickCode: "pick-b", Size: 200}}
 	service.process(p, task)
 	task = read(t, s, task.ID)

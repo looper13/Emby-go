@@ -7,7 +7,7 @@ import { apiClient } from '../src/api/client';
 import { usePlayerStore } from '../src/stores/player';
 import { externalPlayerURL } from '../src/lib/external-player';
 import { resolveTrackSelection, type PlaybackSource } from '../src/lib/player-tracks';
-import movie from '../../vue-migration/fixtures/json/item-detail.json';
+import movie from './fixtures/json/item-detail.json';
 
 const source: PlaybackSource = {
   Id: 'mediasource_5', TrackRevision: 'r1', Container: 'mkv', SupportsAudioSelection: true,

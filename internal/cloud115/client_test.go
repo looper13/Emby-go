@@ -148,3 +148,21 @@ func TestDiscoverKeepsCandidatesAndRejectsIncompleteScan(t *testing.T) {
 		t.Fatal("whole workdir scan accepted")
 	}
 }
+
+func TestDiscoverFromValidatesFreshIdentityAndRetainsScanGuards(t *testing.T) {
+	f := &discoveryFixture{Batches: map[string][]File{"root": {{ID: "video", Name: "movie.mp4", Size: 100, PickCode: "pick"}}}}
+	first := File{ID: "root", Name: "result", Directory: true}
+	files, err := DiscoverFrom(context.Background(), f, "root", "work", first)
+	if err != nil || len(files) != 1 || files[0].Path != "result/movie.mp4" {
+		t.Fatal("fresh-info discovery failed", files, err)
+	}
+	for _, root := range []string{"", "0", "work", "different"} {
+		if _, err := DiscoverFrom(context.Background(), f, root, "work", first); err == nil {
+			t.Fatal("invalid root/identity accepted", root)
+		}
+	}
+	f.Batches["root"] = append(f.Batches["root"], f.Batches["root"][0])
+	if _, err := DiscoverFrom(context.Background(), f, "root", "work", first); err == nil {
+		t.Fatal("fresh-info scan accepted duplicate pagination entries")
+	}
+}

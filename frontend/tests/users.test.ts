@@ -6,7 +6,7 @@ import UsersPage from '../src/pages/UsersPage.vue';
 import { usersApi, parseManagedUser } from '../src/api/users';
 import { apiClient } from '../src/api/client';
 import { useAuthStore } from '../src/stores/auth';
-import authFixture from '../../vue-migration/fixtures/json/auth-login.json';
+import authFixture from './fixtures/json/auth-login.json';
 
 function user(id: string, name: string) {
   return parseManagedUser({ ...authFixture.User, Id: id, Name: name, Policy: {

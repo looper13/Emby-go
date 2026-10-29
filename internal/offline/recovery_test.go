@@ -243,6 +243,15 @@ func TestOfflineRecoveryRechecksRecordFilesAndCancellation(t *testing.T) {
 				for i := 0; i < 10; i++ {
 					s.process(p, read(t, s.db, task.ID))
 				}
+				current := read(t, s.db, task.ID)
+				if p.removed != 1 || p.adds != 0 || current.Attempts != 0 || current.NextPoll > time.Now().Unix()+1 {
+					t.Fatal("successful removal visibility delay entered long backoff", current)
+				}
+				current.VisibilityUntil = time.Now().Add(-time.Second).Unix()
+				s.db.UpdateOfflineTask(current, current.Version)
+				for i := 0; i < 8; i++ {
+					s.process(p, read(t, s.db, task.ID))
+				}
 				if p.removed != 1 || p.adds != 0 || read(t, s.db, task.ID).Status != "failed" {
 					t.Fatal("repeated deletion or Add while old record remained visible", p, read(t, s.db, task.ID))
 				}

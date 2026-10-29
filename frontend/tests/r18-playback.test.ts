@@ -8,6 +8,7 @@ import { useAuthStore } from '../src/stores/auth';
 import { usePlayerStore } from '../src/stores/player';
 import { useR18Playback, type R18Playback } from '../src/composables/useR18Playback';
 import { magnetHash, mainVideo, playbackVersions } from '../src/lib/r18-playback';
+import * as playerRuntime from '../src/lib/player';
 
 const hash = 'a'.repeat(40), otherHash = 'b'.repeat(40);
 const resource: R18Resource = { id: '1', title: '4K version', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 0, tags: [] };
@@ -23,12 +24,36 @@ function start(admin = true) {
 }
 beforeEach(() => {
   vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); item.value = { library: '2', video: 'id', title: 'Movie' };
+  vi.spyOn(playerRuntime, 'loadPlayerFactory').mockResolvedValue(() => ({} as never));
   vi.spyOn(cloud115Api, 'state').mockResolvedValue(empty);
   vi.spyOn(cloud115Api, 'prepare').mockImplementation(async () => workflow.state.value);
 });
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('R18 one-click playback', () => {
+  it('polls local state every second only while playback is awaited, then restores background pacing', async () => {
+    const read = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [task] });
+    start(); await flushPromises();
+    await vi.advanceTimersByTimeAsync(4999); expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(2);
+    await workflow.play(workflow.versions.value[0]!);
+    const beforeWaiting = read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(999); expect(read).toHaveBeenCalledTimes(beforeWaiting);
+    await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(beforeWaiting + 1);
+    workflow.stopWaiting();
+    await vi.advanceTimersByTimeAsync(4999); expect(read).toHaveBeenCalledTimes(beforeWaiting + 1);
+    await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(beforeWaiting + 2);
+  });
+  it('does not overlap faster polls with an in-flight local-state request', async () => {
+    const read = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [task] });
+    start(); await flushPromises(); await workflow.play(workflow.versions.value[0]!);
+    let finish!: (value: OfflineState) => void;
+    read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const before = read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10000); expect(read).toHaveBeenCalledTimes(before + 1);
+    finish({ ...empty, tasks: [task] }); await flushPromises();
+    await vi.advanceTimersByTimeAsync(1000); expect(read).toHaveBeenCalledTimes(before + 2);
+  });
   it('normalizes hex/Base32 magnets, merges duplicate records, and keeps different magnets as versions', () => {
     expect(magnetHash('magnet:?xt=urn:btih:' + 'A'.repeat(32))).toBe('0'.repeat(40));
     expect(magnetHash('magnet:?dn=name&xt=urn:btih:' + hash.toUpperCase())).toBe(hash);
@@ -47,7 +72,9 @@ describe('R18 one-click playback', () => {
     expect(workflow.message.value).toContain('就绪后自动播放'); expect(usePlayerStore().current).toBeNull();
     read.mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'waiting_selection', progress: 100, files }] });
     await vi.advanceTimersByTimeAsync(5000);
-    expect(select).toHaveBeenCalledExactlyOnceWith('2', 'id', task.id, 'main', expect.any(AbortSignal), false);
+    expect(select).toHaveBeenCalledExactlyOnceWith('2', 'id', task.id, 'main', expect.any(AbortSignal), false, true);
+    expect(cloud115Api.prepare).not.toHaveBeenCalled();
+    expect(playerRuntime.loadPlayerFactory).toHaveBeenCalledTimes(1);
     expect(usePlayerStore().current?.url).toBe(source.DirectStreamUrl); expect(usePlayerStore().current?.itemId).toBeUndefined();
     expect(workflow.waiting.value).toBe(''); expect(submit).toHaveBeenCalledTimes(1);
   });

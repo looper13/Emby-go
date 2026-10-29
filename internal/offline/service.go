@@ -12,37 +12,56 @@ import (
 )
 
 type Service struct {
-	db       *store.Store
-	provider func() (cloud115.Provider, string, error)
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wake     chan struct{}
-	wg       sync.WaitGroup
+	db          *store.Store
+	provider    func() (cloud115.Provider, string, error)
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wake        chan struct{}
+	cleanupWake chan struct{}
+	running     sync.Map
+	wg          sync.WaitGroup
 }
+
+const pollInterval = time.Second
+const visibilityGrace = 30 * time.Second
 
 func New(ctx context.Context, db *store.Store, provider func() (cloud115.Provider, string, error)) *Service {
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Service{db: db, ctx: ctx, cancel: cancel, provider: provider, wake: make(chan struct{}, 1)}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		timer := time.NewTicker(5 * time.Second)
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			case <-s.wake:
+	s := &Service{db: db, ctx: ctx, cancel: cancel, provider: provider, wake: make(chan struct{}, 2), cleanupWake: make(chan struct{}, 1)}
+	// Two bounded download slots and one cleanup slot. The transport still admits
+	// only one request per second; slow I/O no longer occupies the entire account.
+	for _, cleanup := range []bool{false, false, true} {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			timer := time.NewTicker(pollInterval)
+			defer timer.Stop()
+			wake := s.wake
+			if cleanup {
+				wake = s.cleanupWake
 			}
-			s.tick()
-		}
-	}()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+				case <-wake:
+				}
+				s.tickQueue(cleanup)
+			}
+		}()
+	}
 	return s
 }
 func (s *Service) Wake() {
+	for i := 0; i < 2; i++ {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
 	select {
-	case s.wake <- struct{}{}:
+	case s.cleanupWake <- struct{}{}:
 	default:
 	}
 }
@@ -55,33 +74,31 @@ func (s *Service) save(t store.OfflineTask, expected int64) error {
 	}
 	return err
 }
-func (s *Service) tick() {
+func (s *Service) tick()        { s.tickQueue(false) }
+func (s *Service) tickCleanup() { s.tickQueue(true) }
+func (s *Service) tickQueue(cleanup bool) {
 	p, account, err := s.provider()
 	if err != nil {
-		if conn, e := s.db.Cloud115Connection(); e == nil {
-			if tasks, e := s.db.DueOfflineTasks(conn.AccountID, time.Now().Unix()); e == nil {
-				for _, t := range tasks {
-					s.fail(t, t.Version, "configuration", &cloud115.Error{Message: "115 凭证无法装载，请检查密钥并重新授权", Auth: true})
+		if !cleanup {
+			if conn, e := s.db.Cloud115Connection(); e == nil {
+				if tasks, e := s.db.DueOfflineTasks(conn.AccountID, time.Now().Unix()); e == nil {
+					for _, t := range tasks {
+						s.fail(t, t.Version, "configuration", &cloud115.Error{Message: "115 凭证无法装载，请检查密钥并重新授权", Auth: true})
+					}
 				}
 			}
 		}
 		return
 	}
-	cleanup, err := s.db.DueOfflineCleanup(account, time.Now().Unix())
-	if err != nil {
-		slog.Error("读取 115 缓存清理队列失败", "error", err)
-		return
+	var tasks []store.OfflineTask
+	if cleanup {
+		tasks, err = s.db.DueOfflineCleanup(account, time.Now().Unix())
+	} else {
+		tasks, err = s.db.DueOfflineTasks(account, time.Now().Unix())
 	}
-	for _, t := range cleanup {
-		if s.ctx.Err() != nil {
-			return
-		}
-		s.cleanup(p, t)
-	}
-	tasks, err := s.db.DueOfflineTasks(account, time.Now().Unix())
 	if err != nil {
 		if s.ctx.Err() == nil {
-			slog.Error("读取 115 离线队列失败", "error", err)
+			slog.Error("读取 115 后台队列失败", "cleanup", cleanup, "error", err)
 		}
 		return
 	}
@@ -89,10 +106,38 @@ func (s *Service) tick() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		s.process(p, t)
+		if _, busy := s.running.LoadOrStore(t.ID, true); busy {
+			continue
+		}
+		func() {
+			defer s.running.Delete(t.ID)
+			// Reload after claiming the task: another slot may have just finished it.
+			fresh, err := s.db.OfflineTask(t.ID)
+			if err != nil || fresh.Version != t.Version {
+				return
+			}
+			if cleanup {
+				s.cleanup(p, fresh)
+			} else {
+				s.process(p, fresh)
+			}
+		}()
+		return
 	}
 }
 func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
+	started := time.Now()
+	due := t.NextPoll
+	if due == 0 {
+		due = t.UpdatedAt
+	}
+	if due == 0 {
+		due = t.CreatedAt
+	}
+	slog.Debug("115 后台任务开始", "task_id", t.ID, "status", t.Status, "queue_delay_ms", max(0, time.Since(time.Unix(due, 0)).Milliseconds()))
+	defer func() {
+		slog.Debug("115 后台阶段耗时", "task_id", t.ID, "status", t.Status, "stage", t.Stage, "elapsed_ms", time.Since(started).Milliseconds())
+	}()
 	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
 	defer cancel()
 	expected := t.Version
@@ -154,6 +199,7 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 			}
 		}
 		if t.CacheFolderID == "" {
+			reconcileFolder := t.ExpiresAt != 0
 			// Persist expiry before mkdir: even a timeout or cancellation that loses
 			// the returned folder ID must leave a recoverable cleanup intent.
 			if t.ExpiresAt == 0 {
@@ -164,7 +210,13 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 				expected++
 				t.Version = expected
 			}
-			id, err := findTaskCacheFolder(ctx, p, t)
+			var id string
+			var err error
+			// A fresh UUID has never attempted mkdir. Only a durable prior intent
+			// needs a directory lookup to reconcile an uncertain remote write.
+			if reconcileFolder {
+				id, err = findTaskCacheFolder(ctx, p, t)
+			}
 			if err == nil && id == "" {
 				id, err = cache.Mkdir(ctx, t.FolderID, "emby-go-"+t.ID)
 			}
@@ -190,47 +242,7 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		}
 	}
 	if t.Status == "discovering" {
-		if t.RecoveryFileID != "" {
-			gone, err := resultGone(ctx, p, t.RecoveryFileID)
-			if err != nil {
-				s.fail(t, expected, "file", err)
-				return
-			}
-			if gone {
-				s.recoverDiscovery(ctx, p, t, t.RecoveryFileID)
-				return
-			}
-			t.RecoveryFileID = ""
-		}
-		if t.CacheFolderID != "" {
-			if err := verifyCacheResult(ctx, p, t); err != nil {
-				if isMissing(err) {
-					s.recoverDiscovery(ctx, p, t, t.ResultID)
-					return
-				}
-				s.fail(t, expected, "cache", err)
-				return
-			}
-		}
-		files, err := cloud115.Discover(ctx, p, t.ResultID, t.FolderID)
-		if err != nil {
-			if isMissing(err) {
-				s.recoverDiscovery(ctx, p, t, t.ResultID)
-				return
-			}
-			s.fail(t, expected, "discover", err)
-			return
-		}
-		t.Files = files
-		t.Progress = 100
-		t.Status = "waiting_selection"
-		if len(files) == 1 {
-			t.Status = "ready"
-		}
-		t.Error = ""
-		t.Stage = ""
-		t.Attempts = 0
-		_ = s.save(t, expected)
+		s.discover(ctx, p, t, nil)
 		return
 	}
 	remote, err := p.Find(ctx, t.InfoHash)
@@ -239,12 +251,13 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		return
 	}
 	if remote != nil {
+		var result cloud115.File
 		if remote.Status == 2 {
 			if remote.ResultID == "" || remote.ResultID == "0" || remote.ResultID == t.FolderID {
 				s.fail(t, expected, "file", &cloud115.Error{Message: "115 未返回独立结果文件或目录，未重新提交", Retryable: true})
 				return
 			}
-			result, err := p.Info(ctx, remote.ResultID)
+			result, err = p.Info(ctx, remote.ResultID)
 			if isMissing(err) {
 				s.prepareRecovery(ctx, p, t, remote, remote.ResultID)
 				return
@@ -270,10 +283,11 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 			return
 		}
 		t.Attempts = 0
+		t.VisibilityUntil = 0
 		t.Error = ""
 		t.Stage = ""
 		t.Progress = max(0, min(100, remote.Progress))
-		t.NextPoll = time.Now().Add(time.Duration(min(300, max(20, int((time.Now().Unix()-t.CreatedAt)/60)+20))) * time.Second).Unix()
+		t.NextPoll = time.Now().Add(pollInterval).Unix()
 		switch remote.Status {
 		case -1:
 			t.Status = "failed"
@@ -290,10 +304,18 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 			s.fail(t, expected, "poll", &cloud115.Error{Message: "115 返回未知离线状态"})
 			return
 		}
-		_ = s.save(t, expected)
+		if s.save(t, expected) == nil && t.Status == "discovering" {
+			t.Version = expected + 1
+			// Keep the durable/CAS boundary, but finish discovery in this same
+			// bounded turn using only request-local, freshly fetched metadata.
+			s.discover(ctx, p, t, &result)
+		}
 		return
 	}
 	if t.Status != "queued" {
+		if s.waitForVisibility(t, expected, "reconcile", "任务已提交，等待 115 状态同步") {
+			return
+		}
 		s.fail(t, expected, "reconcile", &cloud115.Error{Message: "暂未找到 115 任务；提交结果可能不明确，未再次提交", Retryable: true})
 		return
 	}
@@ -319,12 +341,24 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		return
 	}
 	t.Status = "downloading"
-	t.NextPoll = time.Now().Add(10 * time.Second).Unix()
+	t.VisibilityUntil = time.Now().Add(visibilityGrace).Unix()
+	t.NextPoll = time.Now().Add(pollInterval).Unix()
 	t.Error = ""
 	t.Stage = ""
 	t.Attempts = 0
 	_ = s.save(t, expected)
 }
+
+func (s *Service) waitForVisibility(t store.OfflineTask, expected int64, stage, message string) bool {
+	if time.Now().Unix() >= t.VisibilityUntil {
+		return false
+	}
+	t.Stage, t.Error, t.Attempts = stage, message, 0
+	t.NextPoll = time.Now().Add(pollInterval).Unix()
+	_ = s.save(t, expected)
+	return true
+}
+
 func (s *Service) fail(t store.OfflineTask, expected int64, stage string, err error) {
 	if s.ctx.Err() != nil {
 		return

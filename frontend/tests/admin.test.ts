@@ -12,10 +12,10 @@ import SettingsPage from '../src/pages/SettingsPage.vue';
 import { systemConfigApi } from '../src/api/system-config';
 import { configFixture } from './fixtures/system-config';
 import { useToastStore } from '../src/stores/toasts';
-import libraries from '../../vue-migration/fixtures/json/libraries.json';
-import settings from '../../vue-migration/fixtures/json/settings.json';
-import probes from '../../vue-migration/fixtures/json/probe.json';
-import tasks from '../../vue-migration/fixtures/json/tasks.json';
+import libraries from './fixtures/json/libraries.json';
+import settings from './fixtures/json/settings.json';
+import probes from './fixtures/json/probe.json';
+import tasks from './fixtures/json/tasks.json';
 let pinia: Pinia; const wrappers: VueWrapper[] = [];
 function page(component: Parameters<typeof mount>[0]) { const w = mount(component, { global: { plugins: [pinia] } }); wrappers.push(w); return w; }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { resolve, promise }; }
