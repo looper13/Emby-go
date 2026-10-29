@@ -48,20 +48,41 @@ func publicImageIP(ip net.IP) bool {
 	return true
 }
 
+// 原图直连和 AVdb 代理共用相同的完整 DNS 公网校验。
+func resolvePublicImageTarget(ctx context.Context, host string, lookup func(context.Context, string) ([]net.IPAddr, error)) (imageTarget, error) {
+	if net.ParseIP(host) == nil {
+		var err error
+		host, err = idna.Lookup.ToASCII(host)
+		if err != nil {
+			return imageTarget{}, errors.New("invalid R18 image host")
+		}
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return imageTarget{}, err
+	}
+	if len(ips) == 0 {
+		return imageTarget{}, errors.New("R18 image host has no public address")
+	}
+	for _, ip := range ips {
+		if ip.Zone != "" || !publicImageIP(ip.IP) {
+			return imageTarget{}, errors.New("R18 image host is not public")
+		}
+	}
+	return imageTarget{host, ips}, nil
+}
+
 // Validate every target, including redirects, and pin direct connections to
 // these public addresses so a second DNS lookup cannot reach a private host.
 func (t imageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if SafeHTTPURL(req.URL.String()) == "" {
 		return nil, errors.New("invalid R18 image URL")
 	}
-	host := req.URL.Hostname()
-	if net.ParseIP(host) == nil {
-		var err error
-		host, err = idna.Lookup.ToASCII(host)
-		if err != nil {
-			return nil, errors.New("invalid R18 image host")
-		}
+	target, err := resolvePublicImageTarget(req.Context(), req.URL.Hostname(), t.lookup)
+	if err != nil {
+		return nil, err
 	}
+	host := target.host
 	normalized := *req.URL
 	port := req.URL.Port()
 	normalized.Host = host
@@ -70,19 +91,7 @@ func (t imageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	} else if strings.Contains(host, ":") {
 		normalized.Host = "[" + host + "]"
 	}
-	ips, err := t.lookup(req.Context(), host)
-	if err != nil {
-		return nil, err
-	}
-	if len(ips) == 0 {
-		return nil, errors.New("R18 image host has no public address")
-	}
-	for _, ip := range ips {
-		if ip.Zone != "" || !publicImageIP(ip.IP) {
-			return nil, errors.New("R18 image host is not public")
-		}
-	}
-	req = req.Clone(context.WithValue(req.Context(), imageTargetKey{}, imageTarget{host, ips}))
+	req = req.Clone(context.WithValue(req.Context(), imageTargetKey{}, target))
 	req.URL = &normalized
 	return t.base.RoundTrip(req)
 }

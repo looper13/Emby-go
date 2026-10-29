@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var r18ImageHTTP = r18.NewImageClient()
+var r18ImageHTTP = r18.NewProxyImageClient()
 
 const r18ImageLimit = 8 << 20
 const r18ImageCacheLimit = 512 << 10
@@ -29,10 +29,22 @@ func r18VideoCacheKey(l store.Library, id string) string {
 	return "r18meta:" + strconv.FormatInt(l.ID, 10) + ":" + strconv.FormatInt(l.Revision, 10) + ":" + id
 }
 
-func (a *App) r18Presentation(l store.Library, v r18.Video) r18.Video {
+func r18DetailCacheKey(l store.Library, id string) string {
+	return r18VideoCacheKey(l, id) + ":detail"
+}
+
+func (a *App) cacheR18Video(l store.Library, v r18.Video, detail bool) {
 	if data, err := json.Marshal(v); err == nil {
-		a.imgMeta.Set(r18VideoCacheKey(l, v.ID), data, imageMetaTTL)
+		key := r18VideoCacheKey(l, v.ID)
+		if detail {
+			key = r18DetailCacheKey(l, v.ID)
+		}
+		a.imgMeta.Set(key, data, imageMetaTTL)
 	}
+}
+
+func (a *App) r18Presentation(l store.Library, v r18.Video) r18.Video {
+	a.cacheR18Video(l, v, false)
 	base := "/api/r18/libraries/" + strconv.FormatInt(l.ID, 10) + "/videos/" + v.ID + "/images/"
 	if v.CoverURL != "" {
 		v.CoverURL = base + "poster"
@@ -45,20 +57,57 @@ func (a *App) r18Presentation(l store.Library, v r18.Video) r18.Video {
 	return v
 }
 
+func (a *App) r18DetailPresentation(l store.Library, v r18.Video) r18.Video {
+	a.cacheR18Video(l, v, true)
+	return a.r18Presentation(l, v)
+}
+
+func (a *App) cachedR18Video(l store.Library, id string, detail bool) (r18.Video, bool) {
+	key := r18VideoCacheKey(l, id)
+	if detail {
+		key = r18DetailCacheKey(l, id)
+	}
+	var video r18.Video
+	data, found := a.imgMeta.Get(key)
+	if !found || json.Unmarshal(data, &video) != nil {
+		return r18.Video{}, false
+	}
+	return video, true
+}
+
 func (a *App) r18ImageVideo(ctx context.Context, l store.Library, id string) (r18.Video, error) {
-	var v r18.Video
-	if data, ok := a.imgMeta.Get(r18VideoCacheKey(l, id)); ok && json.Unmarshal(data, &v) == nil {
+	// 详情与稀疏列表分开存储，翻页不能清空已经读取的剧照资料。
+	if v, ok := a.cachedR18Video(l, id, true); ok {
 		return v, nil
 	}
+	if v, ok := a.cachedR18Video(l, id, false); ok {
+		return v, nil
+	}
+	return a.loadR18ImageDetail(ctx, l, id)
+}
+
+func (a *App) loadR18ImageDetail(ctx context.Context, l store.Library, id string) (r18.Video, error) {
+	var v r18.Video
 	client, err := a.r18Client(l)
 	if err != nil {
 		return v, err
 	}
 	v, err = client.Get(ctx, id)
 	if err == nil {
-		a.r18Presentation(l, v)
+		a.cacheR18Video(l, v, true)
 	}
 	return v, err
+}
+
+func r18SourceImageURL(v r18.Video, kind string) string {
+	if kind == "cover" {
+		return v.CoverURL
+	}
+	index, err := strconv.Atoi(kind)
+	if err == nil && index >= 0 && index < len(v.Images) {
+		return v.Images[index]
+	}
+	return ""
 }
 
 func serveR18Image(c *gin.Context, mime string, data []byte) {
@@ -113,19 +162,28 @@ func (a *App) serveR18SourceImage(c *gin.Context, l store.Library, id, kind, tra
 		a.r18Failure(c, "图片资料查询", err)
 		return
 	}
-	raw := v.CoverURL
-	if kind != "cover" {
-		i, _ := strconv.Atoi(kind)
-		raw = ""
-		if i < len(v.Images) {
-			raw = v.Images[i]
+	raw := r18SourceImageURL(v, kind)
+	if kind == "cover" {
+		// 列表可更新封面地址，但缺少字段的列表不能降级已有详情剧照。
+		if latest, found := a.cachedR18Video(l, id, false); found && r18.SafeHTTPURL(latest.CoverURL) != "" {
+			raw = latest.CoverURL
+		}
+	}
+	if r18.SafeHTTPURL(raw) == "" {
+		if _, complete := a.cachedR18Video(l, id, true); !complete {
+			v, err = a.loadR18ImageDetail(ctx, l, id)
+			if err != nil {
+				a.r18Failure(c, "图片资料查询", err)
+				return
+			}
+			raw = r18SourceImageURL(v, kind)
 		}
 	}
 	if r18.SafeHTTPURL(raw) == "" {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	// No user-supplied URL: only artwork stored on this authorized item can be fetched.
+	// 原图只来自已授权影片资料，不接受浏览器提供的任意代理地址。
 	sum := sha256.Sum256([]byte(r18VideoCacheKey(l, id) + ":" + raw))
 	if kind == "cover" {
 		a.serveR18Cover(c, ctx, l, id, raw, hex.EncodeToString(sum[:]), r18ArtworkParams(c, transform))
@@ -228,7 +286,13 @@ func (a *App) fetchR18Image(ctx context.Context, l store.Library, id, kind, raw,
 	if client == nil {
 		client = r18ImageHTTP
 	}
-	req, err := r18.ImageRequest(ctx, raw)
+	cfg, err := a.db.R18Connection(l.ID)
+	if err != nil {
+		return "", nil, errors.New("AVdb 图片代理尚未配置")
+	}
+	// JavDB CDN 可能返回编码后的二进制；统一交给配置的 AVdb 图片代理处理。
+	// 此公开接口不携带 API Key，也不会把浏览器凭据发送给 AVdb 或 CDN。
+	req, err := r18.ProxyImageRequest(ctx, cfg.BaseURL, raw)
 	if err != nil {
 		return "", nil, err
 	}
@@ -238,7 +302,7 @@ func (a *App) fetchR18Image(ctx context.Context, l store.Library, id, kind, raw,
 		if upstream, ok := err.(*url.Error); ok {
 			err = upstream.Err
 		}
-		slog.Warn("R18 image proxy failed", "library_id", l.ID, "video_id", id, "image", kind, "stage", "fetch", "host", req.URL.Hostname(), "error", err.Error())
+		slog.Warn("R18 image proxy failed", "library_id", l.ID, "video_id", id, "image", kind, "stage", "fetch", "error", err.Error())
 		return "", nil, err
 	}
 	defer resp.Body.Close()

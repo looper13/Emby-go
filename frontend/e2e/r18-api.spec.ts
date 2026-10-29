@@ -26,6 +26,7 @@ const localSources: R18LocalSource[] = [
 ];
 type CatalogQuery = Record<string, string>;
 type LoginEnvironment = { baseURL: string; credentials: { username: string; password: string } };
+type ImageFailureOptions = { imageFailures?: number; singleItem?: boolean };
 
 async function assertNoHorizontalOverflow(page: Page) {
   await expect.poll(() => page.evaluate(() => ({
@@ -34,13 +35,14 @@ async function assertNoHorizontalOverflow(page: Page) {
   }))).toEqual({ document: true, body: true });
 }
 
-async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, sources: R18LocalSource[] = []) {
+async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, sources: R18LocalSource[] = [], options: ImageFailureOptions = {}) {
   const errors: string[] = [];
   const queries: CatalogQuery[] = [];
   const saved: Record<string, unknown>[] = [];
   const unexpectedRequests: string[] = [];
   const externalRequests: string[] = [];
   const offlineRequests: string[] = [], localRequests: string[] = [], mediaRequests: string[] = [];
+  const imageRequests: string[] = [];
   const currentVideo = { ...video, has_local: sources.length > 0 };
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => {
@@ -53,7 +55,11 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname.startsWith(imageBase)) {
-      await route.fulfill({ contentType: 'image/svg+xml', body: poster });
+      imageRequests.push(url.pathname + url.search);
+      // 单卡片夹具让同 URL 的失败次数可精确验证，不依赖浏览器合并多个图片请求。
+      if (url.pathname === imageBase + 'poster' && imageRequests.length <= (options.imageFailures || 0)) {
+        await route.fulfill({ status: 503, contentType: 'text/plain', body: '隔离测试图片短暂不可用', headers: { 'Cache-Control': 'no-store' } });
+      } else await route.fulfill({ contentType: 'image/svg+xml', body: poster, headers: { 'Cache-Control': 'no-store' } });
     } else if (url.pathname === '/api/admin/libraries' || url.pathname === '/api/r18/libraries') {
       await route.fulfill({ json: { items: [library], total: 1 } });
     } else if (url.pathname === videosPath) {
@@ -66,7 +72,7 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
         return;
       }
       const currentPage = Number(query.page), pageSize = Number(query.limit);
-      const items = Array.from({ length: pageSize }, (_, index) => index === 0 ? currentVideo : {
+      const items = Array.from({ length: options.singleItem ? 1 : pageSize }, (_, index) => index === 0 ? currentVideo : {
         ...currentVideo,
         id: Buffer.from(JSON.stringify([`fixture-${currentPage}-${index}`, 'javdb'])).toString('base64url'),
         content_id: `fixture-${currentPage}-${index}`,
@@ -120,7 +126,7 @@ async function mockJavDB(context: BrowserContext, page: Page, baseURL: string, s
     await context.route(`${baseURL}/Sessions/Playing/**`, route => route.fulfill({ status: 204 }));
     await context.route(`${baseURL}/Users/*/PlayedItems/**`, route => route.fulfill({ status: 204 }));
   }
-  return { errors, queries, saved, unexpectedRequests, externalRequests, offlineRequests, localRequests, mediaRequests };
+  return { errors, queries, saved, unexpectedRequests, externalRequests, offlineRequests, localRequests, mediaRequests, imageRequests };
 }
 type JavDBMock = Awaited<ReturnType<typeof mockJavDB>>;
 
@@ -338,5 +344,50 @@ test('JavDB 优先播放已存在的本地STRM，切换版本全过程零115请�
   expect(mock.offlineRequests).toEqual([]);
   await assertNoHorizontalOverflow(page);
   await page.screenshot({ path: info.outputPath('javdb-local-strm.png'), fullPage: true, animations: 'disabled' });
+  expectSafeMock(mock);
+});
+
+test('JavDB 封面一次503后有界重试恢复原URL图片', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  const mock = await mockJavDB(context, page, live.baseURL, [], { imageFailures: 1, singleItem: true });
+  await login(page, live);
+  await expect(page.locator('.r18-card')).toHaveCount(1);
+  const image = page.locator('.r18-cover img');
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await expect(image).toHaveAttribute('src', imageBase + 'poster');
+  expect(mock.imageRequests).toEqual([imageBase + 'poster', imageBase + 'poster']);
+  await page.waitForTimeout(750);
+  expect(mock.imageRequests).toHaveLength(2);
+  await expect(page.locator('.r18-cover')).not.toContainText('图片加载失败');
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-image-auto-recovered.png'), fullPage: true, animations: 'disabled' });
+  expectSafeMock(mock);
+});
+
+test('JavDB 封面两次503停止重试，手动列表刷新同URL后恢复', async ({ page, context, live }, info) => {
+  test.setTimeout(60_000);
+  const mock = await mockJavDB(context, page, live.baseURL, [], { imageFailures: 2, singleItem: true });
+  await login(page, live);
+  await expect(page.locator('.r18-card')).toHaveCount(1);
+  const cover = page.locator('.r18-cover');
+  await expect(cover).toContainText('图片加载失败');
+  await expect(cover.locator('img')).toHaveCount(0);
+  expect(mock.imageRequests).toEqual([imageBase + 'poster', imageBase + 'poster']);
+  // 超过两轮自动重试间隔后仍无新请求，失败不会造成无限请求风暴。
+  await page.waitForTimeout(1250);
+  expect(mock.imageRequests).toHaveLength(2);
+  await page.screenshot({ path: info.outputPath('javdb-image-bounded-failure.png'), fullPage: true, animations: 'disabled' });
+
+  await page.locator('.r18-header').getByRole('button', { name: '刷新', exact: true }).click();
+  const image = cover.locator('img');
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).complete && (element as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await expect(image).toHaveAttribute('src', imageBase + 'poster');
+  await expect(cover).not.toContainText('图片加载失败');
+  expect(mock.imageRequests).toEqual(Array(3).fill(imageBase + 'poster'));
+  expect(mock.queries).toHaveLength(2);
+  await assertNoHorizontalOverflow(page);
+  await page.screenshot({ path: info.outputPath('javdb-image-manual-recovered.png'), fullPage: true, animations: 'disabled' });
   expectSafeMock(mock);
 });

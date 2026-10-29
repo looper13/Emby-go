@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,12 +24,16 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	hits := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
+		if r.URL.Path != "/api/v1/img-proxy/" {
+			t.Error("图片没有使用固定 AVdb 代理接口")
+		}
 		for _, header := range []string{"Cookie", "Authorization", "X-API-Key", "X-Emby-Token", "X-MediaBrowser-Token", "Referer"} {
 			if r.Header.Get(header) != "" {
 				t.Errorf("forwarded credential header %s", header)
 			}
 		}
-		switch r.URL.Path {
+		source, _ := url.Parse(r.URL.Query().Get("url"))
+		switch source.Path {
 		case "/cover.png", "/gallery.png":
 			w.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = w.Write(pngImage.Bytes())
@@ -44,7 +49,7 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	a, server, token := newProbeTestApp(t, t.TempDir())
 	// Only this fixture uses loopback; production transport rejects private targets.
 	a.r18ImageHTTP = upstream.Client()
-	lib, err := a.db.CreateR18Library("Images", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
+	lib, err := a.db.CreateR18Library("Images", r18.Config{BaseURL: upstream.URL, APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +119,7 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	}
 	// JavDB 剧照数量不再受旧数据库首尾两张的限制。
 	fake.video.Images = []string{upstream.URL + "/gallery.png", upstream.URL + "/gallery.png?index=1", upstream.URL + "/gallery.png?index=2"}
-	a.r18Presentation(lib, fake.video)
+	a.r18DetailPresentation(lib, fake.video)
 	call("GET", base+"/images/2", token, "", 200)
 	before := hits
 	for _, index := range []string{"3", "99", "100", "-1", "01"} {
@@ -125,7 +130,7 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	}
 	for _, path := range []string{"/html", "/large", "/unavailable"} {
 		fake.video.CoverURL = upstream.URL + path
-		a.r18Presentation(lib, fake.video)
+		a.r18DetailPresentation(lib, fake.video)
 		before := hits
 		resp, _ = call("GET", base+"/images/cover", token, "", 502)
 		call("GET", base+"/images/cover", token, "", 502)

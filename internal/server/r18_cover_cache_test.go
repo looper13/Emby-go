@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,12 +38,16 @@ func TestR18LargeCoverCachingRestartSharingAndAccess(t *testing.T) {
 	var covers, galleries atomic.Int64
 	var unavailable atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/api/v1/img-proxy/" {
+			t.Error("封面没有使用固定 AVdb 代理接口")
+		}
 		for _, key := range []string{"Cookie", "X-API-Key", "X-Emby-Token", "Authorization"} {
 			if req.Header.Get(key) != "" {
 				t.Error("forwarded client credential", key)
 			}
 		}
-		if req.URL.Path == "/gallery" {
+		raw, _ := url.Parse(req.URL.Query().Get("url"))
+		if raw.Path == "/gallery" {
 			galleries.Add(1)
 		} else {
 			covers.Add(1)
@@ -56,7 +61,7 @@ func TestR18LargeCoverCachingRestartSharingAndAccess(t *testing.T) {
 	}))
 	defer upstream.Close()
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, _ := a.db.CreateR18Library("Cached covers", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
+	l, _ := a.db.CreateR18Library("Cached covers", r18.Config{BaseURL: upstream.URL, APIKey: "fixture-key"})
 	v := r18.Video{ID: r18.EncodeID("cached001", "mono"), Number: "CACHE-001", CoverURL: upstream.URL + "/cover", Images: []string{upstream.URL + "/gallery"}}
 	fake := &fakeR18Catalog{videos: []r18.Video{v}}
 	a.r18Open = func(r18.Config) (r18Source, error) { return fake, nil }

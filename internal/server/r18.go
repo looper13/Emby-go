@@ -225,7 +225,7 @@ func (a *App) r18Video(c *gin.Context) {
 	if !playable {
 		playable = len(a.r18ReadySources(c, l, v.ID)) > 0
 	}
-	c.JSON(200, gin.H{"video": a.r18Presentation(l, v), "library_name": l.Name, "playable": playable, "local_sources": localR18Presentation(matches)})
+	c.JSON(200, gin.H{"video": a.r18DetailPresentation(l, v), "library_name": l.Name, "playable": playable, "local_sources": localR18Presentation(matches)})
 }
 func (a *App) r18Resources(c *gin.Context) {
 	l, ok := a.r18Library(c)

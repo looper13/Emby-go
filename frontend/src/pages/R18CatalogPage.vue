@@ -17,6 +17,7 @@ const history = inject(viewHistoryKey, null);
 const scope = usePageRequest();
 const libraries = ref<LibraryDto[]>([]), page = ref<R18Page | null>(null);
 const pageLibraryId = ref('');
+const coverRevision = ref(0);
 const loading = ref(false), error = ref('');
 const search = ref(''), type = ref('all'), resourceFilter = ref('magnets'), sort = ref('release'), order = ref('desc');
 const year = ref<number | string>(''), pageSize = ref('24'), jumpPage = ref<number | string>(1);
@@ -93,6 +94,7 @@ async function load(preservePosition = false) {
     const query = new URLSearchParams(active); query.delete('library_id');
     const next = await r18Api.videos(targetLibrary, query, request.signal);
     if (request.isCurrent()) {
+      if (preservePosition) coverRevision.value++;
       pageLibraryId.value = targetLibrary; page.value = next; jumpPage.value = next.page; await nextTick();
       if (request.isCurrent() && position) {
         const card = Array.from(document.querySelectorAll<HTMLElement>('.r18-card')).find(card => card.dataset.r18Id === position.focusID);
@@ -129,7 +131,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18') void load(); }, { 
       <div class="r18-list-meta"><span>第 {{ page.page }} 页 · 本页 {{ page.items.length }} 条</span><div class="r18-list-options"><span v-if="loading" role="status">正在加载，保留当前页面…</span><label class="r18-page-size" for="r18-page-size">每页<select id="r18-page-size" v-model="pageSize" :disabled="loading" @change="submit()"><option value="24">24 条</option><option value="40">40 条</option><option value="50">50 条</option></select></label><CardSizeSelector /></div></div>
       <div class="wall r18-grid" :aria-busy="loading">
         <RouterLink v-for="v in page.items" :key="v.id" class="r18-card" :data-r18-id="v.id" :to="{ name: 'r18-detail', params: { libraryId, id: v.id }, query: { from: route.fullPath } }" :aria-label="`查看 ${v.number || v.content_id} 详情`" @click="remember(v.id)">
-          <R18Cover class="r18-cover" :src="v.cover_url" :alt="v.number || v.content_id" loading="lazy"><span class="r18-service">JavDB</span></R18Cover>
+          <R18Cover :key="`${v.id}:${coverRevision}`" class="r18-cover" :src="v.cover_url" :alt="v.number || v.content_id" loading="lazy"><span class="r18-service">JavDB</span></R18Cover>
           <div class="r18-card-copy"><strong class="mono">{{ v.number || v.content_id }}</strong><span v-if="v.has_local" class="r18-card-local">本地 STRM 可播</span><h3 :title="v.title">{{ v.title }}</h3><span>{{ v.release_date || '发行日期未知' }} · {{ v.duration ? `${v.duration} 分钟` : '时长未知' }}</span><span class="r18-card-magnets" title="JavDB 上游数量，实际在线版本以影片详情为准">上游磁力 {{ v.magnets_count }} · {{ v.score ? `评分 ${v.score.toFixed(1)}` : '评分未知' }}</span></div>
         </RouterLink>
       </div>

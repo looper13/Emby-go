@@ -76,6 +76,7 @@ func (a *App) r18CompatVideo(c *gin.Context) (store.Library, r18.Video, bool) {
 		a.r18Failure(c, "本地播放源查询", err)
 		return l, v, false
 	}
+	a.cacheR18Video(l, v, true)
 	return l, v, true
 }
 
@@ -385,6 +386,7 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 			a.r18Failure(c, "本地播放源查询", err)
 			return true
 		}
+		a.cacheR18Video(l, v, true)
 		item := a.r18ItemDTO(c, l, v)
 		if favoriteCandidateMatches(c, item) {
 			items = append(items, item)

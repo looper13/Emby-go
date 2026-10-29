@@ -241,6 +241,9 @@ func TestR18EmbyImagesAuthResizeAndCache(t *testing.T) {
 	hits := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		hits++
+		if req.URL.Path != "/api/v1/img-proxy/" || req.URL.Query().Get("url") == "" {
+			t.Error("原生客户端图片没有使用固定 AVdb 代理接口")
+		}
 		if req.Header.Get("X-Emby-Token") != "" || req.Header.Get("Cookie") != "" || req.Header.Get("X-API-Key") != "" {
 			t.Error("forwarded credentials")
 		}
@@ -248,7 +251,7 @@ func TestR18EmbyImagesAuthResizeAndCache(t *testing.T) {
 	}))
 	defer upstream.Close()
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, _ := a.db.CreateR18Library("Images", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
+	l, _ := a.db.CreateR18Library("Images", r18.Config{BaseURL: upstream.URL, APIKey: "fixture-key"})
 	v := r18.Video{ID: r18.EncodeID("image001", "javdb"), Number: "IMAGE-001", CoverURL: upstream.URL + "/cover", Images: []string{upstream.URL + "/gallery", upstream.URL + "/gallery2", upstream.URL + "/gallery3"}}
 	fake := &fakeR18Catalog{videos: []r18.Video{v}}
 	a.r18Open = func(r18.Config) (r18Source, error) { return fake, nil }
