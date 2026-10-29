@@ -11,12 +11,12 @@ const auth = useAuthStore(), player = usePlayerStore(), scope = usePageRequest()
 const state = ref<OfflineState>({ configured: false, tasks: [], sources: [] }), loaded = ref(false), busy = ref(false), error = ref(''), magnet = ref('');
 const selections = ref<Record<string, string>>({}), selectedSource = ref('');
 let timer: ReturnType<typeof setTimeout> | undefined;
-const labels: Record<string, string> = { queued: '排队中', submitting: '提交中 / 正在对账', downloading: '115 离线下载中', discovering: '正在确认视频文件', waiting_selection: '请选择正片文件', ready: '已就绪', failed: '失败', timed_out: '等待超时', needs_auth: '需要重新授权', cancelled: '已取消本地等待' };
-const stages: Record<string, string> = { submit: '提交', reconcile: '任务对账', discover: '文件确认', poll: '轮询', remote: '网盘下载', file: '文件检查', configuration: '凭证装载', cancel: '取消' };
+const labels: Record<string, string> = { queued: '排队中', submitting: '提交中 / 正在对账', downloading: '115 离线下载中', discovering: '正在确认视频文件', waiting_selection: '请选择正片文件', ready: '已就绪', failed: '失败', timed_out: '等待超时', needs_auth: '需要重新授权', cancelled: '已取消本地等待', cleanup_pending: '缓存到期 / 正在自动删除', expired: '缓存已自动删除' };
+const stages: Record<string, string> = { submit: '提交', reconcile: '任务对账', discover: '文件确认', poll: '轮询', remote: '网盘下载', file: '文件检查', configuration: '凭证装载', cancel: '取消', cache: '缓存目录', cleanup: '自动清理' };
 const active = (t: OfflineTask) => ['queued', 'submitting', 'downloading', 'discovering'].includes(t.status);
 const source = computed(() => state.value.sources.find(s => s.Id === selectedSource.value) ?? state.value.sources[0]);
 function accept(next: OfflineState) { state.value = next; loaded.value = true; for (const t of next.tasks) if (!(t.id in selections.value)) selections.value[t.id] = t.file_id || t.files[0]?.id || ''; }
-function schedule() { clearTimeout(timer); if (state.value.tasks.some(active)) timer = setTimeout(() => { if (document.hidden) schedule(); else void load(); }, 5000); }
+function schedule() { clearTimeout(timer); if (state.value.tasks.some(t => active(t) || t.status === 'cleanup_pending' || !!t.expires_at && t.status !== 'expired')) timer = setTimeout(() => { if (document.hidden) schedule(); else void load(); }, 5000); }
 async function load() {
   if (busy.value) return;
   const request = scope.begin(); error.value = '';
@@ -54,13 +54,14 @@ onScopeDispose(() => clearTimeout(timer));
     <p class="hint">播放按实际客户端 User-Agent 获取临时直链并 302 跳转；不转码、不记录 R18 观看进度。浏览器不支持的编码可使用外部播放器。</p>
     <article v-for="t in state.tasks" :key="t.id" class="offline-task">
       <div class="offline-status"><strong>{{ labels[t.status] }}</strong><span>{{ t.progress }}%</span></div>
+      <p v-if="t.expires_at && t.status !== 'expired'" class="hint">自动删除时间：{{ new Date(t.expires_at * 1000).toLocaleString() }}（缓存保留 24 小时）</p>
       <progress v-if="active(t)" :value="t.progress" max="100" :aria-label="labels[t.status]" />
       <p v-if="t.error" class="offline-error">{{ t.stage ? `${stages[t.stage] || t.stage}：` : '' }}{{ t.error }}</p>
       <div v-if="t.files.length" class="offline-select"><label :for="`file-${t.id}`">正片文件<select :id="`file-${t.id}`" v-model="selections[t.id]" :disabled="busy"><option v-for="f in t.files" :key="f.id" :value="f.id">{{ f.path }} · {{ (f.size / 1024 ** 3).toFixed(2) }} GiB</option></select></label><button class="btn" :disabled="busy || !selections[t.id]" @click="select(t)">设为默认播放源</button></div>
       <div class="offline-actions"><button v-if="active(t)" class="btn btn-sm" :disabled="busy" @click="change(t, 'cancel')">取消本地等待</button><button v-if="t.retryable && !active(t) && !['ready', 'waiting_selection'].includes(t.status)" class="btn btn-sm" :disabled="busy" @click="change(t, 'retry')">重试当前阶段</button></div>
     </article>
     <form v-if="auth.isAdministrator && state.configured" class="offline-manual" @submit.prevent="submit()"><label for="r18-manual-magnet">手动磁力<input id="r18-manual-magnet" v-model="magnet" placeholder="magnet:?xt=urn:btih:…" required maxlength="8192" :disabled="busy" /></label><button class="btn" :disabled="busy">{{ busy ? '处理中…' : '提交到 115' }}</button></form>
-    <p v-if="auth.isAdministrator" class="hint">同一磁力复用任务。取消仅停止本地等待，影响关联该磁力的条目；不会删除网盘任务或文件。</p>
+    <p v-if="auth.isAdministrator" class="hint">缓存统一存放于「缓存-24h自动删除」，创建任务缓存 24 小时后自动删除。取消仅停止本地等待，不延长保留时间；清理完成后可重新提交同一磁力下载。不要在任务子目录中放入永久文件。</p>
   </section>
 </template>
 <style scoped>

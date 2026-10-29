@@ -21,12 +21,14 @@ import (
 type Tokens struct {
 	Access  string `json:"access_token"`
 	Refresh string `json:"refresh_token"`
+	Cookie  string `json:"cookie,omitempty"`
 }
 
 type RemoteTask struct {
 	Hash             string
 	Status, Progress int
 	ResultID         string
+	FolderID         string
 }
 
 type File struct {
@@ -66,7 +68,14 @@ func SafeError(err error, tokens Tokens) error {
 	var prior *Error
 	hasPrior := errors.As(err, &prior)
 	message := err.Error()
-	for _, secret := range []string{tokens.Access, tokens.Refresh} {
+	secrets := []string{tokens.Access, tokens.Refresh, tokens.Cookie}
+	for _, part := range strings.Split(tokens.Cookie, ";") {
+		_, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && value != "" {
+			secrets = append(secrets, value)
+		}
+	}
+	for _, secret := range secrets {
 		if secret != "" {
 			message = strings.ReplaceAll(message, secret, "[REDACTED]")
 		}
@@ -141,7 +150,10 @@ type Client struct {
 
 // The SDK mutates tokens during refresh. Serialize it and rate-limit every HTTP
 // request, including its internal refresh/retry requests, without logging bodies.
-func New(tokens Tokens, persist func(Tokens) error) *Client {
+func New(tokens Tokens, persist func(Tokens) error) Provider {
+	if tokens.Cookie != "" {
+		return newCookieClient(tokens.Cookie, http.DefaultTransport, time.Second)
+	}
 	return newClient(tokens, persist, http.DefaultTransport, time.Second)
 }
 func newClient(tokens Tokens, persist func(Tokens) error, transport http.RoundTripper, interval time.Duration) *Client {
@@ -150,7 +162,7 @@ func newClient(tokens Tokens, persist func(Tokens) error, transport http.RoundTr
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}).SetAccessToken(tokens.Access).SetRefreshToken(tokens.Refresh)
 	c.sdk.SetOnRefreshToken(func(access, refresh string) {
-		c.tokens = Tokens{access, refresh}
+		c.tokens = Tokens{Access: access, Refresh: refresh}
 		if c.persist != nil {
 			c.persistErr = c.persist(c.tokens)
 		}

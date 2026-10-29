@@ -6,6 +6,7 @@ toolchain go1.27.3
 
 require (
 	github.com/OpenListTeam/115-sdk-go v0.2.6
+	github.com/SheltonZhu/115driver v1.3.5
 	github.com/deepteams/webp v1.2.7
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.10.1
@@ -45,7 +46,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect

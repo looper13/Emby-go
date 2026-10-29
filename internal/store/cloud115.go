@@ -16,26 +16,33 @@ type Cloud115Connection struct {
 	Secrets   []byte `json:"-"`
 }
 type OfflineTask struct {
-	ID        string          `json:"id"`
-	AccountID string          `json:"account_id"`
-	InfoHash  string          `json:"info_hash"`
-	Magnet    string          `json:"magnet"`
-	FolderID  string          `json:"folder_id"`
-	Status    string          `json:"status"`
-	Resume    string          `json:"resume"`
-	Stage     string          `json:"stage"`
-	Error     string          `json:"error"`
-	Retryable bool            `json:"retryable"`
-	Progress  int             `json:"progress"`
-	ResultID  string          `json:"result_id"`
-	Attempts  int             `json:"attempts"`
-	NextPoll  int64           `json:"next_poll"`
-	CreatedAt int64           `json:"created_at"`
-	Deadline  int64           `json:"deadline"`
-	UpdatedAt int64           `json:"updated_at"`
-	Version   int64           `json:"version"`
-	Files     []cloud115.File `json:"files"`
+	ID            string          `json:"id"`
+	AccountID     string          `json:"account_id"`
+	InfoHash      string          `json:"info_hash"`
+	Magnet        string          `json:"magnet"`
+	FolderID      string          `json:"folder_id"`
+	Status        string          `json:"status"`
+	Resume        string          `json:"resume"`
+	Stage         string          `json:"stage"`
+	Error         string          `json:"error"`
+	Retryable     bool            `json:"retryable"`
+	Progress      int             `json:"progress"`
+	ResultID      string          `json:"result_id"`
+	Attempts      int             `json:"attempts"`
+	NextPoll      int64           `json:"next_poll"`
+	CreatedAt     int64           `json:"created_at"`
+	Deadline      int64           `json:"deadline"`
+	UpdatedAt     int64           `json:"updated_at"`
+	Version       int64           `json:"version"`
+	Files         []cloud115.File `json:"files"`
+	CacheFolderID string          `json:"cache_folder_id,omitempty"`
+	ExpiresAt     int64           `json:"expires_at,omitempty"`
 }
+
+func (t OfflineTask) CacheExpired(now int64) bool {
+	return t.ExpiresAt > 0 && t.ExpiresAt <= now || t.Status == "expired" || t.Status == "cleanup_pending"
+}
+
 type OfflineBinding struct {
 	Task       OfflineTask
 	ResourceID string
@@ -86,6 +93,16 @@ func (s *Store) CreateOfflineTask(account, folder, magnet, hash string, l Librar
 	if err = json.Unmarshal([]byte(data), &t); err != nil {
 		return t, err
 	}
+	if t.Status == "expired" {
+		t = OfflineTask{ID: t.ID, AccountID: account, FolderID: folder, Magnet: magnet, InfoHash: hash, Status: "queued", CreatedAt: time.Now().Unix(), Version: t.Version + 1, Files: []cloud115.File{}}
+		b, _ = json.Marshal(t)
+		if _, err = tx.Exec("UPDATE offline_tasks SET status=?,next_poll=0,version=?,data=? WHERE id=?", t.Status, t.Version, string(b), t.ID); err != nil {
+			return t, err
+		}
+		if _, err = tx.Exec("UPDATE r18_offline_bindings SET file_id='',is_default=0 WHERE task_id=?", t.ID); err != nil {
+			return t, err
+		}
+	}
 	selected := ""
 	if t.Status == "ready" && len(t.Files) == 1 {
 		selected = t.Files[0].ID
@@ -132,7 +149,33 @@ func (s *Store) UpdateOfflineTask(t OfflineTask, expected int64) error {
 			return err
 		}
 	}
+	if t.CacheExpired(time.Now().Unix()) {
+		if _, err = tx.Exec("UPDATE r18_offline_bindings SET file_id='',is_default=0 WHERE task_id=?", t.ID); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func (s *Store) DueOfflineCleanup(account string, now int64) ([]OfflineTask, error) {
+	rows, err := s.db.Query("SELECT data FROM offline_tasks WHERE account_id=? AND status!='expired' AND json_extract(data,'$.expires_at')>0 AND json_extract(data,'$.expires_at')<=? AND (status!='cleanup_pending' OR next_poll<=?) ORDER BY next_poll,id LIMIT 50", account, now, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []OfflineTask{}
+	for rows.Next() {
+		var data string
+		var t OfflineTask
+		if err = rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(data), &t); err != nil {
+			return nil, err
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
 }
 func (s *Store) DueOfflineTasks(account string, now int64) ([]OfflineTask, error) {
 	rows, err := s.db.Query("SELECT data FROM offline_tasks WHERE account_id=? AND status IN ('queued','submitting','downloading','discovering') AND next_poll<=? ORDER BY next_poll,id LIMIT 50", account, now)
@@ -187,6 +230,9 @@ func (s *Store) SelectOfflineFile(l Library, video, taskID, fileID string, makeD
 	var t OfflineTask
 	if err = json.Unmarshal([]byte(data), &t); err != nil {
 		return err
+	}
+	if t.CacheExpired(time.Now().Unix()) {
+		return errors.New("115 缓存已到期，不能再选择播放文件")
 	}
 	valid := false
 	for _, f := range t.Files {

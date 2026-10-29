@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -77,28 +76,22 @@ func (a *App) cloudProvider() (cloud115.Provider, string, error) {
 func (a *App) cloud115Config(c *gin.Context) {
 	conn, err := a.db.Cloud115Connection()
 	if errors.Is(err, sql.ErrNoRows) {
-		c.JSON(200, gin.H{"configured": false, "account_id": "", "folder_id": "", "revision": 0})
+		c.JSON(200, gin.H{"configured": false, "account_id": "", "folder_id": "", "folder_name": cloud115.CacheFolderName, "revision": 0})
 		return
 	}
 	if err != nil {
 		c.JSON(500, gin.H{"error": "读取 115 配置失败"})
 		return
 	}
-	c.JSON(200, gin.H{"configured": true, "account_id": conn.AccountID, "folder_id": conn.FolderID, "revision": conn.Revision})
+	c.JSON(200, gin.H{"configured": true, "account_id": conn.AccountID, "folder_id": conn.FolderID, "folder_name": cloud115.CacheFolderName, "revision": conn.Revision})
 }
 func (a *App) saveCloud115Config(c *gin.Context) {
 	var req struct {
-		Access   string `json:"access_token"`
-		Refresh  string `json:"refresh_token"`
-		Folder   string `json:"folder_id"`
+		Cookie   string `json:"cookie"`
 		Revision int64  `json:"revision"`
 	}
-	if c.ShouldBindJSON(&req) != nil || len(req.Access) > 8192 || len(req.Refresh) > 8192 || len(req.Folder) > 32 {
+	if c.ShouldBindJSON(&req) != nil || len(req.Cookie) > 16384 {
 		c.JSON(400, gin.H{"error": "115 配置格式不正确"})
-		return
-	}
-	if _, err := strconv.ParseUint(req.Folder, 10, 64); err != nil || req.Folder == "0" {
-		c.JSON(400, gin.H{"error": "请指定非根目录的 115 工作文件夹 ID"})
 		return
 	}
 	a.cloud115Mu.Lock()
@@ -108,7 +101,7 @@ func (a *App) saveCloud115Config(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "无法读取或保护 115 密钥，请检查数据目录权限"})
 		return
 	}
-	tokens := cloud115.Tokens{Access: strings.TrimSpace(req.Access), Refresh: strings.TrimSpace(req.Refresh)}
+	tokens := cloud115.Tokens{Cookie: strings.TrimSpace(req.Cookie)}
 	old, err := a.db.Cloud115Connection()
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		c.JSON(500, gin.H{"error": "读取 115 配置失败"})
@@ -118,21 +111,21 @@ func (a *App) saveCloud115Config(c *gin.Context) {
 		c.JSON(409, gin.H{"error": "115 配置已变化，请刷新后重试"})
 		return
 	}
-	if old.Revision > 0 && (tokens.Access == "" || tokens.Refresh == "") {
+	if old.Revision > 0 && tokens.Cookie == "" {
 		prior, e := v.Open(old.Secrets)
 		if e != nil {
-			c.JSON(400, gin.H{"error": "既有凭证无法解密，请重新填写完整 Token"})
+			c.JSON(400, gin.H{"error": "既有凭证无法解密，请重新填写 Cookie"})
 			return
 		}
-		if tokens.Access == "" {
-			tokens.Access = prior.Access
-		}
-		if tokens.Refresh == "" {
-			tokens.Refresh = prior.Refresh
-		}
+		tokens.Cookie = prior.Cookie
 	}
-	if tokens.Access == "" || tokens.Refresh == "" {
-		c.JSON(400, gin.H{"error": "请填写 Access Token 和 Refresh Token"})
+	if tokens.Cookie == "" {
+		c.JSON(400, gin.H{"error": "请填写 115 Cookie（UID、CID、SEID），旧 Token 配置需改用 Cookie"})
+		return
+	}
+	tokens.Cookie, err = cloud115.NormalizeCookie(tokens.Cookie)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
 	persist := func(t cloud115.Tokens) error { tokens = t; return nil }
@@ -144,7 +137,7 @@ func (a *App) saveCloud115Config(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
-	account, err := p.Check(ctx, req.Folder)
+	account, err := p.Check(ctx, "")
 	if err != nil {
 		c.JSON(400, gin.H{"error": "115 验证失败：" + cloud115.SafeError(err, tokens).Error()})
 		return
@@ -153,9 +146,19 @@ func (a *App) saveCloud115Config(c *gin.Context) {
 		c.JSON(409, gin.H{"error": "当前仅支持同一 115 账号更新凭证，不能把既有任务切换到其它账号"})
 		return
 	}
+	cache, ok := p.(cloud115.CacheProvider)
+	if !ok {
+		c.JSON(400, gin.H{"error": "115 连接不支持自动缓存目录，请使用 Cookie"})
+		return
+	}
+	folder, err := cloud115.EnsureCacheFolder(ctx, cache)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "115 缓存目录创建或验证失败：" + cloud115.SafeError(err, tokens).Error()})
+		return
+	}
 	b, err := v.Seal(tokens)
 	if err == nil {
-		err = a.db.SaveCloud115Connection(store.Cloud115Connection{AccountID: account, FolderID: req.Folder, Secrets: b}, req.Revision)
+		err = a.db.SaveCloud115Connection(store.Cloud115Connection{AccountID: account, FolderID: folder, Secrets: b}, req.Revision)
 	}
 	if err != nil {
 		c.JSON(409, gin.H{"error": "保存 115 配置失败，请刷新后重试"})
@@ -210,10 +213,20 @@ func (a *App) r18Offline(c *gin.Context) {
 		for _, b := range bindings {
 			files := []gin.H{}
 			for _, f := range b.Task.Files {
+				if b.Task.CacheExpired(time.Now().Unix()) {
+					break
+				}
 				files = append(files, gin.H{"id": f.ID, "name": f.Name, "path": f.Path, "size": f.Size})
 			}
 			t := b.Task
-			tasks = append(tasks, gin.H{"id": t.ID, "resource_id": b.ResourceID, "status": t.Status, "progress": t.Progress, "stage": t.Stage, "error": t.Error, "retryable": t.Retryable, "version": t.Version, "files": files, "file_id": b.FileID})
+			status, message, retryable := t.Status, t.Error, t.Retryable
+			if t.CacheExpired(time.Now().Unix()) && status != "expired" {
+				status, message, retryable = "cleanup_pending", "缓存已满 24 小时，正在自动删除；清理完成后可重新提交下载", false
+				if t.Stage == "cleanup" {
+					message = t.Error
+				}
+			}
+			tasks = append(tasks, gin.H{"id": t.ID, "resource_id": b.ResourceID, "status": status, "progress": t.Progress, "stage": t.Stage, "error": message, "retryable": retryable, "version": t.Version, "files": files, "file_id": b.FileID, "expires_at": t.ExpiresAt})
 		}
 	}
 	c.JSON(200, gin.H{"configured": true, "tasks": tasks, "sources": a.r18ReadySources(c, l, c.Param("video"))})
@@ -376,7 +389,7 @@ func (a *App) r18ReadySources(c *gin.Context, l store.Library, video string) []g
 		return list
 	}
 	for _, b := range bindings {
-		if b.Task.Status != "ready" {
+		if b.Task.Status != "ready" || b.Task.CacheExpired(time.Now().Unix()) {
 			continue
 		}
 		for _, f := range b.Task.Files {
@@ -455,7 +468,7 @@ func (a *App) r18Stream(c *gin.Context) {
 	var task store.OfflineTask
 	requested := c.Query("MediaSourceId")
 	for _, b := range bindings {
-		if b.Task.Status != "ready" || requested != "" && requested != "115-"+b.Task.ID {
+		if b.Task.Status != "ready" || b.Task.CacheExpired(time.Now().Unix()) || requested != "" && requested != "115-"+b.Task.ID {
 			continue
 		}
 		for _, f := range b.Task.Files {

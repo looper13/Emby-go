@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"emby-go/internal/cloud115"
 	"emby-go/internal/r18"
@@ -32,8 +33,11 @@ func (f *cloudFixture) Info(_ context.Context, id string) (cloud115.File, error)
 	return cloud115.File{ID: id, Name: "movie.mkv", PickCode: "fresh-code", SHA1: "file-sha", Size: 100}, nil
 }
 func (f *cloudFixture) List(context.Context, string, int) ([]cloud115.File, bool, error) {
-	return nil, false, nil
+	return []cloud115.File{{ID: "12", Name: cloud115.CacheFolderName, Directory: true, ParentID: "0"}}, false, nil
 }
+func (f *cloudFixture) Mkdir(context.Context, string, string) (string, error) { return "12", nil }
+func (f *cloudFixture) Delete(context.Context, string) error                  { return nil }
+func (f *cloudFixture) RemoveTask(context.Context, string) error              { return nil }
 func (f *cloudFixture) URL(_ context.Context, code, ua string) (string, error) {
 	f.urls++
 	f.ua = ua
@@ -79,12 +83,15 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 		return resp.Header, out
 	}
 	call("GET", "/api/admin/115/connection", "", nil, 401)
-	call("PUT", "/api/admin/115/connection", token, map[string]any{"access_token": "access-token-secret", "refresh_token": "refresh-token-secret", "folder_id": "12", "revision": 0}, 204)
+	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "UID=115-token-secret; CID=cid-token-secret; SEID=seid-token-secret", "revision": 0}, 204)
 	conn, err := a.db.Cloud115Connection()
 	if err != nil || strings.Contains(string(conn.Secrets), "token-secret") {
 		t.Fatal(conn, err)
 	}
 	call("GET", "/api/admin/115/connection", token, nil, 200)
+	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "", "revision": 0}, 409)
+	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "bad", "revision": 1}, 400)
+	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "", "revision": 1}, 204)
 	l, err := a.db.CreateR18Library("R18", r18.Config{Host: "localhost", Port: 5432, Database: "test", Username: "user", SSLMode: "disable"})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +140,23 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 		t.Fatal(h, p)
 	}
 	call("HEAD", ticketURL, "", nil, 302)
+	expiring, _ := a.db.OfflineTask(task.ID)
+	expiring.ExpiresAt = time.Now().Add(-time.Second).Unix()
+	if err := a.db.UpdateOfflineTask(expiring, expiring.Version); err != nil {
+		t.Fatal(err)
+	}
+	beforeExpiry := p.urls
+	call("GET", ticketURL, "", nil, 404)
+	_, expiredOut := call("GET", base, token, nil, 200)
+	if p.urls != beforeExpiry || len(expiredOut["sources"].([]any)) != 0 || expiredOut["tasks"].([]any)[0].(map[string]any)["status"] != "cleanup_pending" {
+		t.Fatal("expired cache remained playable", expiredOut)
+	}
+	expiring, _ = a.db.OfflineTask(task.ID)
+	expiring.ExpiresAt = 0
+	if err := a.db.UpdateOfflineTask(expiring, expiring.Version); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", base+"/selection", token, map[string]any{"task_id": task.ID, "file_id": "file", "default": true}, 200)
 	call("GET", strings.Replace(ticketURL, "MediaSourceId=115-", "MediaSourceId=forged-", 1), "", nil, 401)
 	before := p.urls
 	reader.SaveLibraryAccessPolicy(store.LibraryAccessPolicy{})

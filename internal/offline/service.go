@@ -67,6 +67,17 @@ func (s *Service) tick() {
 		}
 		return
 	}
+	cleanup, err := s.db.DueOfflineCleanup(account, time.Now().Unix())
+	if err != nil {
+		slog.Error("读取 115 缓存清理队列失败", "error", err)
+		return
+	}
+	for _, t := range cleanup {
+		if s.ctx.Err() != nil {
+			return
+		}
+		s.cleanup(p, t)
+	}
 	tasks, err := s.db.DueOfflineTasks(account, time.Now().Unix())
 	if err != nil {
 		if s.ctx.Err() == nil {
@@ -85,6 +96,10 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
 	defer cancel()
 	expected := t.Version
+	if t.CacheExpired(time.Now().Unix()) {
+		s.cleanup(p, t)
+		return
+	}
 	deadline := t.Deadline
 	if deadline == 0 {
 		deadline = t.CreatedAt + 24*3600
@@ -98,7 +113,62 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		_ = s.save(t, expected)
 		return
 	}
+	if t.Status == "queued" && t.CacheFolderID == "" {
+		cache, ok := p.(cloud115.CacheProvider)
+		if !ok {
+			s.fail(t, expected, "configuration", &cloud115.Error{Message: "请更新为 Cookie 连接后提交缓存任务", Auth: true})
+			return
+		}
+		root, err := p.Info(ctx, t.FolderID)
+		if err != nil {
+			s.fail(t, expected, "cache", err)
+			return
+		}
+		if root.ID != t.FolderID || !root.Directory || root.Name != cloud115.CacheFolderName || root.ParentID != "0" {
+			s.fail(t, expected, "cache", &cloud115.Error{Message: "115 缓存根目录身份变化，请重新验证 Cookie 连接"})
+			return
+		}
+		// Persist expiry before mkdir: even a timeout or cancellation that loses
+		// the returned folder ID must leave a recoverable cleanup intent.
+		if t.ExpiresAt == 0 {
+			t.ExpiresAt = time.Now().Add(cloud115.CacheLifetime).Unix()
+			if s.save(t, expected) != nil {
+				return
+			}
+			expected++
+			t.Version = expected
+		}
+		id, err := findTaskCacheFolder(ctx, p, t)
+		if err == nil && id == "" {
+			id, err = cache.Mkdir(ctx, t.FolderID, "emby-go-"+t.ID)
+		}
+		if err != nil {
+			s.fail(t, expected, "cache", err)
+			return
+		}
+		child, err := p.Info(ctx, id)
+		if err != nil {
+			s.fail(t, expected, "cache", err)
+			return
+		}
+		if child.ID != id || id == "" || id == "0" || id == t.FolderID || !child.Directory || child.ParentID != t.FolderID || child.Name != "emby-go-"+t.ID {
+			s.fail(t, expected, "cache", &cloud115.Error{Message: "115 任务缓存子目录身份不匹配"})
+			return
+		}
+		t.CacheFolderID = id
+		if s.save(t, expected) != nil {
+			return
+		}
+		expected++
+		t.Version = expected
+	}
 	if t.Status == "discovering" {
+		if t.CacheFolderID != "" {
+			if err := verifyCacheResult(ctx, p, t); err != nil {
+				s.fail(t, expected, "cache", err)
+				return
+			}
+		}
 		files, err := cloud115.Discover(ctx, p, t.ResultID, t.FolderID)
 		if err != nil {
 			s.fail(t, expected, "discover", err)
@@ -122,6 +192,10 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 		return
 	}
 	if remote != nil {
+		if t.CacheFolderID != "" && remote.FolderID != t.CacheFolderID {
+			s.fail(t, expected, "cache", &cloud115.Error{Message: "该磁力已有任务，但不在本服务缓存子目录；不会使用或删除既有网盘文件"})
+			return
+		}
 		t.Attempts = 0
 		t.Error = ""
 		t.Stage = ""
@@ -159,7 +233,11 @@ func (s *Service) process(p cloud115.Provider, t store.OfflineTask) {
 	}
 	expected++
 	t.Version = expected
-	if err = p.Add(ctx, t.Magnet, t.FolderID); err != nil {
+	folder := t.CacheFolderID
+	if folder == "" {
+		folder = t.FolderID
+	}
+	if err = p.Add(ctx, t.Magnet, folder); err != nil {
 		s.fail(t, expected, "submit", err)
 		return
 	}
@@ -200,6 +278,9 @@ func (s *Service) Cancel(id string, version int64) error {
 	if t.Version != version {
 		return errors.New("任务已变化，请刷新后重试")
 	}
+	if t.CacheExpired(time.Now().Unix()) {
+		return errors.New("缓存已到期，正在自动清理，不能取消清理")
+	}
 	if t.Status != "queued" && t.Status != "submitting" && t.Status != "downloading" && t.Status != "discovering" {
 		return errors.New("任务已结束，无需再次取消；不会删除网盘文件")
 	}
@@ -217,6 +298,9 @@ func (s *Service) Retry(id string, version int64) error {
 	}
 	if t.Version != version {
 		return errors.New("任务已变化，请刷新后重试")
+	}
+	if t.CacheExpired(time.Now().Unix()) {
+		return errors.New("缓存已到期；清理完成后请重新提交磁力下载")
 	}
 	if !t.Retryable || !(t.Status == "failed" || t.Status == "timed_out" || t.Status == "needs_auth" || t.Status == "cancelled") {
 		return errors.New("当前任务不支持重试")

@@ -36,15 +36,24 @@ describe('115 workflow', () => {
     vi.useFakeTimers(); const read = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'downloading', files: [] }] });
     const w = panel(); await flushPromises(); await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(2); w.unmount(); wrapper = undefined; await vi.advanceTimersByTimeAsync(15000); expect(read).toHaveBeenCalledTimes(2);
   });
-  it('masks credential inputs and clears them after saving without returning tokens', async () => {
+  it('needs only a masked Cookie and clears it after saving without a folder input', async () => {
     vi.spyOn(cloud115Api, 'config').mockResolvedValue({ configured: false, account_id: '', folder_id: '', revision: 0 });
     const save = vi.spyOn(cloud115Api, 'save').mockResolvedValue(undefined);
     wrapper = mount(Cloud115Settings, { global: { plugins: [pinia] } }); await flushPromises();
-    await wrapper.get('#cloud-access').setValue('access'); await wrapper.get('#cloud-refresh').setValue('refresh'); await wrapper.get('#cloud-folder').setValue('12'); await wrapper.get('form').trigger('submit'); await flushPromises();
-    expect(save).toHaveBeenCalledWith({ access_token: 'access', refresh_token: 'refresh', folder_id: '12', revision: 0 }, expect.any(AbortSignal)); expect((wrapper.get('#cloud-access').element as HTMLInputElement).value).toBe(''); expect(wrapper.get('#cloud-refresh').attributes('type')).toBe('password');
+    await wrapper.get('#cloud-cookie').setValue('UID=1; CID=2; SEID=3'); await wrapper.get('form').trigger('submit'); await flushPromises();
+    expect(save).toHaveBeenCalledWith({ cookie: 'UID=1; CID=2; SEID=3', revision: 0 }, expect.any(AbortSignal)); expect((wrapper.get('#cloud-cookie').element as HTMLInputElement).value).toBe(''); expect(wrapper.get('#cloud-cookie').attributes('type')).toBe('password');
+    expect(wrapper.find('#cloud-folder').exists()).toBe(false); expect(wrapper.find('#cloud-access').exists()).toBe(false); expect(wrapper.text()).toContain('缓存-24h自动删除');
   });
   it('rejects untrusted source addresses and unknown task states', () => {
     expect(() => parseOfflineState({ ...empty, sources: [{ ...source, DirectStreamUrl: 'https://evil.example' }] })).toThrow();
     expect(() => parseOfflineState({ ...empty, tasks: [{ ...task, status: 'unknown' }] })).toThrow();
+  });
+  it('shows expiry and cleanup status without playback, file selection or renewal actions', async () => {
+    const pending = { ...task, status: 'cleanup_pending', stage: 'cleanup', expires_at: 1793240000, error: '缓存已到期，自动删除失败：请更新 Cookie', files: [] };
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue(parseOfflineState({ ...empty, tasks: [pending] }));
+    const w = panel(); await flushPromises();
+    expect(w.text()).toContain('缓存到期 / 正在自动删除'); expect(w.text()).toContain('自动删除时间'); expect(w.text()).toContain('请更新 Cookie');
+    expect(w.findAll('button').some(b => ['播放', '取消本地等待', '重试当前阶段', '设为默认播放源'].includes(b.text()))).toBe(false);
+    expect(parseOfflineState({ ...empty, tasks: [{ ...pending, status: 'expired' }] }).tasks[0]!.status).toBe('expired');
   });
 });

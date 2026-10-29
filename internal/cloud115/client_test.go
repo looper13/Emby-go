@@ -31,7 +31,7 @@ func TestVaultPersistenceAndTamper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokens := Tokens{"access-secret", "refresh-secret"}
+	tokens := Tokens{Access: "access-secret", Refresh: "refresh-secret", Cookie: "UID=cookie-secret; CID=cid-secret; SEID=seid-secret"}
 	b, err := v.Seal(tokens)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestSDKRefreshPaginationAddErrorsAndURL(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})
-	c := newClient(Tokens{"old", "refresh"}, func(tokens Tokens) error { refreshed = tokens.Access == "new"; return nil }, transport, 0)
+	c := newClient(Tokens{Access: "old", Refresh: "refresh"}, func(tokens Tokens) error { refreshed = tokens.Access == "new"; return nil }, transport, 0)
 	remote, err := c.Find(context.Background(), strings.Repeat("0", 40))
 	if err != nil || remote == nil || remote.ResultID != "44" || !refreshed {
 		t.Fatal(remote, err, refreshed, requests)
@@ -107,7 +107,7 @@ func TestRateLimiterCancellationAndRedaction(t *testing.T) {
 	if _, err := transport.RoundTrip(req); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	err := SafeError(&Error{Message: "access-secret https://cdn.example/?token=signed", Auth: true}, Tokens{"access-secret", ""})
+	err := SafeError(&Error{Message: "access-secret https://cdn.example/?token=signed", Auth: true}, Tokens{Access: "access-secret"})
 	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "signed") {
 		t.Fatal(err)
 	}

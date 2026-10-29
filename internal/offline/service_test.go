@@ -15,11 +15,12 @@ import (
 )
 
 type providerFixture struct {
-	adds     int
-	remote   *cloud115.RemoteTask
-	files    []cloud115.File
-	addError error
-	onInfo   func()
+	adds      int
+	remote    *cloud115.RemoteTask
+	files     []cloud115.File
+	addError  error
+	onInfo    func()
+	cacheName string
 }
 
 func (p *providerFixture) Check(context.Context, string) (string, error) { return "account", nil }
@@ -27,15 +28,30 @@ func (p *providerFixture) Find(context.Context, string) (*cloud115.RemoteTask, e
 	return p.remote, nil
 }
 func (p *providerFixture) Add(context.Context, string, string) error { p.adds++; return p.addError }
-func (p *providerFixture) Info(context.Context, string) (cloud115.File, error) {
+func (p *providerFixture) Info(_ context.Context, id string) (cloud115.File, error) {
+	if id == "work" {
+		return cloud115.File{ID: "work", Name: cloud115.CacheFolderName, ParentID: "0", Directory: true}, nil
+	}
+	if id == "cache" {
+		return cloud115.File{ID: "cache", Name: p.cacheName, ParentID: "work", Directory: true}, nil
+	}
 	if p.onInfo != nil {
 		p.onInfo()
 	}
-	return cloud115.File{ID: "result", Name: "result", Directory: true}, nil
+	return cloud115.File{ID: "result", Name: "result", ParentID: "cache", Directory: true}, nil
 }
-func (p *providerFixture) List(context.Context, string, int) ([]cloud115.File, bool, error) {
+func (p *providerFixture) List(_ context.Context, id string, _ int) ([]cloud115.File, bool, error) {
+	if id == "work" {
+		return nil, false, nil
+	}
 	return p.files, false, nil
 }
+func (p *providerFixture) Mkdir(_ context.Context, parent, name string) (string, error) {
+	p.cacheName = name
+	return "cache", nil
+}
+func (p *providerFixture) Delete(context.Context, string) error                { return nil }
+func (p *providerFixture) RemoveTask(context.Context, string) error            { return nil }
 func (p *providerFixture) URL(context.Context, string, string) (string, error) { return "", nil }
 func setup(t *testing.T) (*store.Store, store.Library, string) {
 	t.Helper()
@@ -90,7 +106,7 @@ func TestOfflineDedupeLifecycleAndSelection(t *testing.T) {
 	if task.Status != "downloading" || p.adds != 1 {
 		t.Fatal(task, p.adds)
 	}
-	p.remote = &cloud115.RemoteTask{Status: 2, Progress: 100, ResultID: "result"}
+	p.remote = &cloud115.RemoteTask{Status: 2, Progress: 100, ResultID: "result", FolderID: "cache"}
 	service.process(p, task)
 	task = read(t, s, task.ID)
 	p.files = []cloud115.File{{ID: "a", Name: "one.mp4", PickCode: "pick-a", Size: 100}, {ID: "b", Name: "two.mkv", PickCode: "pick-b", Size: 200}}
@@ -129,7 +145,7 @@ func TestOfflineUncertainSubmissionRecoveryNeverResubmits(t *testing.T) {
 	if p.adds != 1 {
 		t.Fatal("submitted twice")
 	}
-	p.remote = &cloud115.RemoteTask{Status: 1, Progress: 42}
+	p.remote = &cloud115.RemoteTask{Status: 1, Progress: 42, FolderID: "cache"}
 	restarted.process(p, read(t, s, task.ID))
 	task = read(t, s, task.ID)
 	if task.Status != "downloading" || task.Progress != 42 {
