@@ -15,7 +15,7 @@ import ReadState from '../components/common/ReadState.vue';
 import type { LibraryContentType, LibraryDto } from '../api/contracts';
 
 function contentLabel(lib: LibraryDto) {
-  if (lib.SourceType === 'postgres_r18') return 'R18 资料库';
+  if (lib.SourceType === 'avdb_javdb') return 'JavDB 在线资料库';
   return lib.Type === 'tvshows' ? '电视节目' : lib.Type === 'mixed' ? '混合内容' : '影片';
 }
 
@@ -31,8 +31,8 @@ const updatingProxy = ref(new Set<number>());
 const playingLibraryId = ref<number | null>(null);
 const editingR18 = ref<number>();
 const r18FormKey = ref(0);
-function browseLink(lib: LibraryDto) { return { path: lib.SourceType === 'postgres_r18' ? '/r18' : '/items', query: { library_id: lib.Id } }; }
-function sourceLabel(lib: LibraryDto) { return lib.SourceType === 'postgres_r18' ? 'PostgreSQL / r18_video + article' : lib.Path; }
+function browseLink(lib: LibraryDto) { return { path: lib.SourceType === 'avdb_javdb' ? '/r18' : '/items', query: { library_id: lib.Id } }; }
+function sourceLabel(lib: LibraryDto) { return lib.SourceType === 'avdb_javdb' ? 'AVdb-Only API / JavDB' : lib.Path; }
 async function r18Saved(lib: LibraryDto) { toasts.show(`已保存媒体库「${lib.Name}」`); editingR18.value = undefined; r18FormKey.value += 1; if (active()) await load(); }
 
 const VIEW_STORAGE_KEY = 'emby_library_view_mode';
@@ -210,10 +210,10 @@ async function remove(id: number) {
 
         <div class="lib-card-body">
           <div class="lib-card-path" :title="sourceLabel(lib)">
-            <span class="lib-path-label">{{ lib.SourceType === 'postgres_r18' ? '来源' : '路径' }}</span>
+            <span class="lib-path-label">{{ lib.SourceType === 'avdb_javdb' ? '来源' : '路径' }}</span>
             <span class="mono lib-path-text">{{ sourceLabel(lib) }}</span>
           </div>
-          <div v-if="lib.SourceType !== 'postgres_r18'" class="proxy-toggles-wrap">
+          <div v-if="lib.SourceType !== 'avdb_javdb'" class="proxy-toggles-wrap">
             <label class="proxy-toggle">
               <input
                 type="checkbox"
@@ -243,7 +243,7 @@ async function remove(id: number) {
             <span>浏览</span>
           </RouterLink>
           <button
-            v-if="lib.SourceType !== 'postgres_r18'"
+            v-if="lib.SourceType !== 'avdb_javdb'"
             class="btn btn-sm btn-random-play"
             :data-lib-random-play="lib.Id"
             title="随机播放该媒体库中的影片"
@@ -254,7 +254,7 @@ async function remove(id: number) {
             <span>{{ playingLibraryId === lib.Id ? '选取中…' : '随机播放' }}</span>
           </button>
           <button
-            v-if="lib.SourceType !== 'postgres_r18'"
+            v-if="lib.SourceType !== 'avdb_javdb'"
             class="btn btn-sm"
             :data-lib-scan="lib.Id"
             title="更新该媒体库中新增或变化的媒体"
@@ -265,7 +265,7 @@ async function remove(id: number) {
             <span>增量扫描</span>
           </button>
           <button
-            v-if="lib.SourceType !== 'postgres_r18'"
+            v-if="lib.SourceType !== 'avdb_javdb'"
             class="btn btn-sm"
             :data-lib-duplicates="lib.Id"
             title="检测重复媒体"
@@ -273,7 +273,7 @@ async function remove(id: number) {
           >
             <span>查重</span>
           </button>
-          <button v-if="lib.SourceType === 'postgres_r18'" class="btn btn-sm" @click="editingR18 = lib.Id">连接配置</button>
+          <button v-if="lib.SourceType === 'avdb_javdb'" class="btn btn-sm" @click="editingR18 = lib.Id">连接配置</button>
           <button
             class="icon-btn danger"
             :data-lib-delete="lib.Id"
@@ -319,7 +319,7 @@ async function remove(id: number) {
               <span class="lib-path" :title="sourceLabel(lib)">{{ sourceLabel(lib) }}</span>
             </td>
             <td>
-              <div v-if="lib.SourceType !== 'postgres_r18'" class="proxy-toggles-wrap">
+              <div v-if="lib.SourceType !== 'avdb_javdb'" class="proxy-toggles-wrap">
                 <label class="proxy-toggle">
                   <input
                     type="checkbox"
@@ -352,7 +352,7 @@ async function remove(id: number) {
                   <span>浏览</span>
                 </RouterLink>
                 <button
-                  v-if="lib.SourceType !== 'postgres_r18'"
+                  v-if="lib.SourceType !== 'avdb_javdb'"
                   class="btn btn-sm btn-random-play"
                   :data-lib-random-play="lib.Id"
                   title="随机播放该媒体库中的影片"
@@ -363,7 +363,7 @@ async function remove(id: number) {
                   <span>{{ playingLibraryId === lib.Id ? '选取中…' : '随机播放' }}</span>
                 </button>
                 <button
-                  v-if="lib.SourceType !== 'postgres_r18'"
+                  v-if="lib.SourceType !== 'avdb_javdb'"
                   class="btn btn-sm"
                   :data-lib-scan="lib.Id"
                   title="更新该媒体库中新增或变化的媒体"
@@ -374,7 +374,7 @@ async function remove(id: number) {
                   <span>增量扫描</span>
                 </button>
                 <button
-                  v-if="lib.SourceType !== 'postgres_r18'"
+                  v-if="lib.SourceType !== 'avdb_javdb'"
                   class="btn btn-sm"
                   :data-lib-duplicates="lib.Id"
                   title="检测重复媒体"
@@ -382,7 +382,7 @@ async function remove(id: number) {
                 >
                   <span>查重</span>
                 </button>
-                <button v-if="lib.SourceType === 'postgres_r18'" class="btn btn-sm" @click="editingR18 = lib.Id">连接配置</button>
+                <button v-if="lib.SourceType === 'avdb_javdb'" class="btn btn-sm" @click="editingR18 = lib.Id">连接配置</button>
                 <button
                   class="icon-btn danger"
                   :data-lib-delete="lib.Id"
@@ -401,9 +401,9 @@ async function remove(id: number) {
     <EmptyState v-else-if="data" title="还没有媒体库" hint="先在下方登记一个存放 .strm 的目录。" />
   </section>
 
-  <DuplicateMoviesPanel ref="duplicates" :libraries="(data?.items || []).filter(lib => lib.SourceType !== 'postgres_r18')" />
+  <DuplicateMoviesPanel ref="duplicates" :libraries="(data?.items || []).filter(lib => lib.SourceType !== 'avdb_javdb')" />
 
-  <section v-if="editingR18" class="panel"><div class="panel-head"><h2>R18 连接配置</h2></div><R18LibraryForm :key="editingR18" :library-id="editingR18" @saved="r18Saved" @cancel="editingR18 = undefined" /></section>
+  <section v-if="editingR18" class="panel"><div class="panel-head"><h2>JavDB 连接配置</h2></div><R18LibraryForm :key="editingR18" :library-id="editingR18" @saved="r18Saved" @cancel="editingR18 = undefined" /></section>
 
   <section class="panel library-add-panel">
     <div class="panel-head">
@@ -412,7 +412,7 @@ async function remove(id: number) {
     </div>
     <LibraryForm :key="formKey" :submitting="submitting" @submit="create" />
   </section>
-  <section v-if="!editingR18" class="panel"><details><summary>添加 PostgreSQL / R18 资料库</summary><R18LibraryForm :key="r18FormKey" @saved="r18Saved" /></details></section>
+  <section v-if="!editingR18" class="panel"><details><summary>添加 AVdb-Only / JavDB 资料库</summary><R18LibraryForm :key="r18FormKey" @saved="r18Saved" /></details></section>
 </template>
 
 <style scoped>
@@ -428,6 +428,7 @@ async function remove(id: number) {
 
 .panel-head-title h2 {
   margin: 0;
+  white-space: nowrap;
 }
 
 .library-head-actions {
@@ -703,5 +704,12 @@ async function remove(id: number) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+@media (max-width: 600px) {
+  .library-manage-panel > .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 </style>

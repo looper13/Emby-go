@@ -86,7 +86,11 @@ func (a *App) r18Image(c *gin.Context) {
 		return
 	}
 	id, kind := c.Param("video"), c.Param("image")
-	if _, _, err := r18.DecodeID(id); err != nil || (kind != "cover" && kind != "poster" && kind != "0" && kind != "1") {
+	validKind := kind == "cover" || kind == "poster"
+	if index, err := strconv.Atoi(kind); err == nil && index >= 0 && index < r18.MaxImages && strconv.Itoa(index) == kind {
+		validKind = true
+	}
+	if _, _, err := r18.DecodeID(id); err != nil || !validKind {
 		c.Status(http.StatusNotFound)
 		return
 	}

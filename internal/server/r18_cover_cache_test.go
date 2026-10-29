@@ -37,7 +37,7 @@ func TestR18LargeCoverCachingRestartSharingAndAccess(t *testing.T) {
 	var covers, galleries atomic.Int64
 	var unavailable atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		for _, key := range []string{"Cookie", "X-Emby-Token", "Authorization"} {
+		for _, key := range []string{"Cookie", "X-API-Key", "X-Emby-Token", "Authorization"} {
 			if req.Header.Get(key) != "" {
 				t.Error("forwarded client credential", key)
 			}
@@ -56,7 +56,7 @@ func TestR18LargeCoverCachingRestartSharingAndAccess(t *testing.T) {
 	}))
 	defer upstream.Close()
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, _ := a.db.CreateR18Library("Cached covers", r18.Config{Host: "db.invalid", Database: "catalog", Username: "reader"})
+	l, _ := a.db.CreateR18Library("Cached covers", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	v := r18.Video{ID: r18.EncodeID("cached001", "mono"), Number: "CACHE-001", CoverURL: upstream.URL + "/cover", Images: []string{upstream.URL + "/gallery"}}
 	fake := &fakeR18Catalog{videos: []r18.Video{v}}
 	a.r18Open = func(r18.Config) (r18Source, error) { return fake, nil }
@@ -202,7 +202,7 @@ func TestR18CoverCacheExpiryAndDiskFailureFallback(t *testing.T) {
 
 func TestR18CoverDerivedKeepsOriginalExpiry(t *testing.T) {
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, err := a.db.CreateR18Library("Cover freshness", r18.Config{Host: "db.invalid", Database: "catalog", Username: "reader"})
+	l, err := a.db.CreateR18Library("Cover freshness", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
 	}

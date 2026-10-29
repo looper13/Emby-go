@@ -8,7 +8,7 @@ import { loadPlayerFactory, playbackType } from '../lib/player';
 import { startPlaybackTiming, type PlaybackStage } from '../lib/playback-timing';
 import { usePageRequest } from './usePageRequest';
 
-export function useR18Playback(item: () => { library: string; video: string; title: string }, resources: Ref<R18Resource[]> = ref([])) {
+export function useR18Playback(item: () => { library: string; video: string; title: string }, resources: Ref<R18Resource[]> = ref([]), enabled: () => boolean = () => true) {
   const auth = useAuthStore(), player = usePlayerStore(), scope = usePageRequest();
   const state = ref<OfflineState>({ configured: false, tasks: [], sources: [] });
   const loaded = ref(false), busy = ref(false), error = ref(''), waiting = ref('');
@@ -26,6 +26,7 @@ export function useR18Playback(item: () => { library: string; video: string; tit
   }
   function schedule() {
     clearTimeout(timer);
+    if (!enabled()) return;
     if (waiting.value || state.value.tasks.some(t => offlineActive(t) || t.status === 'cleanup_pending' || !!t.expires_at && t.status !== 'expired')) {
       timer = setTimeout(() => { if (document.hidden) schedule(); else void load(); }, waiting.value ? 1000 : 5000);
     }
@@ -65,9 +66,9 @@ export function useR18Playback(item: () => { library: string; video: string; tit
     }
   }
   async function run(work: (signal: AbortSignal, current: () => boolean) => Promise<void>) {
-    if (busy.value) return;
+    if (!enabled() || busy.value) return;
     clearTimeout(timer); const request = scope.begin(); busy.value = true; error.value = '';
-    try { await work(request.signal, request.isCurrent); }
+    try { await work(request.signal, () => enabled() && request.isCurrent()); }
     catch (cause) { if (request.isCurrent()) error.value = cause instanceof Error ? cause.message : '115 操作失败'; }
     finally { if (request.isCurrent()) { busy.value = false; schedule(); } }
   }
@@ -79,7 +80,7 @@ export function useR18Playback(item: () => { library: string; video: string; tit
     });
   }
   async function play(version: R18PlaybackVersion) {
-    if (busy.value) return;
+    if (!enabled() || busy.value) return;
     timing = startPlaybackTiming();
     void loadPlayerFactory().catch(() => {});
     waiting.value = version.id;
@@ -123,10 +124,12 @@ export function useR18Playback(item: () => { library: string; video: string; tit
     if (action === 'cancel' && pending.value?.task?.id === task.id) stopWaiting();
     return run(async (signal, current) => { acceptIfCurrent(await cloud115Api.change(item().library, item().video, task, action, signal), current); });
   }
-  watch(() => [item().library, item().video], () => {
+  // 路由或播放模式一变就撤销请求，避免等渲染批次结束后仍访问旧影片的 115 流程。
+  watch([enabled, () => item().library, () => item().video], () => {
     clearTimeout(timer); scope.cancel(); busy.value = false; loaded.value = false; waiting.value = ''; error.value = '';
-    state.value = { configured: false, tasks: [], sources: [] }; selections.value = {}; void load();
-  }, { immediate: true });
+    state.value = { configured: false, tasks: [], sources: [] }; selections.value = {};
+    if (enabled()) void load();
+  }, { immediate: true, flush: 'sync' });
   onScopeDispose(() => clearTimeout(timer));
   return { state, loaded, busy, error, waiting, versions, pending, message, selections, load, play, select, change, stopWaiting };
 }

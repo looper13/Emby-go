@@ -36,7 +36,7 @@ func TestCloud115SelectionPreparationHandoffAndInvalidation(t *testing.T) {
 			if err := a.db.SaveCloud115Connection(store.Cloud115Connection{AccountID: "115-account", FolderID: "12", Secrets: secrets}, 0); err != nil {
 				t.Fatal(err)
 			}
-			l, err := a.db.CreateR18Library("R18", r18.Config{Host: "localhost", Port: 5432, Database: "test", Username: "user", SSLMode: "disable"})
+			l, err := a.db.CreateR18Library("R18", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 			if err != nil {
 				t.Fatal(err)
 			}

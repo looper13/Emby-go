@@ -1,6 +1,7 @@
 import { nextTick, onScopeDispose, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
 import type { MovieDto } from '../api/contracts';
+import type { R18LocalSource } from '../api/r18';
 import { playbackType, type PlayerOptions } from '../lib/player';
 import type { TrackSelection } from '../lib/player-tracks';
 export const usePlayerStore = defineStore('player', () => {
@@ -10,7 +11,11 @@ export const usePlayerStore = defineStore('player', () => {
     const sourceId = source?.id ?? movie.id;
     open({ title: movie.Title || movie.source_path.split(/[\\/]/u).pop() || '播放', url: `/Videos/${sourceId}/stream`, proxyURL: `/Videos/${sourceId}/proxy`, type: playbackType(source?.container || movie.source_container), itemId: String(movie.id), sourceItemId: String(sourceId), selection });
   }
+  function local(source: R18LocalSource) {
+    const id = encodeURIComponent(source.item_id);
+    open({ title: source.name || '本地 STRM', url: `/Videos/${id}/stream`, proxyURL: `/Videos/${id}/proxy`, type: playbackType(source.container), itemId: source.item_id, sourceItemId: source.item_id });
+  }
   function trailer(movie: MovieDto, url: string) { open({ title: '预告片 · ' + movie.Title, url: `/Videos/${encodeURIComponent(String(movie.id))}/trailer`, type: playbackType(url), itemId: String(movie.id) }); }
   function close() { const previous = focus; current.value = null; focus = null; void nextTick(() => { if (!current.value && previous?.isConnected) previous.focus({ preventScroll: true }); }); }
-  onScopeDispose(close); return { current, media, trailer, close, open };
+  onScopeDispose(close); return { current, media, local, trailer, close, open };
 });

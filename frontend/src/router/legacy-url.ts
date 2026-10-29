@@ -7,7 +7,7 @@ const filterKeys = new Set([
   'genre', 'tag', 'studio', 'person', 'collection', 'scrape', 'limit', 'offset',
   'year',
   'view', 'tv_series', 'tv_season', 'favorite', 'type',
-  'cursor', 'direction', 'search_mode', 'service', 'from',
+  'page', 'page_size', 'filter', 'from',
 ]);
 
 export function isValidItemId(value: string): boolean {
@@ -25,7 +25,7 @@ function filteredQuery(input: URLSearchParams): URLSearchParams {
   for (const [key, value] of input) {
     if (!filterKeys.has(key) || output.has(key)) continue;
     if (key === 'library_id' && value !== '0' && !isValidItemId(value)) continue;
-    if ((key === 'limit' || key === 'offset') && !/^\d+$/u.test(value)) continue;
+    if (['limit', 'offset', 'page', 'page_size'].includes(key) && !/^\d+$/u.test(value)) continue;
     output.set(key, value);
   }
   return output;

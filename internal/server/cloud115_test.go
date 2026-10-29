@@ -100,7 +100,7 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "", "revision": 0}, 409)
 	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "bad", "revision": 1}, 400)
 	call("PUT", "/api/admin/115/connection", token, map[string]any{"cookie": "", "revision": 1}, 204)
-	l, err := a.db.CreateR18Library("R18", r18.Config{Host: "localhost", Port: 5432, Database: "test", Username: "user", SSLMode: "disable"})
+	l, err := a.db.CreateR18Library("R18", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
 	}

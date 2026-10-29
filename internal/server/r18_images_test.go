@@ -23,7 +23,7 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	hits := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		for _, header := range []string{"Cookie", "Authorization", "X-Emby-Token", "X-MediaBrowser-Token", "Referer"} {
+		for _, header := range []string{"Cookie", "Authorization", "X-API-Key", "X-Emby-Token", "X-MediaBrowser-Token", "Referer"} {
 			if r.Header.Get(header) != "" {
 				t.Errorf("forwarded credential header %s", header)
 			}
@@ -44,7 +44,7 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	a, server, token := newProbeTestApp(t, t.TempDir())
 	// Only this fixture uses loopback; production transport rejects private targets.
 	a.r18ImageHTTP = upstream.Client()
-	lib, err := a.db.CreateR18Library("Images", r18.Config{Host: "db.invalid", Database: "catalog", Username: "reader"})
+	lib, err := a.db.CreateR18Library("Images", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +111,17 @@ func TestR18ImageProxyPresentationAuthCacheAndFailures(t *testing.T) {
 	call("GET", base+"/images/cover", "image-user", etag, 404)
 	if hits != 2 {
 		t.Fatal("warm cache bypassed revoked access")
+	}
+	// JavDB 剧照数量不再受旧数据库首尾两张的限制。
+	fake.video.Images = []string{upstream.URL + "/gallery.png", upstream.URL + "/gallery.png?index=1", upstream.URL + "/gallery.png?index=2"}
+	a.r18Presentation(lib, fake.video)
+	call("GET", base+"/images/2", token, "", 200)
+	before := hits
+	for _, index := range []string{"3", "99", "100", "-1", "01"} {
+		call("GET", base+"/images/"+index, token, "", 404)
+	}
+	if hits != before {
+		t.Fatal("不存在或非法剧照索引触发了上游请求")
 	}
 	for _, path := range []string{"/html", "/large", "/unavailable"} {
 		fake.video.CoverURL = upstream.URL + path

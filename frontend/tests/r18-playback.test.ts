@@ -11,19 +11,20 @@ import { magnetHash, mainVideo, playbackVersions } from '../src/lib/r18-playback
 import * as playerRuntime from '../src/lib/player';
 
 const hash = 'a'.repeat(40), otherHash = 'b'.repeat(40);
-const resource: R18Resource = { id: '1', title: '4K version', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 0, tags: [] };
+const resource: R18Resource = { id: '1', title: '4K version', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 0, tags: [], origins: ['online'] };
 const empty: OfflineState = { configured: true, tasks: [], sources: [] };
 const files = [{ id: 'ad', name: 'attachment.mp4', path: 'attachment.mp4', size: 100 }, { id: 'main', name: 'movie.mp4', path: 'movie.mp4', size: 20_000_000_000 }];
 const task: OfflineTask = { id: 'task', info_hash: hash, magnet: resource.magnet, resource_id: '1', status: 'downloading', progress: 40, files: [], file_id: '', stage: '', error: '', retryable: false, version: 1 };
 const source = { Id: '115-task', InfoHash: hash, ResourceId: '1', Name: 'movie.mp4', DirectStreamUrl: '/Videos/r18-2-id/stream?MediaSourceId=115-task&playback_token=fixture', Container: 'mp4', Default: false };
 let pinia: ReturnType<typeof createPinia>, wrapper: VueWrapper | undefined, workflow: R18Playback;
 const item = ref({ library: '2', video: 'id', title: 'Movie' });
+const enabled = ref(true);
 function start(admin = true) {
   useAuthStore().user = { Policy: { IsAdministrator: admin } } as never;
-  wrapper = mount(defineComponent({ setup() { workflow = useR18Playback(() => item.value, ref([resource])); return {}; }, template: '<div />' }), { global: { plugins: [pinia] } });
+  wrapper = mount(defineComponent({ setup() { workflow = useR18Playback(() => item.value, ref([resource]), () => enabled.value); return {}; }, template: '<div />' }), { global: { plugins: [pinia] } });
 }
 beforeEach(() => {
-  vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); item.value = { library: '2', video: 'id', title: 'Movie' };
+  vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); enabled.value = true; item.value = { library: '2', video: 'id', title: 'Movie' };
   vi.spyOn(playerRuntime, 'loadPlayerFactory').mockResolvedValue(() => ({} as never));
   vi.spyOn(cloud115Api, 'state').mockResolvedValue(empty);
   vi.spyOn(cloud115Api, 'prepare').mockImplementation(async () => workflow.state.value);
@@ -31,6 +32,23 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('R18 one-click playback', () => {
+  it('禁用时不读取或写入115，开启后读取，关闭时同步中断请求和轮询', async () => {
+    enabled.value = false;
+    const read = vi.spyOn(cloud115Api, 'state');
+    const submit = vi.spyOn(cloud115Api, 'submit'), select = vi.spyOn(cloud115Api, 'select'), change = vi.spyOn(cloud115Api, 'change');
+    start(); await flushPromises();
+    await workflow.load(); await workflow.play(workflow.versions.value[0]!); await workflow.select(task); await workflow.change(task, 'retry');
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(read).not.toHaveBeenCalled(); expect(submit).not.toHaveBeenCalled(); expect(select).not.toHaveBeenCalled(); expect(change).not.toHaveBeenCalled(); expect(cloud115Api.prepare).not.toHaveBeenCalled();
+    let finish!: (value: OfflineState) => void;
+    read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    enabled.value = true; expect(read).toHaveBeenCalledTimes(1);
+    const signal = read.mock.lastCall![2]!;
+    enabled.value = false; expect(signal.aborted).toBe(true);
+    finish({ ...empty, tasks: [task], sources: [source] }); await flushPromises();
+    expect(workflow.state.value.sources).toEqual([]); expect(workflow.busy.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(15000); expect(read).toHaveBeenCalledTimes(1); expect(usePlayerStore().current).toBeNull();
+  });
   it('polls local state every second only while playback is awaited, then restores background pacing', async () => {
     const read = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [task] });
     start(); await flushPromises();

@@ -41,6 +41,24 @@ async function restoredWall() {
   return { api, wall, open };
 }
 
+it('redirects the AVdb JavDB source to its online catalog instead of loading directory items', async () => {
+  vi.mocked(catalogApi.libraries).mockResolvedValue({ items: [{ Id: 2, Name: 'JavDB', Path: '', SourceType: 'avdb_javdb' }], total: 1 });
+  const items = vi.spyOn(catalogApi, 'items').mockResolvedValue(batch(0));
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/items', name: 'items', component: MediaWallPage },
+    { path: '/r18', name: 'r18', component: { template: '<p>online catalog</p>' } },
+  ] });
+  await router.push('/items?library_id=2');
+  wrapper = mount(MediaWallPage, { global: {
+    plugins: [pinia, router], provide: { [viewHistoryKey as symbol]: { target: () => null } },
+    stubs: { BackgroundTaskProgress: true, MediaGrid: true },
+  } });
+  await flushPromises();
+  expect(router.currentRoute.value.path).toBe('/r18');
+  expect(router.currentRoute.value.query).toEqual({ library_id: '2' });
+  expect(items).not.toHaveBeenCalled();
+});
+
 it('changes sort direction through the URL, resets pagination, and retains it after detail navigation', async () => {
   const api = vi.spyOn(catalogApi, 'items').mockImplementation(async q => batch(Number(q.get('offset'))));
   const router = createRouter({ history: createMemoryHistory(), routes: [

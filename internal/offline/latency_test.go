@@ -28,7 +28,7 @@ func TestOfflineAcceptedVisibilityGracePersistsAndNeverResubmits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { db.Close() }()
-	l, err := db.CreateR18Library("R18", r18.Config{Host: "localhost", Port: 5432, Database: "test", Username: "user", SSLMode: "disable"})
+	l, err := db.CreateR18Library("R18", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
 	}

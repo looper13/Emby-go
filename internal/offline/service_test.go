@@ -61,7 +61,7 @@ func setup(t *testing.T) (*store.Store, store.Library, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	l, err := s.CreateR18Library("R18", r18.Config{Host: "localhost", Port: 5432, Database: "test", Username: "user", SSLMode: "disable"})
+	l, err := s.CreateR18Library("R18", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -58,7 +58,7 @@ function query() {
   return output;
 }
 function filter(key: string, v: string, toggle = false) {
-  if (key === 'library_id' && libraries.value.some(lib => String(lib.Id) === v && lib.SourceType === 'postgres_r18')) { void router.push({ path: '/r18', query: { library_id: v } }); return; }
+  if (key === 'library_id' && libraries.value.some(lib => String(lib.Id) === v && lib.SourceType === 'avdb_javdb')) { void router.push({ path: '/r18', query: { library_id: v } }); return; }
   clearTimeout(timer);
   const q = { ...route.query }; if (v && !(toggle && value(key) === v)) q[key] = v; else delete q[key];
   if (key === 'library_id' || key === 'view') { delete q.tv_series; delete q.tv_season; }
@@ -152,7 +152,7 @@ async function enter(position?: ViewPosition) {
     const result = await catalogApi.libraries(current.signal);
     if (!current.isCurrent()) return;
     libraries.value = (result.items ?? []).filter(lib => lib.Enabled !== false);
-    if (libraries.value.some(lib => String(lib.Id) === value('library_id') && lib.SourceType === 'postgres_r18')) { await router.replace({ path: '/r18', query: { library_id: value('library_id') } }); return; }
+    if (libraries.value.some(lib => String(lib.Id) === value('library_id') && lib.SourceType === 'avdb_javdb')) { await router.replace({ path: '/r18', query: { library_id: value('library_id') } }); return; }
     if (value('library_id') && !libraries.value.some(lib => String(lib.Id) === value('library_id'))) {
       const q = { ...route.query }; delete q.library_id;
       await router.replace({ path: '/items', query: q }); return;

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,11 +65,15 @@ func (a *App) r18CompatVideo(c *gin.Context) (store.Library, r18.Video, bool) {
 		a.r18Failure(c, "连接", err)
 		return l, r18.Video{}, false
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	v, err := client.Get(ctx, id)
 	if err != nil {
 		a.r18Failure(c, "详情查询", err)
+		return l, v, false
+	}
+	if err = a.prepareR18LocalSources(c, []r18.Video{v}); err != nil {
+		a.r18Failure(c, "本地播放源查询", err)
 		return l, v, false
 	}
 	return l, v, true
@@ -93,12 +98,19 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 		"MediaSources": []gin.H{}, "MediaStreams": []gin.H{}, "Chapters": []gin.H{},
 		"ImageTags": gin.H{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3.0,
 		"UserData":    gin.H{"Key": id, "IsFavorite": false, "Played": false, "PlayCount": 0, "PlaybackPositionTicks": 0},
-		"ProviderIds": gin.H{"R18": v.ContentID, "DVD": v.Number},
-		"Overview":    v.Number + " · " + l.Name + "\n只读资料条目，播放接入待实现（TODO）。磁力资源请在网页详情中查看。",
+		"ProviderIds": gin.H{"JavDB": v.ContentID, "DVD": v.Number},
+		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。在线磁力请在网页详情查看，管理员可通过 115 准备播放源。",
 		"People":      []gin.H{}, "Genres": []string{}, "Tags": []string{}, "Studios": []gin.H{},
 	}
 	if date, err := time.Parse("2006-01-02", v.ReleaseDate); err == nil {
 		item["PremiereDate"], item["ProductionYear"] = normalizeDate(v.ReleaseDate), date.Year()
+	}
+	if v.Duration > 0 && int64(v.Duration) <= math.MaxInt64/600000000 {
+		// API 时长单位为分钟，Emby 使用百纳秒。
+		item["RunTimeTicks"] = int64(v.Duration) * 600000000
+	}
+	if v.Score > 0 && !math.IsNaN(v.Score) && !math.IsInf(v.Score, 0) {
+		item["CommunityRating"] = v.Score
 	}
 	if !strings.EqualFold(c.Query("EnableImages"), "false") {
 		if v.CoverURL != "" {
@@ -110,15 +122,24 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 		}
 		item["BackdropImageTags"] = backdrops
 	}
-	// Seed only private source metadata; DTOs contain tags, never upstream URLs.
+	// 仅缓存私有元数据，客户端接收图片标记，不接收上游地址。
 	a.r18Presentation(l, v)
-	if sources := a.r18ReadySources(c, l, v.ID); len(sources) > 0 {
+	matches, localErr := a.r18LocalMatches(c, v)
+	sources := a.r18LocalMediaSources(c, matches)
+	if len(sources) == 0 && localErr == nil {
+		sources = a.r18ReadySources(c, l, v.ID)
+	}
+	if len(sources) > 0 {
 		item["IsPlaceHolder"] = false
 		item["PlayAccess"] = "Full"
 		item["MediaSources"] = sources
 		item["LocationType"] = "Remote"
 		item["MediaStreams"] = sources[0]["MediaStreams"]
-		item["Overview"] = v.Number + " · " + l.Name + "\n115 已就绪播放源；下载和版本选择请在网页详情中管理。"
+		if len(matches) > 0 {
+			item["Overview"] = v.Number + " · " + l.Name + "\n本地 STRM 已存在，直接沿用目录媒体库播放，不需要 115 下载。"
+		} else {
+			item["Overview"] = v.Number + " · " + l.Name + "\n115 已就绪播放源；下载和版本选择请在网页详情中管理。"
+		}
 	}
 	return item
 }
@@ -134,10 +155,25 @@ func (a *App) r18CollectionDTO(l store.Library) gin.H {
 }
 
 func r18CatalogQuery(c *gin.Context) (r18.CatalogQuery, error) {
-	start, limit := mediaPageWindow(c)
-	q := r18.CatalogQuery{Start: start, Limit: limit, Search: c.Query("SearchTerm"),
-		Sort: firstSortKey(c.DefaultQuery("SortBy", "PremiereDate")), Descending: strings.EqualFold(c.DefaultQuery("SortOrder", "Descending"), "Descending"),
+	search := strings.TrimSpace(c.Query("SearchTerm"))
+	defaultSort := "PremiereDate"
+	if search != "" {
+		defaultSort = "Relevance"
+	}
+	order := c.DefaultQuery("SortOrder", "Descending")
+	if !strings.EqualFold(order, "Ascending") && !strings.EqualFold(order, "Descending") {
+		return r18.CatalogQuery{}, errors.New("无效的 JavDB 排序方向")
+	}
+	q := r18.CatalogQuery{Search: search,
+		Sort: firstSortKey(c.DefaultQuery("SortBy", defaultSort)), Descending: strings.EqualFold(order, "Descending"),
 		NameStartsWith: c.Query("NameStartsWith"), NameStartsWithOrGreater: c.Query("NameStartsWithOrGreater"), NameLessThan: c.Query("NameLessThan")}
+	var err error
+	if q.Start, err = strconv.Atoi(c.DefaultQuery("StartIndex", "0")); err != nil || q.Start < 0 || q.Start >= 9999*50 {
+		return q, errors.New("无效的 JavDB 列表偏移")
+	}
+	if q.Limit, err = strconv.Atoi(c.DefaultQuery("Limit", "100")); err != nil || q.Limit < 1 || q.Limit > 1000 {
+		return q, errors.New("无效的 JavDB 每页条数")
+	}
 	for _, raw := range splitQueryTypes(c.Query("Years")) {
 		year, err := strconv.Atoi(raw)
 		if err != nil || year < 1 || year > 9999 {
@@ -168,7 +204,7 @@ func r18CatalogSupported(c *gin.Context) bool {
 			return false
 		}
 	}
-	// These properties/user states are not provided by the read-only source.
+	// 上游尚未提供这些用户状态和目录属性。
 	for _, key := range []string{"Genres", "GenreIds", "Tags", "TagIds", "Studios", "StudioIds", "Person", "PersonIds", "OfficialRatings"} {
 		if c.Query(key) != "" {
 			return false
@@ -177,17 +213,18 @@ func r18CatalogSupported(c *gin.Context) bool {
 	return true
 }
 
-func (a *App) r18CatalogCount(ctx context.Context, l store.Library, client r18Source, q r18.CatalogQuery) (int64, error) {
-	q.Start, q.Limit, q.Sort, q.Descending = 0, 0, "", false
-	key := responseKey("r18count", l.ID, l.Revision, q)
-	raw, err := a.cache.Load(ctx, key, 30*time.Second, func() ([]byte, error) {
-		total, err := client.CatalogCount(ctx, q)
-		return []byte(strconv.FormatInt(total, 10)), err
-	})
-	if err != nil {
-		return 0, err
+func r18AppliedSort(q r18.CatalogQuery) string {
+	if strings.TrimSpace(q.Search) != "" {
+		return "Relevance"
 	}
-	return strconv.ParseInt(string(raw), 10, 64)
+	switch strings.ToLower(q.Sort) {
+	case "", "release", "premieredate", "productionyear", "datecreated":
+		return "PremiereDate"
+	case "score", "communityrating":
+		return "CommunityRating"
+	default:
+		return q.Sort
+	}
 }
 
 func (a *App) r18CatalogResponse(c *gin.Context, l store.Library, latest bool) {
@@ -216,35 +253,42 @@ func (a *App) r18CatalogResponse(c *gin.Context, l store.Library, latest bool) {
 		a.r18Failure(c, "连接", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	var total int64
-	if !latest {
-		total, err = a.r18CatalogCount(ctx, l, client, q)
-		if err != nil {
-			a.r18Failure(c, "目录计数", err)
-			return
+	page, err := client.CatalogPage(ctx, q)
+	if err != nil {
+		if errors.Is(err, r18.ErrUnsupportedCatalogQuery) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		} else {
+			a.r18Failure(c, "在线目录查询", err)
 		}
+		return
+	}
+	if err = a.prepareR18LocalSources(c, page.Items); err != nil {
+		a.r18Failure(c, "本地播放源查询", err)
+		return
 	}
 	items := []gin.H{}
-	if latest || int64(q.Start) < total {
-		videos, err := client.CatalogList(ctx, q)
-		if err != nil {
-			a.r18Failure(c, "目录查询", err)
-			return
-		}
-		for _, v := range videos {
-			items = append(items, a.r18ItemDTO(c, l, v))
-		}
+	for _, video := range page.Items {
+		items = append(items, a.r18ItemDTO(c, l, video))
 	}
 	if latest {
 		c.JSON(200, items)
-	} else {
-		c.JSON(200, gin.H{"Items": items, "TotalRecordCount": total, "StartIndex": q.Start})
+		return
 	}
+	// Emby 需要数量判断翻页；这里只提供当前可访问条数下界，不请求全库计数。
+	total := 0
+	if len(items) > 0 || page.HasMore {
+		total = q.Start + len(items)
+	}
+	if page.HasMore {
+		total++
+	}
+	c.JSON(200, gin.H{"Items": items, "TotalRecordCount": total, "StartIndex": q.Start,
+		"TotalRecordCountIsEstimated": true, "TotalRecordCountIsKnown": false, "AppliedSortBy": r18AppliedSort(q)})
 }
 
-// Dispatch source scopes before SQLite/TV/favorite handlers paginate local data.
+// 先分派外部资料库范围，避免本地索引先分页。
 func (a *App) r18CompatItems(c *gin.Context) bool {
 	parentRaw := strings.TrimSpace(c.Query("ParentId"))
 	parent, _ := parseParentScope(parentRaw)
@@ -296,7 +340,7 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 		return true
 	}
 	items := []gin.H{}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	seen := map[string]bool{}
 	for _, raw := range ids {
@@ -337,6 +381,10 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 			a.r18Failure(c, "详情查询", err)
 			return true
 		}
+		if err = a.prepareR18LocalSources(c, []r18.Video{v}); err != nil {
+			a.r18Failure(c, "本地播放源查询", err)
+			return true
+		}
 		item := a.r18ItemDTO(c, l, v)
 		if favoriteCandidateMatches(c, item) {
 			items = append(items, item)
@@ -358,7 +406,12 @@ func (a *App) r18CompatItem(c *gin.Context) {
 
 func (a *App) r18CompatPlayback(c *gin.Context) {
 	if l, v, ok := a.r18CompatVideo(c); ok {
-		sources := a.r18ReadySources(c, l, v.ID)
+		matches, err := a.r18LocalMatches(c, v)
+		if err != nil {
+			a.r18Failure(c, "本地播放源查询", err)
+			return
+		}
+		sources := a.r18LocalMediaSources(c, matches)
 		requested := c.Query("MediaSourceId")
 		if c.Request.Method == "POST" {
 			var body struct {
@@ -372,6 +425,10 @@ func (a *App) r18CompatPlayback(c *gin.Context) {
 				requested = body.Source
 			}
 		}
+		// 默认只提供本地版本；显式选择 115 时才读取该来源的就绪绑定。
+		if len(sources) == 0 || strings.HasPrefix(requested, "115-") {
+			sources = append(sources, a.r18ReadySources(c, l, v.ID)...)
+		}
 		if requested != "" {
 			selected := []gin.H{}
 			for _, s := range sources {
@@ -382,7 +439,7 @@ func (a *App) r18CompatPlayback(c *gin.Context) {
 			sources = selected
 		}
 		if len(sources) == 0 {
-			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "R18 暂无就绪的 115 播放源，请管理员先完成离线下载和文件选择"})
+			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有有效的本地 STRM 或已就绪 115 播放源，请刷新并选择其它播放方式"})
 			return
 		}
 		c.JSON(200, gin.H{"MediaSources": sources, "PlaySessionId": randomSessionID()})
@@ -405,7 +462,7 @@ func (a *App) r18CompatImageInfo(c *gin.Context) {
 }
 
 func (a *App) r18CompatImage(c *gin.Context) {
-	// Keep existing anonymous local artwork compatibility, but R18 stays private.
+	// 本地图片继续兼容匿名访问，JavDB 图片必须鉴权。
 	if _, ok := c.Get("accountUser"); !ok {
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -424,7 +481,7 @@ func (a *App) r18CompatImage(c *gin.Context) {
 	if raw := c.Param("index"); raw != "" {
 		var err error
 		index, err = strconv.Atoi(raw)
-		if err != nil || index < 0 {
+		if err != nil || index < 0 || strconv.Itoa(index) != raw {
 			c.Status(404)
 			return
 		}
@@ -443,7 +500,7 @@ func (a *App) r18CompatImage(c *gin.Context) {
 			return
 		}
 	case "backdrop", "fanart":
-		if index > 1 {
+		if index >= r18.MaxImages {
 			c.Status(404)
 			return
 		}

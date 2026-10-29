@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cloud115Api } from '../src/api/cloud115';
+import { apiClient } from '../src/api/client';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia } from 'pinia';
 import { reactive } from 'vue';
@@ -21,12 +22,12 @@ const route = reactive({ name: 'r18', fullPath: '/r18?library_id=2', query: { li
 const router = { push: vi.fn(), replace: vi.fn() };
 vi.mock('vue-router', () => ({ useRoute: () => route, useRouter: () => router }));
 const wrappers: VueWrapper[] = [], stores: ReturnType<typeof createPinia>[] = [];
-const lib = { Id: 2, Name: 'R18', Path: '', SourceType: 'postgres_r18' as const, Revision: 1 };
-const video: R18Video = { id: 'WyJ0ZXN0IiwiZGlnaXRhbCJd', content_id: 'test', service_code: 'digital', number: 'TEST-001', title: 'Catalog title', original_title: 'Original', release_date: '2026-01-01', cover_url: '/api/r18/libraries/2/videos/WyJ0ZXN0IiwiZGlnaXRhbCJd/images/poster', images: ['/api/r18/libraries/2/videos/WyJ0ZXN0IiwiZGlnaXRhbCJd/images/0'] };
-const page = { items: [video], has_more: true, has_previous: false, next_cursor: video.id, previous_cursor: video.id, estimated_total: 1900000 };
+const lib = { Id: 2, Name: 'R18', Path: '', SourceType: 'avdb_javdb' as const, Revision: 1 };
+const video: R18Video = { id: 'WyJ0ZXN0IiwiamF2ZGIiXQ', content_id: 'test', service_code: 'javdb', number: 'TEST-001', title: 'Catalog title', original_title: 'Original', release_date: '2026-01-01', cover_url: '/api/r18/libraries/2/videos/WyJ0ZXN0IiwiamF2ZGIiXQ/images/poster', images: ['/api/r18/libraries/2/videos/WyJ0ZXN0IiwiamF2ZGIiXQ/images/0'], duration: 120, score: 4.3, magnets_count: 8, has_local: false };
+const page = { items: [video], page: 1, page_size: 24, has_more: true, has_previous: false };
 function render(component: typeof R18CatalogPage | typeof R18DetailPage | typeof R18LibraryForm, props = {}, history?: object) {
   const pinia = createPinia(); stores.push(pinia);
-  const w = mount(component, { props, global: { plugins: [pinia], provide: history ? { [viewHistoryKey as symbol]: history } : {}, stubs: { RouterLink: { template: '<a><slot /></a>' } } } }); wrappers.push(w); return w;
+  const w = mount(component, { props, global: { plugins: [pinia], provide: history ? { [viewHistoryKey as symbol]: history } : {}, stubs: { RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' } } } }); wrappers.push(w); return w;
 }
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); stores.splice(0).forEach(disposePinia); vi.restoreAllMocks(); router.push.mockReset(); router.replace.mockReset(); applyMediaVisibility(false); useCardSize().setSize('normal'); route.name = 'r18'; route.fullPath = '/r18?library_id=2'; route.query = { library_id: '2' }; route.params = {}; });
 
@@ -71,18 +72,19 @@ describe('R18 library presentation', () => {
     expect(w.get('.image-hidden').attributes('aria-label')).toBe(video.number);
   });
   it('keeps external source types and safe URLs, without inventing playback', () => {
-    expect(parseLibraries({ items: [lib], total: 1 }).items?.[0]?.SourceType).toBe('postgres_r18');
+    expect(parseLibraries({ items: [lib], total: 1 }).items?.[0]?.SourceType).toBe('avdb_javdb');
+    expect(() => parseLibraries({ items: [{ ...lib, SourceType: 'postgres_r18' }], total: 1 })).toThrow();
     expect(parseR18Page(page).items[0]?.id).toBe(video.id);
     expect(safeR18URL('javascript:alert(1)')).toBe('');
     expect(safeR18URL('https://user:secret@example.com/')).toBe('');
     expect(safeR18ImageURL(video.cover_url)).toBe(video.cover_url);
     expect(safeR18ImageURL(video.cover_url.replace('/poster', '/cover'))).toContain('/images/cover');
-    for (const raw of ['https://images.example/cover.jpg', '//evil.example/a', '/api/r18/libraries/2/videos/id/images/cover?url=http://evil.example', '/api/admin/scrape/image', '/api/r18/libraries/2/videos/../images/cover']) expect(safeR18ImageURL(raw)).toBe('');
+    for (const raw of ['https://images.example/cover.jpg', '//evil.example/a', '/api/r18/libraries/2/videos/id/images/cover?url=http://evil.example', '/api/admin/scrape/image', '/api/r18/libraries/2/videos/../images/cover', '/api/r18/libraries/2/videos/id/images/100', '/api/r18/libraries/2/videos/id/images/00', '/api/r18/libraries/2/videos/id/images/2?api_key=fixture']) expect(safeR18ImageURL(raw)).toBe('');
     expect(parseR18Video({ ...video, cover_url: 'https://images.example/cover.jpg', images: ['https://images.example/gallery.jpg'] })).toMatchObject({ cover_url: '', images: [] });
     expect(() => parseR18Resources({ items: [{ magnet: 'javascript:alert(1)' }], has_more: false, next_offset: 0 })).toThrow();
     expect(sanitizeReturnTo('/r18/2/item/' + video.id + '?from=%2Fr18%3Flibrary_id%3D2')).toContain('/r18/2/item/');
   });
-  it('shows the catalog, preserves it on failed refresh, and uses cursor navigation', async () => {
+  it('shows the online catalog, keeps cards on a failed refresh, and navigates with real page numbers', async () => {
     vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
     const reads = vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
     const w = render(R18CatalogPage); await flushPromises();
@@ -90,39 +92,174 @@ describe('R18 library presentation', () => {
     expect(w.get('.r18-card img').attributes('src')).toBe(video.cover_url);
     expect(w.findAll('img')).toHaveLength(1);
     expect(w.find('.r18-gallery').exists()).toBe(false);
-    expect(w.text()).toContain('源表约 1,900,000 条');
-    expect(w.text()).toContain('仅展示 dvd_id 有值的影片');
-    expect(w.get('label[for="r18-order"]').text()).toBe('发行日期排序');
+    expect(w.get('.r18-list-meta').text()).toContain('本页 1 条');
+    expect(w.get('.r18-list-meta').text()).not.toMatch(/上游总数|源表|约\s*0/u);
+    expect(w.text()).toContain('不导入整库');
+    expect(w.get('.r18-card-copy').text()).toContain('120 分钟');
+    expect(w.get('.r18-card-copy').text()).toContain('上游磁力 8');
+    expect(w.get('.r18-card-copy').text()).toContain('评分 4.3');
+    expect(w.get('#r18-type').findAll('option').map(v => v.attributes('value'))).toEqual(['all', '0', '1', '2', '3']);
+    expect(w.get('#r18-filter').findAll('option').map(v => v.attributes('value'))).toEqual(['all', 'magnets', 'subtitle', 'can_play']);
+    expect(w.get('#r18-filter').text()).toContain('JavDB 上游可播放');
+    expect(w.get('#r18-sort').findAll('option').map(v => v.attributes('value'))).toEqual(['release', 'score', 'hit', 'want_watch_count', 'watched_count']);
     expect((w.get('#r18-order').element as HTMLSelectElement).value).toBe('desc');
     expect(reads.mock.calls[0]?.[1].get('order')).toBe('desc');
+    expect(Object.fromEntries(reads.mock.calls[0]![1])).toEqual({ type: 'all', filter: 'magnets', sort: 'release', order: 'desc', page: '1', page_size: '24' });
+    expect(w.find('#r18-search-mode').exists()).toBe(false);
     const next = w.findAll('button').find(b => b.text().includes('下一页'))!; await next.trigger('click');
-    expect(router.push).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ cursor: video.id, direction: 'next' }) }));
+    expect(router.push).toHaveBeenCalledWith({ path: '/r18', query: { library_id: '2', type: 'all', filter: 'magnets', sort: 'release', order: 'desc', page: '2', page_size: '24' } });
     reads.mockRejectedValueOnce(new Error('Source unavailable'));
     await w.findAll('button').find(b => b.text() === '刷新')!.trigger('click'); await flushPromises();
     expect(w.findAll('.r18-card')).toHaveLength(1); expect(w.text()).toContain('Source unavailable');
   });
-  it('allows oldest-first release sorting and resets pagination when the order changes', async () => {
-    route.query = { library_id: '2', cursor: video.id, order: 'desc' };
+  it('resets to the first page when the sorting direction changes', async () => {
+    route.query = { library_id: '2', page: '4', order: 'desc' };
     vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
     vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
     const w = render(R18CatalogPage); await flushPromises();
     await w.get('#r18-order').setValue('asc');
-    await w.get('form').trigger('submit');
-    expect(router.push).toHaveBeenCalledExactlyOnceWith({ path: '/r18', query: { library_id: '2', search_mode: 'number', order: 'asc' } });
+    expect(router.push).toHaveBeenCalledExactlyOnceWith({ path: '/r18', query: { library_id: '2', type: 'all', filter: 'magnets', sort: 'release', order: 'asc', page: '1', page_size: '24' } });
   });
-  it('loads article resources on detail entry and copies magnets without opening a player', async () => {
+  it('clears the old library cards immediately on a direct route change while the new library is loading', async () => {
+    const otherLibrary = { ...lib, Id: 3, Name: 'Other JavDB library' };
+    const otherVideo = { ...video, id: 'other-video', number: 'OTHER-001', cover_url: '', images: [] };
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib, otherLibrary], total: 2 });
+    let finish!: (value: typeof page) => void;
+    const reads = vi.spyOn(r18Api, 'videos').mockResolvedValueOnce(page)
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const w = render(R18CatalogPage); await flushPromises();
+    expect(w.get('.r18-card').text()).toContain(video.number);
+    route.query = { library_id: '3' }; route.fullPath = '/r18?library_id=3';
+    await flushPromises();
+    expect(reads.mock.calls[1]?.[0]).toBe('3');
+    expect(w.findAll('.r18-card')).toHaveLength(0);
+    finish({ ...page, items: [otherVideo] }); await flushPromises();
+    expect(w.get('.r18-card').text()).toContain(otherVideo.number);
+    expect(w.getComponent({ name: 'RouterLink' }).props('to')).toEqual(expect.objectContaining({ params: { libraryId: '3', id: otherVideo.id } }));
+  });
+  it('does not restore the previous library cards when a history-style library switch fails', async () => {
+    const otherLibrary = { ...lib, Id: 3, Name: 'Other JavDB library' };
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib, otherLibrary], total: 2 });
+    let fail!: (reason: Error) => void;
+    vi.spyOn(r18Api, 'videos').mockResolvedValueOnce(page)
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    const w = render(R18CatalogPage); await flushPromises();
+    expect(w.findAll('.r18-card')).toHaveLength(1);
+    route.query = { library_id: '3', page: '4' }; route.fullPath = '/r18?library_id=3&page=4';
+    await flushPromises();
+    expect(w.findAll('.r18-card')).toHaveLength(0);
+    fail(new Error('Other library unavailable')); await flushPromises();
+    expect(w.text()).toContain('Other library unavailable');
+    expect(w.findAll('.r18-card')).toHaveLength(0);
+    expect(w.text()).not.toContain(video.title);
+  });
+  it('uses upstream search relevance without claiming release-date ordering or exact matching', async () => {
+    route.query = { library_id: '2', search: 'TEST', order: 'asc', type: '3', year: '2024', sort: 'score' };
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
+    const reads = vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
+    const w = render(R18CatalogPage); await flushPromises();
+    expect(w.get('#r18-order').attributes('disabled')).toBeDefined();
+    expect(w.get('#r18-sort').attributes('disabled')).toBeDefined();
+    expect(w.get('#r18-year').attributes('disabled')).toBeDefined();
+    expect(w.get('#r18-query-hint').text()).toContain('相关性排列');
+    expect(w.text()).not.toContain('精确搜索');
+    expect(reads.mock.calls[0]?.[1].get('order')).toBeNull();
+    expect(reads.mock.calls[0]?.[1].get('sort')).toBeNull();
+    expect(reads.mock.calls[0]?.[1].get('year')).toBeNull();
+    expect(reads.mock.calls[0]?.[1].get('type')).toBe('3');
+    for (const removed of ['search_mode', 'service', 'cursor', 'direction']) expect(reads.mock.calls[0]?.[1].has(removed)).toBe(false);
+    await w.get('.r18-filters').trigger('submit');
+    expect(router.push).toHaveBeenCalledWith({ path: '/r18', query: { library_id: '2', search: 'TEST', type: '3', filter: 'magnets', page: '1', page_size: '24' } });
+    await w.get('#r18-search').setValue('');
+    expect(w.get('#r18-order').attributes('disabled')).toBeUndefined();
+  });
+  it('jumps to the requested page while retaining the active filters and validates page numbers', async () => {
+    route.query = { library_id: '2', page: '4', page_size: '40', type: '1', filter: 'subtitle', sort: 'score', order: 'asc', year: '2024' };
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
+    vi.spyOn(r18Api, 'videos').mockResolvedValue({ ...page, page: 4, page_size: 40, has_previous: true });
+    const w = render(R18CatalogPage); await flushPromises();
+    expect(w.get('.r18-page-number').text()).toBe('第 4 页');
+    await w.get('#r18-jump-page').setValue('12');
+    await w.get('.r18-page-jump').trigger('submit');
+    expect(router.push).toHaveBeenCalledWith({ path: '/r18', query: { library_id: '2', page: '12', page_size: '40', type: '1', filter: 'subtitle', sort: 'score', order: 'asc', year: '2024' } });
+    router.push.mockClear();
+    await w.get('#r18-jump-page').setValue('0'); await w.get('.r18-page-jump').trigger('submit');
+    expect(router.push).not.toHaveBeenCalled(); expect(w.text()).toContain('请输入 1 到 9999 的整数页码');
+    await w.findAll('button').find(button => button.text().includes('上一页'))!.trigger('click');
+    expect(router.push.mock.lastCall?.[0].query.page).toBe('3');
+  });
+  it('resets pagination for page-size, type and resource changes without a full-count claim', async () => {
+    route.query = { library_id: '2', page: '8' };
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
+    vi.spyOn(r18Api, 'videos').mockResolvedValue({ ...page, page: 8, has_previous: true });
+    const w = render(R18CatalogPage); await flushPromises();
+    expect(w.get('#r18-page-size').findAll('option').map(option => option.attributes('value'))).toEqual(['24', '40', '50']);
+    await w.get('#r18-page-size').setValue('50');
+    expect(router.push.mock.lastCall?.[0].query).toEqual(expect.objectContaining({ page: '1', page_size: '50' }));
+    await w.get('#r18-type').setValue('0');
+    expect(router.push.mock.lastCall?.[0].query).toEqual(expect.objectContaining({ page: '1', type: '0', page_size: '50' }));
+    await w.get('#r18-filter').setValue('can_play');
+    expect(router.push.mock.lastCall?.[0].query).toEqual(expect.objectContaining({ page: '1', filter: 'can_play' }));
+    expect(w.get('#r18-query-hint').text()).toContain('不代表本服务已有 115 播放源');
+    expect(w.get('.r18-list-meta').text()).not.toMatch(/总数|共\s*\d|约\s*\d/u);
+  });
+  it('rejects invalid video measurements and invalid numbered-page responses', () => {
+    for (const invalid of [undefined, 0, 'true']) expect(() => parseR18Video({ ...video, has_local: invalid })).toThrow();
+    for (const field of ['duration', 'score', 'magnets_count']) {
+      for (const invalid of [-1, NaN, Infinity, '1', undefined]) expect(() => parseR18Video({ ...video, [field]: invalid })).toThrow();
+    }
+    expect(parseR18Video({ ...video, score: 0, duration: 0, magnets_count: 0 }).score).toBe(0);
+    expect(() => parseR18Video({ ...video, magnets_count: 0.5 })).toThrow();
+    for (const invalid of [0, -1, NaN, Infinity]) {
+      expect(() => parseR18Page({ ...page, page: invalid })).toThrow();
+      expect(() => parseR18Page({ ...page, page_size: invalid })).toThrow();
+    }
+    expect(parseR18Page(page)).not.toHaveProperty('estimated_total');
+    expect(sanitizeReturnTo('/r18?library_id=2&page=12&page_size=50&type=3&filter=magnets')).toBe('/r18?library_id=2&page=12&page_size=50&type=3&filter=magnets');
+  });
+  it('只为后端确认已有可播放STRM的卡片显示本地标记', async () => {
+    vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
+    vi.spyOn(r18Api, 'videos').mockResolvedValue({ ...page, items: [{ ...video, has_local: true }, { ...video, id: 'other', has_local: false }] });
+    const w = render(R18CatalogPage); await flushPromises();
+    expect(w.findAll('.r18-card-local')).toHaveLength(1);
+    expect(w.findAll('.r18-card')[0]?.text()).toContain('本地 STRM 可播');
+    expect(w.findAll('.r18-card')[1]?.text()).not.toContain('本地 STRM 可播');
+  });
+  it('maps the UI page size to the backend limit in the actual HTTP request without mutating the URL state', async () => {
+    const request = vi.spyOn(apiClient, 'request').mockResolvedValue(page);
+    for (const size of ['24', '40', '50']) {
+      const query = new URLSearchParams({ page: '3', page_size: size, type: '1', filter: 'subtitle', sort: 'score', order: 'desc' });
+      await r18Api.videos('2', query);
+      const url = new URL(request.mock.lastCall![0], 'https://console.fixture.invalid');
+      expect(Object.fromEntries(url.searchParams)).toEqual({ page: '3', limit: size, type: '1', filter: 'subtitle', sort: 'score', order: 'desc' });
+      expect(url.searchParams.has('page_size')).toBe(false);
+      expect(query.get('page_size')).toBe(size);
+      expect(query.has('limit')).toBe(false);
+    }
+  });
+  it('allows the complete bounded image gallery only through same-origin proxy paths', () => {
+    const images = [0, 1, 2, 12, 99].map(index => video.images[0]!.replace(/0$/u, String(index)));
+    for (const image of images) expect(safeR18ImageURL(image)).toBe(image);
+    expect(parseR18Video({ ...video, images }).images).toEqual(images);
+  });
+  it('loads JavDB online magnets and the complete gallery on detail entry without opening a player', async () => {
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
-    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false });
+    const images = [0, 1, 2, 12].map(index => video.images[0]!.replace(/0$/u, String(index)));
+    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video: { ...video, images }, library_name: 'R18', playable: false, local_sources: [] });
     const magnet = 'magnet:?xt=urn:btih:0123456789012345678901234567890123456789';
-    const resources = vi.spyOn(r18Api, 'resources').mockResolvedValue({ items: [{ id: '7', title: 'Article resource', number: 'TEST-001', date: '', magnet, website: 'Source', detail_url: 'https://example.com/', size_bytes: 0, size_mb: 1024, tags: [] }], has_more: false, next_offset: 1 });
+    const resources = vi.spyOn(r18Api, 'resources').mockResolvedValue({ items: [{ id: '7', title: 'Article resource', number: 'TEST-001', date: '', magnet, website: 'Source', detail_url: 'https://example.com/', size_bytes: 0, size_mb: 1024, tags: [], origins: ['online' as const] }], has_more: false, next_offset: 1 });
     const write = vi.fn().mockResolvedValue(undefined); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: write } });
     const w = render(R18DetailPage); await flushPromises();
     expect(resources).toHaveBeenCalledWith('2', video.id, 0, expect.any(AbortSignal));
     expect(w.text()).toContain('Article resource'); expect(w.text()).toContain('115');
     expect(w.get('.r18-detail-cover img').attributes('src')).toBe(video.cover_url);
-    expect(w.get('.r18-gallery a').attributes('href')).toBe(video.images[0]);
-    expect(w.get('.r18-gallery img').attributes('src')).toBe(video.images[0]);
-    expect(w.get('.r18-gallery img').attributes('loading')).toBe('lazy');
+    expect(w.text()).toContain('JavDB 磁力列表');
+    expect(w.get('.r18-facts').text()).toContain('120 分钟');
+    expect(w.get('.r18-facts').text()).toContain('4.3');
+    expect(w.text()).toContain('4 张剧照');
+    expect(w.findAll('.r18-gallery a').map(a => a.attributes('href'))).toEqual(images);
+    expect(w.findAll('.r18-gallery img').map(img => img.attributes('src'))).toEqual(images);
+    expect(w.findAll('.r18-gallery img').every(img => img.attributes('loading') === 'lazy')).toBe(true);
     await w.findAll('button').find(b => b.text() === '复制磁力')!.trigger('click');
     expect(write).toHaveBeenCalledWith(magnet);
     expect(w.findAll('a[href^="magnet:"]')).toHaveLength(0);
@@ -138,7 +275,7 @@ describe('R18 library presentation', () => {
     expect(window.scrollTo).toHaveBeenCalledWith(0, 1234);
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
     route.query = { from: '/r18?library_id=2&order=desc' };
-    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false });
+    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false, local_sources: [] });
     vi.spyOn(r18Api, 'resources').mockResolvedValue({ items: [], has_more: false, next_offset: 0 });
     const w = render(R18DetailPage, {}, history); await flushPromises();
     await w.get('.r18-back').trigger('click');
@@ -148,8 +285,8 @@ describe('R18 library presentation', () => {
   it('shows distinct magnet versions near the hero, plays a ready version and submits the selected new version', async () => {
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
     const hash = 'a'.repeat(40), nextHash = 'b'.repeat(40);
-    const resource = { id: '1', title: '4K', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 0, tags: [] };
-    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false });
+    const resource = { id: '1', title: '4K', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 1024, tags: ['中文字幕', 'HD'], origins: ['online' as const] };
+    vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false, local_sources: [] });
     vi.spyOn(r18Api, 'resources').mockResolvedValue({ items: [resource, { ...resource, id: 'alias' }, { ...resource, id: '2', title: '1080p', magnet: `magnet:?xt=urn:btih:${nextHash}` }], has_more: false, next_offset: 3 });
     const source = { Id: '115-ready', InfoHash: hash, ResourceId: '1', Name: 'movie.mp4', DirectStreamUrl: '/Videos/r18-2-id/stream?MediaSourceId=115-ready&playback_token=fixture', Container: 'mp4', Default: true };
     const state = { configured: true, tasks: [], sources: [source] };
@@ -160,6 +297,7 @@ describe('R18 library presentation', () => {
     useAuthStore(pinia).user = { Policy: { IsAdministrator: true } } as never;
     await flushPromises();
     expect(w.findAll('.r18-resource')).toHaveLength(2); expect(w.findAll('#r18-play-version option')).toHaveLength(2);
+    expect(w.findAll('#r18-play-version option')[0]?.text()).toContain('中文字幕 · HD · 1.00 GiB');
     expect(w.get('#detail-play').attributes('disabled')).toBeUndefined(); expect(submit).not.toHaveBeenCalled();
     await w.get('#detail-play').trigger('click'); await flushPromises();
     expect(usePlayerStore(pinia).current?.url).toBe(source.DirectStreamUrl);
@@ -171,9 +309,9 @@ describe('R18 library presentation', () => {
     await w.findAll('button').find(b => b.text() === '停止自动播放')!.trigger('click');
     expect(w.get('#detail-play').text()).toBe('播放');
   });
-  it('keeps video detail visible when article fails and retries only the resources', async () => {
+  it('keeps video detail visible when JavDB magnets fail and retries only the resources', async () => {
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
-    const detail = vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false });
+    const detail = vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: 'R18', playable: false, local_sources: [] });
     const resources = vi.spyOn(r18Api, 'resources').mockRejectedValueOnce(new Error('Article unavailable'))
       .mockResolvedValue({ items: [], has_more: false, next_offset: 0 });
     const w = render(R18DetailPage); await flushPromises();
@@ -182,13 +320,53 @@ describe('R18 library presentation', () => {
     expect(resources).toHaveBeenCalledTimes(2); expect(detail).toHaveBeenCalledTimes(1);
     expect(w.text()).toContain('暂无匹配的磁力资源');
   });
-  it('retains the password on an empty connection edit and never receives it from GET', async () => {
-    vi.spyOn(r18Api, 'connection').mockResolvedValue({ library: lib, connection: { name: 'R18', host: 'db.example', port: 5432, database: 'catalog', username: 'reader', ssl_mode: 'prefer', revision: 1 }, hasPassword: true });
+  it('retains the API Key on an empty or whitespace-only connection edit', async () => {
+    vi.spyOn(r18Api, 'connection').mockResolvedValue({ library: lib, connection: { name: 'R18', base_url: 'https://avdb.example', revision: 1 }, hasApiKey: true });
     const save = vi.spyOn(r18Api, 'saveConnection').mockResolvedValue(lib);
     const w = render(R18LibraryForm, { libraryId: 2 }); await flushPromises();
     expect((w.get('input[type="password"]').element as HTMLInputElement).value).toBe('');
     await w.get('form').trigger('submit'); await flushPromises();
-    expect(save).toHaveBeenCalledWith(expect.not.objectContaining({ password: expect.anything() }), 2);
+    expect(save).toHaveBeenCalledWith({ name: 'R18', base_url: 'https://avdb.example', revision: 1 }, 2);
     expect(w.emitted('saved')).toHaveLength(1);
+    await w.get('#r18-api-key').setValue('   ');
+    await w.get('form').trigger('submit'); await flushPromises();
+    expect(save.mock.lastCall?.[0]).not.toHaveProperty('api_key');
+  });
+  it('starts with an empty service address and clears the API Key after creating a library', async () => {
+    const save = vi.spyOn(r18Api, 'saveConnection').mockResolvedValue(lib);
+    const w = render(R18LibraryForm); await flushPromises();
+    expect((w.get('#r18-base-url').element as HTMLInputElement).value).toBe('');
+    expect((w.get('#r18-api-key').element as HTMLInputElement).value).toBe('');
+    await w.get('#r18-base-url').setValue('https://avdb.example');
+    await w.get('#r18-api-key').setValue(' fixture-api-key ');
+    await w.get('form').trigger('submit'); await flushPromises();
+    expect(save).toHaveBeenCalledWith({ name: 'JavDB 在线资料库', base_url: 'https://avdb.example', api_key: 'fixture-api-key' }, undefined);
+    expect((w.get('#r18-api-key').element as HTMLInputElement).value).toBe('');
+    expect(w.html()).not.toContain('fixture-api-key');
+  });
+  it('explains missing API settings before submitting any connection request', async () => {
+    const save = vi.spyOn(r18Api, 'saveConnection').mockResolvedValue(lib);
+    const w = render(R18LibraryForm); await flushPromises();
+    await w.get('form').trigger('submit');
+    expect(w.text()).toContain('请填写 AVdb-Only API 服务地址');
+    await w.get('#r18-base-url').setValue('https://avdb.example');
+    await w.get('form').trigger('submit');
+    expect(w.text()).toContain('请填写 API Key');
+    expect(save).not.toHaveBeenCalled();
+  });
+  it('never exposes API Keys from configuration responses and applies upstream timeout budgets', async () => {
+    const read = vi.spyOn(apiClient, 'request').mockResolvedValue({ library: lib, connection: { base_url: 'https://avdb.example', has_api_key: true, api_key: 'unexpected-fixture-key' } });
+    const result = await r18Api.connection(2);
+    expect(result).toEqual({ library: lib, connection: { name: 'R18', base_url: 'https://avdb.example', revision: 1 }, hasApiKey: true });
+    expect(result.connection).not.toHaveProperty('api_key');
+    expect(JSON.stringify(result)).not.toContain('unexpected-fixture-key');
+    expect(read.mock.lastCall?.[1].timeoutMs).toBe(22000);
+    read.mockResolvedValueOnce({ items: [lib], total: 1 }); await r18Api.libraries();
+    read.mockResolvedValueOnce(page); await r18Api.videos('2', new URLSearchParams());
+    read.mockResolvedValueOnce({ video, library_name: 'R18', playable: false, local_sources: [] }); await r18Api.detail('2', video.id);
+    read.mockResolvedValueOnce({ items: [], has_more: false, next_offset: 0 }); await r18Api.resources('2', video.id, 0);
+    expect(read.mock.calls.every(([, options]) => options.timeoutMs === 22000)).toBe(true);
+    read.mockResolvedValueOnce(lib); await r18Api.saveConnection({ name: 'R18', base_url: 'https://avdb.example', api_key: 'fixture-api-key' });
+    expect(read.mock.lastCall?.[1]).toEqual(expect.objectContaining({ method: 'POST', timeoutMs: 25000, json: { name: 'R18', base_url: 'https://avdb.example', api_key: 'fixture-api-key' } }));
   });
 });

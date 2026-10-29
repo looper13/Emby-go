@@ -28,19 +28,14 @@ type fakeR18Catalog struct {
 	fakeR18
 	videos  []r18.Video
 	queries []r18.CatalogQuery
-	counts  int
 	err     error
 }
 
-func (f *fakeR18Catalog) CatalogCount(context.Context, r18.CatalogQuery) (int64, error) {
-	f.counts++
-	return int64(len(f.videos)), f.err
-}
-func (f *fakeR18Catalog) CatalogList(_ context.Context, q r18.CatalogQuery) ([]r18.Video, error) {
+func (f *fakeR18Catalog) CatalogPage(_ context.Context, q r18.CatalogQuery) (r18.CatalogPage, error) {
 	f.queries = append(f.queries, q)
 	from := min(q.Start, len(f.videos))
 	to := from + min(q.Limit, len(f.videos)-from)
-	return f.videos[from:to], f.err
+	return r18.CatalogPage{Items: f.videos[from:to], HasMore: to < len(f.videos)}, f.err
 }
 func (f *fakeR18Catalog) Get(_ context.Context, id string) (r18.Video, error) {
 	f.reads++
@@ -54,13 +49,14 @@ func (f *fakeR18Catalog) Get(_ context.Context, id string) (r18.Video, error) {
 
 func TestR18EmbyBrowseAndAccess(t *testing.T) {
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, err := a.db.CreateR18Library("External", r18.Config{Host: "db.invalid", Database: "catalog", Username: "reader", Password: "private-password"})
+	l, err := a.db.CreateR18Library("External", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "private-api-key"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeR18Catalog{videos: []r18.Video{}}
-	for i, service := range []string{"digital", "mono"} {
-		fake.videos = append(fake.videos, r18.Video{ID: r18.EncodeID("same001", service), ContentID: "same001", ServiceCode: service, Number: "TEST-001", Title: "Catalog " + strconv.Itoa(i), ReleaseDate: "2024-01-02", CoverURL: "https://private-source.invalid/cover.jpg?secret=upstream", Images: []string{"https://private-source.invalid/first.jpg", "https://private-source.invalid/last.jpg"}})
+	for i := 0; i < 2; i++ {
+		id := "movie00" + strconv.Itoa(i)
+		fake.videos = append(fake.videos, r18.Video{ID: r18.EncodeID(id, "javdb"), ContentID: id, ServiceCode: "javdb", Number: "TEST-001", Title: "Catalog " + strconv.Itoa(i), ReleaseDate: "2024-01-02", Duration: 120, Score: 4.5, CoverURL: "https://private-source.invalid/cover.jpg?secret=upstream", Images: []string{"https://private-source.invalid/first.jpg", "https://private-source.invalid/last.jpg"}})
 	}
 	a.r18Open = func(r18.Config) (r18Source, error) { return fake, nil }
 	get := func(path, auth string, want int) []byte {
@@ -69,7 +65,7 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 		if resp.StatusCode != want {
 			t.Fatalf("%s: %d %s", path, resp.StatusCode, raw)
 		}
-		for _, secret := range []string{"private-password", "db.invalid", "private-source.invalid", "upstream"} {
+		for _, secret := range []string{"private-api-key", "avdb.invalid", "private-source.invalid", "upstream"} {
 			if bytes.Contains(raw, []byte(secret)) {
 				t.Fatalf("source credential/URL exposed: %s", raw)
 			}
@@ -125,6 +121,9 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 		if v["PremiereDate"] != "2024-01-02T00:00:00.0000000Z" || v["ProductionYear"] != float64(2024) {
 			t.Fatal("date mapping", v)
 		}
+		if v["RunTimeTicks"] != float64(120*600000000) || v["CommunityRating"] != 4.5 {
+			t.Fatal("online duration/score metadata missing", v)
+		}
 		q := fake.queries[len(fake.queries)-1]
 		if q.Sort != "PremiereDate" || !q.Descending {
 			t.Fatal("default must be latest release first", q)
@@ -134,16 +133,22 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 	if len(noImages.Items[0]["ImageTags"].(map[string]any)) != 0 || len(noImages.Items[0]["BackdropImageTags"].([]any)) != 0 {
 		t.Fatal("EnableImages=false ignored", noImages)
 	}
-	out := list(base+"&StartIndex=1&Limit=1&SortBy=PremiereDate&SortOrder=Descending&Years=2024&SearchTerm=TEST", token)
+	out := list(base+"&StartIndex=1&Limit=1&SortBy=PremiereDate&SortOrder=Descending&Years=2024", token)
 	q := fake.queries[len(fake.queries)-1]
-	if out.StartIndex != 1 || out.Items[0]["Id"] != r18ItemID(l.ID, fake.videos[1].ID) || q.Start != 1 || q.Limit != 1 || q.Sort != "PremiereDate" || !q.Descending || q.Search != "TEST" || len(q.Years) != 1 {
+	if out.StartIndex != 1 || out.Items[0]["Id"] != r18ItemID(l.ID, fake.videos[1].ID) || q.Start != 1 || q.Limit != 1 || q.Sort != "PremiereDate" || !q.Descending || q.Search != "" || len(q.Years) != 1 {
 		t.Fatal("offset query lost parameters", out, q)
 	}
-	if fake.counts != 2 {
-		t.Fatal("count not reused across pages", fake.counts)
+	list(base+"&StartIndex=1&Limit=1&SearchTerm=TEST", token)
+	q = fake.queries[len(fake.queries)-1]
+	if q.Search != "TEST" || q.Sort != "Relevance" || len(q.Years) != 0 {
+		t.Fatal("online keyword query lost its supported sort", q)
 	}
-	if out := list(base+"&StartIndex=9223372036854775807", token); len(out.Items) != 0 || out.TotalRecordCount != 2 {
-		t.Fatal("large offset", out)
+	beforeInvalid := len(fake.queries)
+	for _, query := range []string{"&StartIndex=9223372036854775807", "&StartIndex=-1", "&StartIndex=oops", "&StartIndex=499950", "&Limit=0", "&Limit=1001", "&Limit=oops", "&SortOrder=invalid"} {
+		get(base+query, token, 400)
+	}
+	if len(fake.queries) != beforeInvalid {
+		t.Fatal("invalid offset contacted source")
 	}
 	for _, query := range []string{"&IncludeItemTypes=Series", "&MediaTypes=Audio", "&IsFavorite=true", "&Filters=IsPlayed", "&Genres=Drama", "&ExcludeItemTypes=Movie", "&isplaceholder=false", "&isfolder=true"} {
 		if out := list(base+query, token); len(out.Items) != 0 || out.TotalRecordCount != 0 {
@@ -157,7 +162,7 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 		get(path, token, 200)
 	}
 	get("/Items/r18-999-bad", token, 404)
-	get("/Items/"+r18ItemID(l.ID, r18.EncodeID("absent", "mono")), token, 404)
+	get("/Items/"+r18ItemID(l.ID, r18.EncodeID("absent", "javdb")), token, 404)
 	if out := list("/Items?Ids="+itemID+","+itemID, token); len(out.Items) != 1 {
 		t.Fatal("duplicate identity", out)
 	}
@@ -169,7 +174,7 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mixed := "/Items?Ids=" + strconv.FormatInt(localID, 10) + "," + r18ItemID(l.ID, r18.EncodeID("absent", "mono")) + "," + itemID
+	mixed := "/Items?Ids=" + strconv.FormatInt(localID, 10) + "," + r18ItemID(l.ID, r18.EncodeID("absent", "javdb")) + "," + itemID
 	if out := list(mixed+"&StartIndex=1&Limit=1", token); out.TotalRecordCount != 2 || len(out.Items) != 1 || out.Items[0]["Id"] != itemID {
 		t.Fatal("mixed IDs must omit missing items before pagination", out)
 	}
@@ -198,13 +203,13 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 	}
 	user, _ := a.db.CreateUser("catalog-reader", "password-1234")
 	_ = a.db.SaveUserToken("r18-reader-token", user.ID)
-	before := len(fake.queries) + fake.reads + fake.counts
+	before := len(fake.queries) + fake.reads
 	get("/Users/"+strconv.FormatInt(user.ID, 10)+"/Views", "r18-reader-token", 200)
 	get(base, "r18-reader-token", 404)
 	get("/Items/"+itemID, "r18-reader-token", 404)
 	get("/Items/"+itemID+"/Images/Primary", "r18-reader-token", 404)
 	get("/Items/"+itemID+"/PlaybackInfo", "r18-reader-token", 404)
-	if len(fake.queries)+fake.reads+fake.counts != before {
+	if len(fake.queries)+fake.reads != before {
 		t.Fatal("unauthorized request contacted source")
 	}
 	_ = a.db.ForUser(user.ID).SaveLibraryAccessPolicy(store.LibraryAccessPolicy{LibraryIDs: []int64{l.ID}})
@@ -215,8 +220,8 @@ func TestR18EmbyBrowseAndAccess(t *testing.T) {
 	_ = a.db.ForUser(user.ID).SaveLibraryAccessPolicy(store.LibraryAccessPolicy{})
 	get(base, "r18-reader-token", 404)
 	get("/Items/"+itemID, "r18-reader-token", 404)
-	// Connection failures must not expose the PG DSN to any client.
-	fake.err = errors.New("source error private-password")
+	// 上游连接失败不能向客户端泄露 API Key。
+	fake.err = errors.New("source error private-api-key")
 	get(base+"&SearchTerm=uncached", token, 502)
 }
 
@@ -236,15 +241,15 @@ func TestR18EmbyImagesAuthResizeAndCache(t *testing.T) {
 	hits := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		hits++
-		if req.Header.Get("X-Emby-Token") != "" || req.Header.Get("Cookie") != "" {
+		if req.Header.Get("X-Emby-Token") != "" || req.Header.Get("Cookie") != "" || req.Header.Get("X-API-Key") != "" {
 			t.Error("forwarded credentials")
 		}
 		_, _ = w.Write(source.Bytes())
 	}))
 	defer upstream.Close()
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, _ := a.db.CreateR18Library("Images", r18.Config{Host: "db.invalid", Database: "catalog", Username: "reader"})
-	v := r18.Video{ID: r18.EncodeID("image001", "mono"), Number: "IMAGE-001", CoverURL: upstream.URL + "/cover", Images: []string{upstream.URL + "/gallery", upstream.URL + "/gallery2"}}
+	l, _ := a.db.CreateR18Library("Images", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
+	v := r18.Video{ID: r18.EncodeID("image001", "javdb"), Number: "IMAGE-001", CoverURL: upstream.URL + "/cover", Images: []string{upstream.URL + "/gallery", upstream.URL + "/gallery2", upstream.URL + "/gallery3"}}
 	fake := &fakeR18Catalog{videos: []r18.Video{v}}
 	a.r18Open = func(r18.Config) (r18Source, error) { return fake, nil }
 	a.r18ImageHTTP = upstream.Client()
@@ -298,7 +303,8 @@ func TestR18EmbyImagesAuthResizeAndCache(t *testing.T) {
 	if err != nil || decoded.Bounds().Dx() != 100 || decoded.Bounds().Dy() != 75 {
 		t.Fatal("backdrop should not be cropped", err)
 	}
-	for _, kind := range []string{"Logo", "Banner", "Primary/1", "Backdrop/2", "Backdrop/-1"} {
+	call("GET", base+"Backdrop/2?maxWidth=100", token, "", 200)
+	for _, kind := range []string{"Logo", "Banner", "Primary/1", "Backdrop/3", "Backdrop/100", "Backdrop/-1"} {
 		call("GET", base+kind, token, "", 404)
 	}
 	user, _ := a.db.CreateUser("art-reader", "password-1234")
@@ -307,20 +313,153 @@ func TestR18EmbyImagesAuthResizeAndCache(t *testing.T) {
 	call("GET", base+"Primary?maxWidth=100", "r18-art-token", "", 200)
 	_ = a.db.ForUser(user.ID).SaveLibraryAccessPolicy(store.LibraryAccessPolicy{})
 	call("GET", base+"Primary?maxWidth=100", "r18-art-token", tag, 404)
-	if hits != 2 {
+	if hits != 3 {
 		t.Fatal("revoked access bypassed warm cache")
 	}
 }
 
-func TestR18LiveEmbyBrowse(t *testing.T) {
-	host := os.Getenv("EMBY_R18_TEST_HOST")
-	if host == "" {
-		t.Skip("set PostgreSQL test credentials for read-only Emby acceptance")
-	}
+func TestR18EmbyOnlinePaginationHasUnknownCount(t *testing.T) {
 	a, server, token := newProbeTestApp(t, t.TempDir())
-	l, err := a.db.CreateR18Library("Live R18", r18.Config{Host: host, Port: 5432, Database: os.Getenv("EMBY_R18_TEST_DATABASE"), Username: os.Getenv("EMBY_R18_TEST_USERNAME"), Password: os.Getenv("EMBY_R18_TEST_PASSWORD"), SSLMode: "prefer"})
+	library, err := a.db.CreateR18Library("Online JavDB", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	fake := &fakeR18Catalog{}
+	for i := 0; i < 3; i++ {
+		id := "movie" + strconv.Itoa(i)
+		fake.videos = append(fake.videos, r18.Video{ID: r18.EncodeID(id, "javdb"), ContentID: id, ServiceCode: "javdb", Number: "TEST-00" + strconv.Itoa(i), Title: "Online " + strconv.Itoa(i), Images: []string{}})
+	}
+	a.r18Open = func(r18.Config) (r18Source, error) { return fake, nil }
+	base := "/Items?ParentId=" + externalLibraryID(library.ID) + "&Limit=2"
+	for _, tc := range []struct {
+		start, items, lowerBound int
+	}{{0, 2, 3}, {2, 1, 3}, {5, 0, 0}} {
+		resp, raw := embyRaw(t, server, http.MethodGet, base+"&StartIndex="+strconv.Itoa(tc.start), token, "")
+		var result struct {
+			Items                       []map[string]any
+			TotalRecordCount            int
+			TotalRecordCountIsEstimated bool
+			TotalRecordCountIsKnown     bool
+			AppliedSortBy               string
+		}
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &result) != nil || len(result.Items) != tc.items || result.TotalRecordCount != tc.lowerBound || !result.TotalRecordCountIsEstimated || result.TotalRecordCountIsKnown || result.AppliedSortBy != "PremiereDate" {
+			t.Fatal("在线分页将下界错误地声明为精确总数", tc, resp.StatusCode, string(raw))
+		}
+	}
+	resp, raw := embyRaw(t, server, http.MethodGet, base+"&SearchTerm=Fixture", token, "")
+	var search struct{ AppliedSortBy string }
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &search) != nil || search.AppliedSortBy != "Relevance" {
+		t.Fatal("关键词搜索错误地声明为发行日期排序", resp.StatusCode, string(raw))
+	}
+	for _, tc := range []struct{ requested, applied string }{
+		{"release", "PremiereDate"}, {"ProductionYear", "PremiereDate"}, {"DateCreated", "PremiereDate"}, {"score", "CommunityRating"},
+	} {
+		resp, raw := embyRaw(t, server, http.MethodGet, base+"&SortBy="+tc.requested, token, "")
+		var out struct{ AppliedSortBy string }
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &out) != nil || out.AppliedSortBy != tc.applied {
+			t.Fatal("排序报告与实际 API 映射不一致", tc, resp.StatusCode, string(raw))
+		}
+	}
+	if len(fake.queries) != 8 {
+		t.Fatal("在线分页不应额外请求或缓存不存在的全库计数", len(fake.queries))
+	}
+}
+
+func TestR18EmbyOffsetPaginationUsesOnlyOnlineAPIPages(t *testing.T) {
+	requests := []url.Values{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/v1/javdb/movies/tags" || req.Header.Get("X-API-Key") != "fixture-key" {
+			t.Error("unexpected online catalog request")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		params := req.URL.Query()
+		requests = append(requests, params)
+		page, pageErr := strconv.Atoi(params.Get("page"))
+		limit, limitErr := strconv.Atoi(params.Get("limit"))
+		if pageErr != nil || limitErr != nil || page < 1 || limit != 50 || params.Get("sort_by") != "release" || params.Get("order_by") != "desc" || params.Get("movie_filter_by") != "magnets" {
+			t.Error("offset adapter did not use bounded API pages and online defaults")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		start := (page - 1) * limit
+		movies := []map[string]any{}
+		for i := start; i < min(start+limit, 57); i++ {
+			movies = append(movies, map[string]any{"id": "movie" + strconv.Itoa(i), "number": "TEST-" + strconv.Itoa(i), "title": "Online " + strconv.Itoa(i)})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"movies": movies, "current_page": page, "has_next": start+len(movies) < 57}})
+	}))
+	defer upstream.Close()
+	a, server, token := newProbeTestApp(t, t.TempDir())
+	library, err := a.db.CreateR18Library("Online API", r18.Config{BaseURL: upstream.URL, APIKey: "fixture-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/Items?ParentId=" + externalLibraryID(library.ID) + "&Limit=3"
+	for _, tc := range []struct {
+		start, items, lowerBound int
+	}{{49, 3, 53}, {55, 2, 57}} {
+		resp, raw := embyRaw(t, server, http.MethodGet, base+"&StartIndex="+strconv.Itoa(tc.start), token, "")
+		var out struct {
+			Items []struct {
+				ProviderIds map[string]string
+			}
+			TotalRecordCount            int
+			TotalRecordCountIsEstimated bool
+			TotalRecordCountIsKnown     bool
+		}
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(raw, &out) != nil || len(out.Items) != tc.items || out.TotalRecordCount != tc.lowerBound || !out.TotalRecordCountIsEstimated || out.TotalRecordCountIsKnown {
+			t.Fatal("online API offset result is incorrect", tc, resp.StatusCode, string(raw))
+		}
+		for i, item := range out.Items {
+			if item.ProviderIds["JavDB"] != "movie"+strconv.Itoa(tc.start+i) {
+				t.Fatal("online API offset duplicated or skipped an item", tc, i)
+			}
+		}
+	}
+	for _, query := range []string{"&SearchTerm=TEST&SortBy=PremiereDate", "&SearchTerm=TEST&Years=2024", "&NameStartsWith=T"} {
+		resp, _ := embyRaw(t, server, http.MethodGet, base+query, token, "")
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatal("unsupported online API query was not rejected", query, resp.StatusCode)
+		}
+	}
+	if len(requests) != 3 || requests[0].Get("page") != "1" || requests[1].Get("page") != "2" || requests[2].Get("page") != "2" {
+		t.Fatal("offset pagination performed unnecessary online requests", len(requests))
+	}
+}
+
+func TestR18LiveEmbyBrowse(t *testing.T) {
+	baseURL, apiKey := os.Getenv("EMBY_AVDB_TEST_URL"), os.Getenv("EMBY_AVDB_TEST_KEY")
+	if baseURL == "" || apiKey == "" {
+		t.Skip("设置 EMBY_AVDB_TEST_URL 和 EMBY_AVDB_TEST_KEY 后执行只读 JavDB 验收")
+	}
+	a, server, token := newProbeTestApp(t, t.TempDir())
+	l, err := a.db.CreateR18Library("Live JavDB", r18.Config{BaseURL: baseURL, APIKey: apiKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 为真实上游请求设置总预算，不读取或输出服务端凭证。
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	client := &http.Client{Timeout: 12 * time.Second}
+	get := func(path string) (*http.Response, []byte) {
+		t.Helper()
+		req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+path, nil)
+		if requestErr != nil {
+			t.Fatal("创建只读验收请求失败")
+		}
+		req.Header.Set("X-Emby-Token", token)
+		resp, requestErr := client.Do(req)
+		if requestErr != nil {
+			t.Fatal("只读 JavDB 验收请求失败或超时")
+		}
+		defer resp.Body.Close()
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		if readErr != nil || bytes.Contains(raw, []byte(apiKey)) {
+			t.Fatal("只读验收响应读取失败或包含凭证")
+		}
+		return resp, raw
 	}
 	base := "/emby/Users/1/Items?ParentId=" + externalLibraryID(l.ID)
 	var items struct {
@@ -331,21 +470,33 @@ func TestR18LiveEmbyBrowse(t *testing.T) {
 			ProviderIds  map[string]string
 			PremiereDate string
 		}
-		TotalRecordCount int
+		TotalRecordCount            int
+		TotalRecordCountIsEstimated bool
+		TotalRecordCountIsKnown     bool
 	}
 	firstIDs := []string{}
-	for _, query := range []string{"&Limit=2", "&Limit=2&StartIndex=2", "&Limit=2&SortBy=DateCreated", "&Limit=2&SortBy=SortName&SortOrder=Ascending", "&Limit=2&SortBy=PremiereDate&SortOrder=Descending", "&SearchTerm=" + url.QueryEscape("DASS-385")} {
+	for _, query := range []string{"&Limit=2", "&Limit=2&StartIndex=2", "&Limit=2&SortBy=PremiereDate&SortOrder=Ascending", "&Limit=2&SearchTerm=" + url.QueryEscape("DASS-385")} {
 		start := time.Now()
-		resp, raw := embyRaw(t, server, "GET", base+query, token, "")
-		if resp.StatusCode != 200 || json.Unmarshal(raw, &items) != nil || len(items.Items) == 0 || items.TotalRecordCount == 0 {
-			t.Fatalf("live browse %s: %d %s", query, resp.StatusCode, raw)
+		resp, raw := get(base + query)
+		if resp.StatusCode != 200 || json.Unmarshal(raw, &items) != nil || len(items.Items) == 0 || !items.TotalRecordCountIsEstimated || items.TotalRecordCountIsKnown {
+			t.Fatalf("live browse %s: status=%d", query, resp.StatusCode)
 		}
 		for _, item := range items.Items {
 			if item.ProviderIds["DVD"] == "" || len(item.MediaSources) != 0 {
-				t.Fatal("invalid read-only item", item)
+				t.Fatal("真实只读影片缺少番号或出现未经配置的播放源")
+			}
+			_, videoID, valid := parseR18ItemID(item.ID)
+			if !valid {
+				t.Fatal("JavDB 影片未使用既有内部播放标识格式")
+			}
+			if _, service, decodeErr := r18.DecodeID(videoID); decodeErr != nil || service != "javdb" {
+				t.Fatal("影片标识没有使用 JavDB 来源")
 			}
 		}
 		if query == "&Limit=2" {
+			if len(items.Items) != 2 {
+				t.Fatal("真实来源没有返回足够的分页验收影片")
+			}
 			firstIDs = []string{items.Items[0].ID, items.Items[1].ID}
 			if items.Items[0].PremiereDate == "" || items.Items[0].PremiereDate < items.Items[1].PremiereDate {
 				t.Fatal("live default not release-date descending", items.Items)
@@ -353,13 +504,13 @@ func TestR18LiveEmbyBrowse(t *testing.T) {
 		}
 		t.Logf("live query %s: total=%d, items=%d, duration=%s", query, items.TotalRecordCount, len(items.Items), time.Since(start).Round(time.Millisecond))
 	}
-	resp, raw := embyRaw(t, server, "GET", "/emby/Users/1/Items/"+items.Items[0].ID, token, "")
+	resp, raw := get("/emby/Users/1/Items/" + items.Items[0].ID)
 	if resp.StatusCode != 200 || !bytes.Contains(raw, []byte(`"IsPlaceHolder":true`)) {
-		t.Fatal("live detail", resp.StatusCode, string(raw))
+		t.Fatal("live detail status", resp.StatusCode)
 	}
-	resp, raw = embyRaw(t, server, "GET", "/emby/Users/1/Items/Latest?ParentId="+externalLibraryID(l.ID)+"&Limit=2", token, "")
+	resp, raw = get("/emby/Users/1/Items/Latest?ParentId=" + externalLibraryID(l.ID) + "&Limit=2")
 	var latest []struct{ ID string }
 	if resp.StatusCode != 200 || json.Unmarshal(raw, &latest) != nil || len(latest) != 2 || latest[0].ID != firstIDs[0] || latest[1].ID != firstIDs[1] {
-		t.Fatal("live Latest disagrees with release-date default", resp.StatusCode, string(raw))
+		t.Fatal("live Latest disagrees with release-date default; status", resp.StatusCode)
 	}
 }

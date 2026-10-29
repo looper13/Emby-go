@@ -46,7 +46,7 @@ const navigation = computed(() => [
   { page: 'libraries', label: '媒体库', icon: Folder, group: '媒体浏览' },
   { page: 'favorites', label: '收藏', icon: Heart, group: '媒体浏览' },
   { page: 'items', label: '媒体墙', icon: Film, group: '媒体浏览' },
-  { page: 'r18', label: 'R18 资料库', icon: Folder, group: '媒体浏览' },
+  { page: 'r18', label: 'JavDB 在线', icon: Folder, group: '媒体浏览' },
   { page: 'actors', label: '演员', icon: Users, group: '媒体浏览' },
   { page: 'manual', label: '手动补录', icon: CirclePlus, group: '录入与工具' },
   { page: 'settings', label: '设置', icon: Settings, group: '系统与账号' },

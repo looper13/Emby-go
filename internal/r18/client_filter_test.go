@@ -3,80 +3,99 @@ package r18
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
-	"io"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
 
-type r18FilterDB struct {
-	queries []string
-	args    [][]any
-}
-
-func (d *r18FilterDB) Connect(context.Context) (driver.Conn, error) { return d, nil }
-func (d *r18FilterDB) Driver() driver.Driver                        { return d }
-func (d *r18FilterDB) Open(string) (driver.Conn, error)             { return d, nil }
-func (d *r18FilterDB) Close() error                                 { return nil }
-func (d *r18FilterDB) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("unexpected prepared statement")
-}
-func (d *r18FilterDB) Begin() (driver.Tx, error) {
-	return nil, errors.New("unexpected transaction")
-}
-func (d *r18FilterDB) QueryContext(_ context.Context, query string, values []driver.NamedValue) (driver.Rows, error) {
-	d.queries = append(d.queries, query)
-	args := []any{}
-	for _, value := range values {
-		args = append(args, value.Value)
-	}
-	d.args = append(d.args, args)
-	return r18FilterRows{}, nil
-}
-
-type r18FilterRows struct{}
-
-func (r18FilterRows) Columns() []string         { return []string{"unused"} }
-func (r18FilterRows) Close() error              { return nil }
-func (r18FilterRows) Next([]driver.Value) error { return io.EOF }
-
-func TestR18VideoFilterOnEveryRead(t *testing.T) {
-	cursor := EncodeID("item", "mono")
-	for _, tc := range []struct {
-		name  string
-		query Query
-	}{
-		{"default", Query{}},
-		{"number", Query{Search: "TEST-001"}},
-		{"content ID", Query{Search: "item"}},
-		{"title and source", Query{Search: "title", SearchMode: "title", Service: "mono"}},
-		{"ascending next", Query{Cursor: cursor, Order: "asc"}},
-		{"ascending previous", Query{Cursor: cursor, Order: "asc", Before: true}},
-		{"descending next", Query{Cursor: cursor, Order: "desc"}},
-		{"descending previous", Query{Cursor: cursor, Order: "desc", Before: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := &r18FilterDB{}
-			c := &Client{db: sql.OpenDB(d)}
-			defer c.Close()
-			if _, err := c.List(context.Background(), tc.query); err != nil {
-				t.Fatal(err)
-			}
-			if len(d.queries) != 1 || !strings.Contains(d.queries[0], " WHERE dvd_id IS NOT NULL AND TRIM(dvd_id)<>''") {
-				t.Fatal("list must filter missing DVD IDs before search and pagination", d.queries)
-			}
-		})
-	}
-	t.Run("direct detail", func(t *testing.T) {
-		d := &r18FilterDB{}
-		c := &Client{db: sql.OpenDB(d)}
-		defer c.Close()
-		if _, err := c.Get(context.Background(), cursor); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatal("filtered detail must be absent", err)
-		}
-		if len(d.queries) != 1 || !strings.Contains(d.queries[0], " WHERE dvd_id IS NOT NULL AND TRIM(dvd_id)<>'' AND content_id=$1 AND service_code=$2") {
-			t.Fatal("detail must use the same filter", d.queries)
-		}
+func TestR18APIListAndDetailValidation(t *testing.T) {
+	hits := 0
+	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
+		hits++
+		writeFixtureResponse(w, map[string]any{"movies": []apiMovie{fixtureMovie(1)}, "current_page": 1, "has_next": false})
 	})
+	for _, query := range []Query{
+		{Search: strings.Repeat("x", 121)}, {Type: "digital"}, {Filter: "unsupported"}, {Order: "random"},
+		{Page: -1}, {Page: 10000}, {Limit: -1}, {Limit: 51}, {Sort: "unsafe"},
+		{Year: "0"}, {Year: "10000"}, {Year: "not-a-year"},
+		{Search: "Fixture", Sort: "release"}, {Search: "Fixture", Year: "2024"},
+	} {
+		if ValidateQuery(query) == nil {
+			t.Fatal("参数校验接受了非法页码、范围或查询组合")
+		}
+		if _, err := client.List(context.Background(), query); err == nil {
+			t.Fatal("非法查询未被拒绝")
+		}
+	}
+	for _, id := range []string{"bad", EncodeID("movie001", "digital"), EncodeID("../movie", "javdb"), EncodeID(strings.Repeat("x", 121), "javdb")} {
+		if _, err := client.Get(context.Background(), id); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal("非法身份没有在请求前拒绝", err)
+		}
+	}
+	if hits != 0 {
+		t.Fatal("无效查询或旧数据库身份访问了上游", hits)
+	}
+	page, err := client.List(context.Background(), Query{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != EncodeID("movie001", "javdb") || page.Page != 1 || page.PageSize != 24 || page.HasMore {
+		t.Fatal("合法列表未映射为 JavDB 身份", page, err)
+	}
+}
+
+func TestR18APIListRejectsMalformedPages(t *testing.T) {
+	for _, data := range []map[string]any{
+		{"movies": nil, "current_page": 1},
+		{"movies": []apiMovie{}, "current_page": 2},
+		{"movies": "invalid", "current_page": 1},
+	} {
+		client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) { writeFixtureResponse(w, data) })
+		if _, err := client.List(context.Background(), Query{}); err == nil {
+			t.Fatal("接受了非法列表结构或错误页码")
+		}
+	}
+	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
+		invalid := fixtureMovie(2)
+		invalid.Number = " "
+		badID := fixtureMovie(3)
+		badID.ID = "../invalid"
+		writeFixtureResponse(w, map[string]any{"movies": []apiMovie{invalid, badID, fixtureMovie(1)}, "current_page": 1, "has_next": false})
+	})
+	page, err := client.List(context.Background(), Query{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].Number != "TEST-001" {
+		t.Fatal("没有过滤缺失番号或非法身份的影片", err)
+	}
+}
+
+func TestR18APIDetailFullGalleryAndIdentity(t *testing.T) {
+	images := []map[string]string{{"large_url": "javascript:bad", "thumb_url": "https://images.invalid/fallback.jpg"}, {"large_url": "https://images.invalid/fallback.jpg"}}
+	for i := 0; i < 110; i++ {
+		images = append(images, map[string]string{"large_url": fmt.Sprintf("https://images.invalid/gallery-%d.jpg", i)})
+	}
+	movie := map[string]any{"id": "movie001", "number": "TEST-001", "title": "", "origin_title": "Fixture original", "cover_url": "https://user:secret@images.invalid/cover.jpg", "thumb_url": "https://images.invalid/thumb.jpg", "preview_images": images,
+		"duration": 120, "score": 4.5, "magnets_count": 7}
+	client := fixtureClient(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/api/v1/javdb/movies/movie001" {
+			t.Error("详情请求没有使用上游影片 ID")
+		}
+		writeFixtureResponse(w, map[string]any{"movie": movie})
+	})
+	video, err := client.Get(context.Background(), EncodeID("movie001", "javdb"))
+	if err != nil || video.Title != "Fixture original" || video.CoverURL != "https://images.invalid/thumb.jpg" || len(video.Images) != MaxImages || video.Images[0] != "https://images.invalid/fallback.jpg" || video.ID != EncodeID("movie001", "javdb") {
+		t.Fatal("详情身份、标题回退、图片清洗或完整图库上限错误", err)
+	}
+	if video.Duration != 120 || video.Score != 4.5 || video.MagnetsCount != 7 {
+		t.Fatal("详情没有按分钟、原始评分和磁力数量映射展示字段")
+	}
+	movie["duration"], movie["score"], movie["magnets_count"] = -1, -1, -1
+	video, err = client.Get(context.Background(), EncodeID("movie001", "javdb"))
+	if err != nil || video.Duration != 0 || video.Score != 0 || video.MagnetsCount != 0 {
+		t.Fatal("异常负数时长、评分或磁力数量没有清洗", err)
+	}
+	for _, changed := range []map[string]any{{"id": "movie002", "number": "TEST-001"}, {"id": "movie001", "number": ""}} {
+		movie = changed
+		if _, err := client.Get(context.Background(), EncodeID("movie001", "javdb")); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal("接受错误影片身份或缺失番号", err)
+		}
+	}
 }

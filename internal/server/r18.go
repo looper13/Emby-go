@@ -22,9 +22,7 @@ type r18Source interface {
 	Get(context.Context, string) (r18.Video, error)
 	Resources(context.Context, r18.Video, int) (r18.ResourcePage, error)
 	Resource(context.Context, r18.Video, string) (r18.Resource, error)
-	Estimate(context.Context) (int64, error)
-	CatalogCount(context.Context, r18.CatalogQuery) (int64, error)
-	CatalogList(context.Context, r18.CatalogQuery) ([]r18.Video, error)
+	CatalogPage(context.Context, r18.CatalogQuery) (r18.CatalogPage, error)
 	Close() error
 }
 type r18ClientEntry struct {
@@ -38,6 +36,7 @@ func (a *App) registerR18Routes(r *gin.Engine) {
 	browse.GET("/libraries/:lib/videos", a.bind((*App).r18Videos))
 	browse.GET("/libraries/:lib/videos/:video", a.bind((*App).r18Video))
 	browse.GET("/libraries/:lib/videos/:video/resources", a.bind((*App).r18Resources))
+	browse.GET("/libraries/:lib/videos/:video/local-playback", a.bind((*App).r18LocalPlayback))
 	browse.GET("/libraries/:lib/videos/:video/images/:image", a.bind((*App).r18Image))
 	browse.HEAD("/libraries/:lib/videos/:video/images/:image", a.bind((*App).r18Image))
 	admin := r.Group("/api/admin/r18", a.requireAuth, a.requireAdministrator, noStore)
@@ -60,6 +59,9 @@ func (a *App) r18Client(l store.Library) (r18Source, error) {
 	}
 	cfg, e := a.db.R18Connection(l.ID)
 	if e != nil {
+		if errors.Is(e, sql.ErrNoRows) {
+			return nil, errors.New("尚未配置 JavDB API 连接")
+		}
 		return nil, e
 	}
 	client, e := a.newR18Client(cfg)
@@ -111,7 +113,7 @@ func (a *App) r18Failure(c *gin.Context, stage string, e error) {
 		c.JSON(404, gin.H{"error": "R18 条目不存在"})
 		return
 	}
-	// pgx connection errors may include a DSN; ordinary users never receive it.
+	// 上游错误仅用于脱敏日志，响应不附带原始正文或 API Key。
 	message := e.Error()
 	id, _ := strconv.ParseInt(c.Param("lib"), 10, 64)
 	if id == 0 {
@@ -119,11 +121,11 @@ func (a *App) r18Failure(c *gin.Context, stage string, e error) {
 			id = value.(int64)
 		}
 	}
-	if cfg, err := a.db.R18Connection(id); err == nil && cfg.Password != "" {
-		message = redactR18Error(message, cfg.Password)
+	if cfg, err := a.db.R18Connection(id); err == nil && cfg.APIKey != "" {
+		message = redactR18Error(message, cfg.APIKey)
 	}
-	slog.Warn("R18 catalog request failed", "library_id", id, "stage", stage, "error", message)
-	c.JSON(http.StatusBadGateway, gin.H{"error": "R18 " + stage + "失败：数据库不可用或查询超时，请重试；标题搜索较慢时可改用番号精确搜索。"})
+	slog.Warn("JavDB catalog request failed", "library_id", id, "stage", stage, "error", message)
+	c.JSON(http.StatusBadGateway, gin.H{"error": "JavDB " + stage + "失败：API 不可用、未配置或请求超时，请检查连接配置后重试。"})
 }
 func (a *App) r18Libraries(c *gin.Context) {
 	libs, e := a.db.UserLibraries()
@@ -140,53 +142,57 @@ func (a *App) r18Libraries(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"items": items, "total": len(items)})
 }
+func r18BrowseQuery(c *gin.Context) (r18.Query, error) {
+	search := strings.TrimSpace(c.Query("search"))
+	defaultSort := "release"
+	if search != "" {
+		defaultSort = "relevance"
+	}
+	q := r18.Query{Search: search, Type: c.DefaultQuery("type", "all"), Filter: c.DefaultQuery("filter", "magnets"),
+		Sort: c.DefaultQuery("sort", defaultSort), Order: c.DefaultQuery("order", "desc"), Year: strings.TrimSpace(c.Query("year"))}
+	var err error
+	if q.Page, err = strconv.Atoi(c.DefaultQuery("page", "1")); err != nil || q.Page < 1 || q.Page > 9999 {
+		return q, errors.New("无效的页码")
+	}
+	if q.Limit, err = strconv.Atoi(c.DefaultQuery("limit", "24")); err != nil || q.Limit < 1 || q.Limit > 50 {
+		return q, errors.New("无效的每页条数")
+	}
+	return q, r18.ValidateQuery(q)
+}
+
 func (a *App) r18Videos(c *gin.Context) {
 	l, ok := a.r18Library(c)
 	if !ok {
 		return
 	}
-	q := r18.Query{Search: c.Query("search"), SearchMode: c.Query("search_mode"), Service: c.Query("service"), Cursor: c.Query("cursor"), Order: c.Query("order"), Limit: 40}
-	q.Before = c.Query("direction") == "prev"
-	if d := c.Query("direction"); d != "" && d != "prev" && d != "next" {
-		c.JSON(400, gin.H{"error": "无效的分页方向"})
+	q, e := r18BrowseQuery(c)
+	if e != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": e.Error()})
 		return
-	}
-	if q.SearchMode != "" && q.SearchMode != "number" && q.SearchMode != "title" {
-		c.JSON(400, gin.H{"error": "无效的搜索模式"})
-		return
-	}
-	if q.Order != "" && q.Order != "asc" && q.Order != "desc" {
-		c.JSON(400, gin.H{"error": "无效的排序方向"})
-		return
-	}
-	if len([]rune(q.Search)) > 120 || len(q.Service) > 64 {
-		c.JSON(400, gin.H{"error": "搜索条件过长"})
-		return
-	}
-	if q.Cursor != "" {
-		if _, _, e := r18.DecodeID(q.Cursor); e != nil {
-			c.JSON(400, gin.H{"error": "无效的分页游标"})
-			return
-		}
 	}
 	client, e := a.r18Client(l)
 	if e != nil {
 		a.r18Failure(c, "连接", e)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	page, e := client.List(ctx, q)
 	if e != nil {
 		a.r18Failure(c, "列表查询", e)
 		return
 	}
-	estimate, _ := client.Estimate(ctx)
+	if e = a.prepareR18LocalSources(c, page.Items); e != nil {
+		a.r18Failure(c, "本地播放源查询", e)
+		return
+	}
 	for i, v := range page.Items {
+		matches, _ := a.r18LocalMatches(c, v)
+		v.HasLocal = len(matches) > 0
 		page.Items[i] = a.r18Presentation(l, v)
 	}
 	l.Path = ""
-	c.JSON(200, gin.H{"items": page.Items, "next_cursor": page.NextCursor, "previous_cursor": page.PreviousCursor, "has_more": page.HasMore, "has_previous": page.HasPrevious, "estimated_total": estimate, "library": l})
+	c.JSON(200, gin.H{"items": page.Items, "page": page.Page, "page_size": page.PageSize, "has_more": page.HasMore, "has_previous": page.HasPrevious, "library": l})
 }
 func (a *App) r18Video(c *gin.Context) {
 	l, ok := a.r18Library(c)
@@ -202,14 +208,24 @@ func (a *App) r18Video(c *gin.Context) {
 		a.r18Failure(c, "连接", e)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	v, e := client.Get(ctx, c.Param("video"))
 	if e != nil {
 		a.r18Failure(c, "详情查询", e)
 		return
 	}
-	c.JSON(200, gin.H{"video": a.r18Presentation(l, v), "library_name": l.Name, "playable": len(a.r18ReadySources(c, l, v.ID)) > 0})
+	matches, e := a.r18LocalMatches(c, v)
+	if e != nil {
+		a.r18Failure(c, "本地播放源查询", e)
+		return
+	}
+	v.HasLocal = len(matches) > 0
+	playable := v.HasLocal
+	if !playable {
+		playable = len(a.r18ReadySources(c, l, v.ID)) > 0
+	}
+	c.JSON(200, gin.H{"video": a.r18Presentation(l, v), "library_name": l.Name, "playable": playable, "local_sources": localR18Presentation(matches)})
 }
 func (a *App) r18Resources(c *gin.Context) {
 	l, ok := a.r18Library(c)
@@ -230,7 +246,7 @@ func (a *App) r18Resources(c *gin.Context) {
 		a.r18Failure(c, "连接", e)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	v, e := client.Get(ctx, c.Param("video"))
 	if e != nil {
@@ -247,48 +263,41 @@ func (a *App) r18Resources(c *gin.Context) {
 
 type r18ConnectionRequest struct {
 	Name     string  `json:"name"`
-	Host     string  `json:"host"`
-	Port     int     `json:"port"`
-	Database string  `json:"database"`
-	Username string  `json:"username"`
-	Password *string `json:"password"`
-	SSLMode  string  `json:"ssl_mode"`
+	BaseURL  string  `json:"base_url"`
+	APIKey   *string `json:"api_key"`
 	Revision int64   `json:"revision"`
 }
 
-func (r r18ConnectionRequest) config(password string) r18.Config {
-	return r18.Config{Host: r.Host, Port: r.Port, Database: r.Database, Username: r.Username, Password: password, SSLMode: r.SSLMode}
+func (r r18ConnectionRequest) config(apiKey string) r18.Config {
+	return r18.Config{BaseURL: r.BaseURL, APIKey: apiKey}
 }
 func (a *App) checkR18Connection(c *gin.Context, cfg r18.Config) bool {
 	if e := cfg.Validate(); e != nil {
-		c.JSON(400, gin.H{"error": e.Error()})
+		c.JSON(400, gin.H{"error": "请填写有效的 API 地址和 API Key"})
 		return false
 	}
 	client, e := a.newR18Client(cfg)
 	if e != nil {
-		c.JSON(400, gin.H{"error": "无效的 PostgreSQL 连接配置"})
+		c.JSON(400, gin.H{"error": "无效的 JavDB API 连接配置"})
 		return false
 	}
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
 	if e = client.Check(ctx); e != nil {
-		message := e.Error()
-		if cfg.Password != "" {
-			message = redactR18Error(message, cfg.Password)
-		}
-		c.JSON(400, gin.H{"error": "连接校验失败（需要只读访问 r18_video 和 article）：" + message})
+		slog.Warn("JavDB API connection check failed", "error", redactR18Error(e.Error(), cfg.APIKey))
+		c.JSON(400, gin.H{"error": "JavDB API 连接校验失败，请检查服务地址、API Key 和服务状态"})
 		return false
 	}
 	return true
 }
 func (a *App) createR18Library(c *gin.Context) {
 	var req r18ConnectionRequest
-	if c.ShouldBindJSON(&req) != nil || req.Password == nil || strings.TrimSpace(req.Name) == "" {
-		c.JSON(400, gin.H{"error": "请填写媒体库名称和数据库连接信息"})
+	if c.ShouldBindJSON(&req) != nil || req.APIKey == nil || strings.TrimSpace(req.Name) == "" {
+		c.JSON(400, gin.H{"error": "请填写媒体库名称、API 地址和 API Key"})
 		return
 	}
-	cfg := req.config(*req.Password)
+	cfg := req.config(strings.TrimSpace(*req.APIKey))
 	if !a.checkR18Connection(c, cfg) {
 		return
 	}
@@ -307,7 +316,7 @@ func (a *App) r18LibraryConfig(c *gin.Context) {
 		return
 	}
 	cfg, e := a.db.R18Connection(id)
-	if e != nil {
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		c.JSON(500, gin.H{"error": "读取连接配置失败"})
 		return
 	}
@@ -321,20 +330,24 @@ func (a *App) updateR18Library(c *gin.Context) {
 		return
 	}
 	var req r18ConnectionRequest
-	if c.ShouldBindJSON(&req) != nil || req.Revision <= 0 {
+	if c.ShouldBindJSON(&req) != nil || req.Revision <= 0 || strings.TrimSpace(req.Name) == "" {
 		c.JSON(400, gin.H{"error": "无效的连接配置"})
 		return
 	}
+	if req.Revision != l.Revision {
+		c.JSON(409, gin.H{"error": "媒体库已被修改，请刷新后重试"})
+		return
+	}
 	old, e := a.db.R18Connection(id)
-	if e != nil {
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		c.JSON(500, gin.H{"error": "读取连接配置失败"})
 		return
 	}
-	password := old.Password
-	if req.Password != nil {
-		password = *req.Password
+	apiKey := old.APIKey
+	if req.APIKey != nil && strings.TrimSpace(*req.APIKey) != "" {
+		apiKey = strings.TrimSpace(*req.APIKey)
 	}
-	cfg := req.config(password)
+	cfg := req.config(apiKey)
 	if !a.checkR18Connection(c, cfg) {
 		return
 	}
@@ -351,14 +364,12 @@ func (a *App) updateR18Library(c *gin.Context) {
 	c.JSON(200, l)
 }
 
-func redactR18Error(message, password string) string {
-	if password == "" {
+func redactR18Error(message, apiKey string) string {
+	if apiKey == "" {
 		return message
 	}
-	for _, secret := range []string{url.QueryEscape(password), url.PathEscape(password), strings.TrimPrefix(url.UserPassword("", password).String(), ":"), password} {
+	for _, secret := range []string{url.QueryEscape(apiKey), url.PathEscape(apiKey), strings.TrimPrefix(url.UserPassword("", apiKey).String(), ":"), apiKey} {
 		message = strings.ReplaceAll(message, secret, "[redacted]")
 	}
 	return message
 }
-
-// TODO: Add playable sources separately; magnets are not HTTP media streams.
