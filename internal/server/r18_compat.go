@@ -197,7 +197,7 @@ func r18CatalogQuery(c *gin.Context) (r18.CatalogQuery, error) {
 }
 
 func r18CatalogSupported(c *gin.Context) bool {
-	if !catalogIncludesMovies(c) || strings.EqualFold(c.Query("IsFolder"), "true") || strings.EqualFold(c.Query("IsPlaceHolder"), "false") {
+	if !catalogIncludesMovies(c) || strings.EqualFold(c.Query("IsFolder"), "true") {
 		return false
 	}
 	if favorite := favoriteFilter(c); favorite != nil && *favorite {
@@ -215,6 +215,82 @@ func r18CatalogSupported(c *gin.Context) bool {
 		}
 	}
 	return true
+}
+
+const (
+	r18PlayableBatchSize  = 50
+	r18PlayableMaxBatches = 40
+)
+
+var errR18PlayableScanLimit = errors.New("JavDB 播放状态筛选超过单次扫描或请求时间上限，请缩小关键词或年份范围后重试")
+
+func r18PlaceholderFilter(c *gin.Context) (*bool, error) {
+	values, present := c.Request.URL.Query()["IsPlaceHolder"]
+	if !present {
+		return nil, nil
+	}
+	if len(values) != 1 || !strings.EqualFold(values[0], "true") && !strings.EqualFold(values[0], "false") {
+		return nil, errors.New("IsPlaceHolder 必须为 true 或 false")
+	}
+	value := strings.EqualFold(values[0], "true")
+	return &value, nil
+}
+
+func r18PlaceholderMatches(item gin.H, filter *bool) bool {
+	// 普通本地影片未必显式设置此字段，按 Emby 默认值 false 处理。
+	return filter == nil || (item["IsPlaceHolder"] == true) == *filter
+}
+
+func (a *App) r18FilteredCatalog(c *gin.Context, ctx context.Context, client r18Source, l store.Library, q r18.CatalogQuery, placeholder *bool) ([]gin.H, int, error) {
+	items := make([]gin.H, 0, min(q.Limit, r18PlayableBatchSize))
+	total := 0
+	seen := map[string]bool{}
+	// 偏移属于过滤后的全局顺序；从上游起点扫描，找到额外匹配项才声明下一页。
+	for batch := 0; batch < r18PlayableMaxBatches; batch++ {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
+		query := q
+		query.Start, query.Limit = batch*r18PlayableBatchSize, r18PlayableBatchSize
+		page, err := client.CatalogPage(ctx, query)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(page.Items) > r18PlayableBatchSize || page.HasMore && len(page.Items) != r18PlayableBatchSize {
+			return nil, 0, errors.New("JavDB 上游分页无效，无法保证播放筛选的偏移一致性")
+		}
+		for _, video := range page.Items {
+			if _, _, err := r18.DecodeID(video.ID); err != nil || seen[video.ID] {
+				return nil, 0, errors.New("JavDB 上游条目无效或重复，无法保证播放筛选的偏移一致性")
+			}
+			seen[video.ID] = true
+		}
+		if err := a.prepareR18LocalSources(c, page.Items); err != nil {
+			return nil, 0, err
+		}
+		for _, video := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return nil, 0, err
+			}
+			item := a.r18ItemDTO(c, l, video)
+			if !r18PlaceholderMatches(item, placeholder) {
+				continue
+			}
+			total++
+			if total <= q.Start {
+				continue
+			}
+			if len(items) == q.Limit {
+				return items, total, nil
+			}
+			items = append(items, item)
+		}
+		if !page.HasMore {
+			return items, total, nil
+		}
+	}
+	// 无法确认真实末尾时明确失败，不把不足一页或空页冒充过滤后的结尾。
+	return nil, 0, errR18PlayableScanLimit
 }
 
 func r18AppliedSort(q r18.CatalogQuery) string {
@@ -235,6 +311,11 @@ func (a *App) r18CatalogResponse(c *gin.Context, l store.Library, latest bool) {
 	q, err := r18CatalogQuery(c)
 	if err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	placeholder, err := r18PlaceholderFilter(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	if !r18CatalogSupported(c) {
@@ -259,6 +340,28 @@ func (a *App) r18CatalogResponse(c *gin.Context, l store.Library, latest bool) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
+	if placeholder != nil {
+		// 本地批量匹配的五秒子预算也必须受同一个二十秒请求预算约束。
+		c.Request = c.Request.WithContext(ctx)
+		items, total, err := a.r18FilteredCatalog(c, ctx, client, l, q, placeholder)
+		if err != nil {
+			if errors.Is(err, r18.ErrUnsupportedCatalogQuery) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			} else if errors.Is(err, errR18PlayableScanLimit) || errors.Is(err, context.DeadlineExceeded) {
+				c.JSON(http.StatusBadGateway, gin.H{"error": errR18PlayableScanLimit.Error()})
+			} else {
+				a.r18Failure(c, "播放状态筛选", err)
+			}
+			return
+		}
+		if latest {
+			c.JSON(http.StatusOK, items)
+		} else {
+			c.JSON(http.StatusOK, gin.H{"Items": items, "TotalRecordCount": total, "StartIndex": q.Start,
+				"TotalRecordCountIsEstimated": true, "TotalRecordCountIsKnown": false, "AppliedSortBy": r18AppliedSort(q)})
+		}
+		return
+	}
 	page, err := client.CatalogPage(ctx, q)
 	if err != nil {
 		if errors.Is(err, r18.ErrUnsupportedCatalogQuery) {
@@ -343,11 +446,23 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 		c.JSON(400, gin.H{"error": "too many item IDs"})
 		return true
 	}
+	placeholder, err := r18PlaceholderFilter(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return true
+	}
 	items := []gin.H{}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
+	if placeholder != nil {
+		c.Request = c.Request.WithContext(ctx)
+	}
 	seen := map[string]bool{}
 	for _, raw := range ids {
+		if placeholder != nil && ctx.Err() != nil {
+			a.r18Failure(c, "播放状态筛选", ctx.Err())
+			return true
+		}
 		if seen[raw] {
 			continue
 		}
@@ -357,7 +472,7 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 				d, _ := a.db.Data(m.ID)
 				item := a.embyItem(m, d)
 				a.applyItemFields(item, m, requestedFields(c), c)
-				if favoriteCandidateMatches(c, item) {
+				if r18PlaceholderMatches(item, placeholder) && favoriteCandidateMatches(c, item) {
 					items = append(items, item)
 				}
 			}
@@ -391,7 +506,7 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 		}
 		a.cacheR18Video(l, v, true)
 		item := a.r18ItemDTO(c, l, v)
-		if favoriteCandidateMatches(c, item) {
+		if r18PlaceholderMatches(item, placeholder) && favoriteCandidateMatches(c, item) {
 			items = append(items, item)
 		}
 	}

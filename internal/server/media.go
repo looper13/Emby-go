@@ -1163,6 +1163,9 @@ func randomSessionID() string {
 
 func (a *App) stream(c *gin.Context) {
 	if strings.HasPrefix(c.Param("id"), "r18-") {
+		if a.r18LocalStream(c) {
+			return
+		}
 		a.r18Stream(c)
 		return
 	}

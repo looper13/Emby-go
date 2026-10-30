@@ -112,15 +112,17 @@ AVdb 的 `library_magnets` 是本地磁力资源库，**不等于本项目已存
 - 本次不接入 AVdb 订阅、下载、账号登录或正片 `/play` 接口。JavDB 会话由 AVdb 服务端管理；浏览器无需 JavDB 密码或会话 Token。
 - 升级前备份本地 SQLite；启动时旧 `postgres_r18` 媒体库映射为 `avdb_javdb` 并增加修订，保留 ID、影片、收藏、授权、自定义索引/触发器及离线历史。旧 PostgreSQL 连接表保留但不读取；旧库必须在“连接配置”填写 AVdb 地址与 Key 后才能浏览。新 JavDB ID 与旧内容 ID 不同，旧离线绑定不会自动错配；选择同一磁力可按原任务规则复用尚有效的任务。
 
-## Emby / Yamby 只读浏览
+## Emby / Yamby 浏览与已有来源播放
 
 R18 来源现在进入 Emby 媒体库枚举；普通用户仍须授权该库。根路径与 `/emby` 前缀、大小写路由及常见查询参数复用已有兼容注册。
 
 - `GET /Users/{uid}/Views`、`/Library/MediaFolders`、`/Library/VirtualFolders` 及其 `/Query` 变体可列出 R18；媒体库仍使用原外部 ID，配置列表没有本地目录、源库连接或密码。
 - `GET /Users/{uid}/Items`、`/Items` 带该库 `ParentId` 可浏览，支持 `StartIndex`/`Limit`、关键词和无搜索时单一年份筛选。默认有磁力影片、发行日期倒序；`PremiereDate`/`ProductionYear`/`DateCreated` 映射上游发行排序，`CommunityRating` 映射评分排序。搜索默认 `Relevance`，显式请求发行日期等搜索不支持的排序返回 400；`AppliedSortBy` 标明实际应用的排序。名称范围、多个年份或全局标题/内容 ID 排序未获上游支持，明确返回 400，不以单页本地筛选冒充全局结果。`Latest` 获取最新发行列表，不表示真实入库时间。
 - API 来源不请求全库计数。`TotalRecordCount` 为当前偏移加返回条数的分页下界（有下一页时加 1），并返回 `TotalRecordCountIsEstimated=true`、`TotalRecordCountIsKnown=false`；仅用于客户端翻页，不是全库精确数量。单次最多返回 1000 条，上游每页最多 50 条；查询/超时失败返回可重试的 502。
+- 显式 `IsPlaceHolder=false` 只返回当前有本地 STRM 或已就绪 115 文件的影片，`true` 返回暂无播放源的资料条目；未传该条件时保留原上游偏移分页。筛选后的 `StartIndex`/`Limit` 针对符合条件的条目，从同一排序的上游起点有界读取，找到真实的下一条符合项才声明还有下一页，不因某个上游页没有可播放影片就伪造空尾页。单次最多读取 40 批、2000 个上游条目，共享 20 秒请求上下文；无法在预算内确定完整页面时返回 502，需使用关键词或单一年份缩小范围，不扫描全库、不缓存带用户播放状态的过滤结果。按 `Ids` 查询则先对有限授权集合筛选，再按该集合排序、分页和计数。
 - 影片 ID 为 `r18-{libraryID}-{复合条目ID}`，条目 ID 包装 `(JavDB movie_id, "javdb")`；从列表取得的 ID 可用于详情及按 ID 查询，不沿用旧 PostgreSQL 影片身份。
 - 有已授权且有效的本地 STRM 时，返回普通目录影片/分段的 `MediaSources`，`PlaybackInfo` 默认只提供本地版本，不访问 115；本地来源保留普通 `mediasource_<影片或分段ID>`，不包装成 115 来源。显式选择 `115-*` 或没有本地源时才读取现有 115 就绪绑定。
+- 本地起播可使用 `PlaybackInfo` 返回的 `DirectStreamUrl`，也可携带对应 `MediaSourceId=mediasource_<影片或分段ID>` 请求 `/Videos/{虚拟R18影片ID}/stream`，支持 GET/HEAD、根路径及 `/emby` 前缀。后者须携带有效登录凭据，入口重新核验 JavDB 库、目录库授权、影片番号归属及当前真实 STRM，再转派到普通目录流，保留版本/分段选择、代理开关、Range 和 HLS。失效或伪造来源返回 404，不改选其它版本、不提交或访问 115；115 播放票据不能授权本地来源。未指定来源或明确选择 `115-*` 时仍走原 115 流程，普通数字/分段流的原有匿名兼容不变；转派后的 HLS 会话及本地进度仍沿用目录库语义，不新增虚拟 R18 影片的进度接口。
 - 没有本地 STRM 或就绪 115 文件时保持不可播放的虚拟 Movie：`IsPlaceHolder=true`、`PlayAccess=None`、空 `MediaSources`/`MediaStreams`，`PlaybackInfo` 返回 `NoCompatibleStream`。115 文件使用本服务签名播放入口，不伪造未知编码、时长或入库时间。
 - `/Items/{id}/Images` 提供图片标签；`/Images/Primary`、`Thumb` 及 `Backdrop/{index}` 经同一服务器代理返回，支持 GET/HEAD、ETag/304 和尺寸参数。Primary 在服务器裁成 2:3，横向封套取右侧正面，未指定尺寸时最大 `320×480`；其它图不裁剪。封面原图/派生尺寸使用上述两级缓存，剧照保留轻量内存缓存；转换复用既有像素上限及 CPU 并发限制，不支持解码的格式回退源图。
 - R18 图片须携带有效访问令牌（Header、api_key 等）或登录 Cookie；原有本地媒体的匿名图片兼容不变。所有 R18 图片缓存与 304 前重新检查授权，源站不收到客户端凭据。未建模的 Logo/Banner/Art 返回 404；已存在条目的相关推荐、合集、附加分段、特殊内容及时间轴预览返回空结果。
@@ -213,3 +215,15 @@ npm --prefix frontend run test:e2e -- r18-api.spec.ts --output=$output --reporte
 ```
 
 Playwright 会在运行前清理输出目录，不得把工具链、验证二进制、既有报告或私人配置放进该目录，也不要复用已有报告目录。
+
+## 2026-10-30 原生客户端兼容修复验证
+
+新增 18 个顶层接口回归，先复现失败再修复，覆盖虚拟 R18 影片携带本地版本 ID 起播、双库授权与失效文件、非规范来源不能回退 115、GET/HEAD、Range/HLS、占位筛选的跨页偏移与真实下一匹配、有限 `Ids`、40 批边界及时间预算错误。新增回归连续三轮通过：
+
+```powershell
+go test ./internal/server -run '^(TestR18LocalVirtualStream|TestR18Playable)' -count=3 -timeout 60s
+```
+
+R18、Store、Imageutil、Offline 四个包的单测（排除真实 API 验收例）、服务器 R18/115 与普通流、Range、HLS 定向回归、Go vet、`go build ./...`、格式化与差异检查均通过。前端 42 个文件、465 项单测及类型检查通过；本轮未运行固定前端工具链校验、Vue/embedui 发布构建或浏览器验收。
+
+测试仅使用临时数据库、模拟 AVdb/115 和隔离 HTTP 资源，不代表真实 Yamby 起播或正片首帧验收。未就绪磁力仍由网页准备，转派后的 HLS 会话和进度仍使用原目录库语义；稀疏匹配超过 2000 条或 20 秒预算会明确失败，不能据此宣称支持全库可播放索引。本轮未提交、推送、重启或部署服务。
