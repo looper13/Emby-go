@@ -13,6 +13,17 @@ const route = useRoute(), router = useRouter(), scope = usePageRequest();
 const { hideImages } = useMediaVisibility();
 const { cardSize, setSize } = useCardSize();
 const tabs = [['Movie,Episode', '影片与单集'], ['Series,Season', '剧集与季'], ['Person', '演员'], ['Genre', '类型'], ['Studio', '厂商'], ['Tag', '标签'], ['BoxSet', '合集']] as const;
+const typeLabels: Record<string, string> = {
+  Movie: '电影',
+  Episode: '单集',
+  Series: '剧集',
+  Season: '季',
+  Person: '演员',
+  Genre: '类型',
+  Studio: '厂商',
+  Tag: '标签',
+  BoxSet: '合集',
+};
 const type = computed(() => tabs.find(([id]) => id === route.query.type)?.[0] ?? tabs[0][0]);
 const offset = computed(() => { const n = Number(route.query.offset ?? 0); return Number.isSafeInteger(n) && n >= 0 ? n : 0; });
 const search = ref(''), items = ref<FavoriteItem[]>([]), total = ref(0), loading = ref(false), error = ref('');
@@ -49,8 +60,14 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
     <div v-else-if="!error && items.length" class="favorites-grid">
       <article v-for="item in items" :key="item.Id" class="favorite-card">
         <RouterLink :to="favoriteDestination(item)" class="favorite-link">
-          <div class="favorite-art" :class="{ portrait: item.Type === 'Person' }"><MediaImage v-if="!hideImages && item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" :alt="item.Name" loading="lazy" /><Film v-else :size="36" aria-hidden="true" /></div>
-          <strong>{{ item.Name }}</strong>
+          <div class="favorite-art" :class="{ portrait: item.Type === 'Person' }">
+            <MediaImage v-if="!hideImages && item.ImageTags.Primary" :src="imageURL(item.Id,'Primary',320,item.ImageTags.Primary)" :alt="item.Name" loading="lazy" />
+            <Film v-else :size="36" aria-hidden="true" />
+          </div>
+          <div class="favorite-meta">
+            <strong :title="item.Name">{{ item.Name }}</strong>
+            <small class="favorite-sub">{{ typeLabels[item.Type] || item.Type }}</small>
+          </div>
         </RouterLink>
         <div class="favorite-card-actions"><FavoriteButton :item-id="item.Id" :favorite="item.UserData.IsFavorite" :label="item.Name" @changed="load" /></div>
       </article>
@@ -73,10 +90,12 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
 .favorite-search { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 360px; min-width: 120px; }
 .favorite-search input { min-width: 0; width: 100%; }
 .favorites-toolbar .hint { margin: 0 0 0 auto; color: var(--dim); font-size: 12.5px; }
-.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--wall-card-min-width, 176px), 1fr)); gap: 22px 16px; }
+.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--wall-card-min-width, 176px)), 1fr)); gap: 18px; }
 .favorite-card {
   position: relative;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1);
 }
 .favorite-card:hover {
@@ -85,13 +104,15 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
 .favorite-link {
   color: inherit;
   text-decoration: none;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 .favorite-art {
   display: grid;
   place-items: center;
-  aspect-ratio: 0.7;
-  border-radius: 8px;
+  aspect-ratio: 2 / 3;
+  border-radius: 10px;
   overflow: hidden;
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -99,7 +120,7 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .favorite-art.portrait {
-  aspect-ratio: 3/4;
+  aspect-ratio: 3 / 4;
 }
 .favorite-card:hover .favorite-art {
   border-color: var(--accent);
@@ -114,17 +135,39 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
 .favorite-card:hover .favorite-art :deep(img) {
   transform: scale(1.03);
 }
-.favorite-link strong {
-  display: block;
+.favorite-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   margin-top: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.favorite-meta strong {
+  display: block;
+  font-family: var(--font-sans);
   font-size: 13.5px;
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.35;
   color: var(--text);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+  transition: color 0.15s ease;
 }
-.favorite-card:hover strong {
+.favorite-card:hover .favorite-meta strong {
   color: var(--accent);
+}
+.favorite-sub {
+  font-family: var(--font-sans);
+  color: var(--dim);
+  font-size: 11.5px;
+  line-height: 1.35;
+  min-height: 1.35em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .favorite-card-actions {
   position: absolute;

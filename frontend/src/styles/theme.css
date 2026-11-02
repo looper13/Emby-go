@@ -719,6 +719,8 @@ h1, h2, h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-height: 1.35em;
+  line-height: 1.35;
 }
 
 /* ------------------------------------------------------------------ 筛选器 & 表单 */

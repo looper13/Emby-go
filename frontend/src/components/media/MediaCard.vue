@@ -191,6 +191,8 @@ function key(event: KeyboardEvent, id: number) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-height: 1.35em;
+  line-height: 1.35;
 }
 
 .meta-orig {

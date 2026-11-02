@@ -215,7 +215,8 @@ onMounted(() => { void load(); });
 }
 
 .media-shelf > * {
-  flex: 0 0 clamp(140px, 15vw, 175px);
+  flex: 0 0 var(--wall-card-min-width, 176px);
+  width: var(--wall-card-min-width, 176px);
   scroll-snap-align: start;
 }
 </style>
