@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia, setActivePinia } from 'pinia';
+import { defineComponent, h } from 'vue';
 import { cloud115Api, parseOfflineState, type OfflineState } from '../src/api/cloud115';
+import { useR18Playback } from '../src/composables/useR18Playback';
 import R18OfflinePanel from '../src/components/media/R18OfflinePanel.vue';
 import Cloud115Settings from '../src/components/settings/Cloud115Settings.vue';
 import { useAuthStore } from '../src/stores/auth';
@@ -14,7 +16,13 @@ beforeEach(() => { pinia = createPinia(); setActivePinia(pinia); vi.spyOn(cloud1
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); vi.restoreAllMocks(); vi.useRealTimers(); });
 function panel(admin = true) {
   useAuthStore().user = { Policy: { IsAdministrator: admin } } as never;
-  wrapper = mount(R18OfflinePanel, { props: { library: '2', video: 'id', title: 'Movie' }, global: { plugins: [pinia], stubs: { RouterLink: true } } }); return wrapper;
+  wrapper = mount(defineComponent({
+    setup() {
+      const props = { library: '2', video: 'id', title: 'Movie' };
+      const playback = useR18Playback(() => props, undefined, undefined, () => ({ id: '115', name: '115', api: cloud115Api }));
+      return () => h(R18OfflinePanel, { ...props, playback });
+    },
+  }), { global: { plugins: [pinia], stubs: { RouterLink: true } } }); return wrapper;
 }
 describe('115 workflow', () => {
   it('submits only on user action, binds a candidate, and opens the stable playback URL', async () => {

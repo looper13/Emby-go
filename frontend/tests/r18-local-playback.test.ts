@@ -61,32 +61,35 @@ describe('JavDB 本地 STRM 优先播放', () => {
     expect(w.get('[role="alert"]').text()).toContain('STRM 已移动或没有访问权限'); expect(w.text()).toContain('不会自动转入磁力下载');
     expect(usePlayerStore(pinia).current).toBeNull(); expectNo115();
   });
-  it('只在用户手动选择磁力流程后启用115，返回本地时停止轮询', async () => {
+  it('只在用户手动选择磁力流程后启用光鸭，返回本地时停止轮询', async () => {
     vi.useFakeTimers(); const w = render(); await flushPromises(); expectNo115();
     await w.get('#r18-use-magnets').trigger('click'); await flushPromises();
-    expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(w.find('.offline-panel').exists()).toBe(true);
+    expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(cloud115Api.state).not.toHaveBeenCalled(); expect(w.find('.offline-panel').exists()).toBe(true);
     await w.get('#r18-use-local').trigger('click'); await flushPromises();
     expect(w.get('#detail-play').text()).toBe('播放本地 STRM'); expect(w.find('.offline-panel').exists()).toBe(false);
-    await vi.advanceTimersByTimeAsync(15000); expect(cloud115Api.state).toHaveBeenCalledTimes(1);
-    expect(cloud115Api.submit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(15000); expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(cloud115Api.state).not.toHaveBeenCalled();
+    expect(cloud115Api.submit).not.toHaveBeenCalled(); expect(guangyaApi.submit).not.toHaveBeenCalled();
   });
-  it('本地播放优先，手动进入后可选择光鸭，返回本地停止两个网盘请求', async () => {
+  it('本地播放优先，磁力流程默认光鸭并可手动选择115，返回本地停止两个网盘请求', async () => {
     vi.useFakeTimers(); const w = render(); await flushPromises(); expectNo115(); expect(w.find('#r18-cloud-provider').exists()).toBe(false);
     await w.get('#r18-use-magnets').trigger('click'); await flushPromises();
-    expect(w.get('#r18-cloud-provider').element).toHaveProperty('value', '115');
-    await w.get('#r18-cloud-provider').setValue('guangya'); await flushPromises();
+    expect(w.get('#r18-cloud-provider').element).toHaveProperty('value', 'guangya');
     expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(w.get('.offline-panel h2').text()).toBe('光鸭 播放源');
+    expect(cloud115Api.state).not.toHaveBeenCalled();
+    await w.get('#r18-cloud-provider').setValue('115'); await flushPromises();
+    expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(w.get('.offline-panel h2').text()).toBe('115 播放源');
     expect(cloud115Api.submit).not.toHaveBeenCalled(); expect(guangyaApi.submit).not.toHaveBeenCalled();
     await w.get('#r18-use-local').trigger('click'); await flushPromises(); await vi.advanceTimersByTimeAsync(15000);
     expect(w.get('#detail-play').text()).toBe('播放本地 STRM'); expect(w.find('.offline-panel').exists()).toBe(false);
     expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(guangyaApi.state).toHaveBeenCalledTimes(1);
   });
-  it('详情尚未解析时不读取115，无本地版本解析完成后沿用115流程', async () => {
+  it('详情尚未解析时不读取网盘，无本地版本解析完成后默认使用光鸭', async () => {
     let finish!: (value: Awaited<ReturnType<typeof r18Api.detail>>) => void;
     vi.spyOn(r18Api, 'detail').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const w = render(); await flushPromises(); expectNo115();
     finish({ video: { ...video, has_local: false }, library_name: '在线库', playable: false, local_sources: [] }); await flushPromises();
-    expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(w.find('.offline-panel').exists()).toBe(true); expect(w.get('#detail-play').text()).toBe('播放');
+    expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(cloud115Api.state).not.toHaveBeenCalled();
+    expect(w.get('#r18-cloud-provider').element).toHaveProperty('value', 'guangya'); expect(w.find('.offline-panel').exists()).toBe(true); expect(w.get('#detail-play').text()).toBe('播放');
   });
   it('切换影片同步撤销本地复查，迟到结果不能打开旧版本', async () => {
     let finishPlayback!: (value: { source: R18LocalSource }) => void;
@@ -105,7 +108,8 @@ describe('JavDB 本地 STRM 优先播放', () => {
     vi.spyOn(r18Api, 'detail').mockResolvedValueOnce({ video: { ...video, has_local: false }, library_name: '在线库', playable: false, local_sources: [] });
     let finishState!: (value: OfflineState) => void;
     const state = vi.spyOn(cloud115Api, 'state').mockImplementationOnce(() => new Promise(resolve => { finishState = resolve; }));
-    const w = render(); await flushPromises(); const signal = state.mock.lastCall![2]!;
+    const w = render(); await flushPromises();
+    await w.get('#r18-cloud-provider').setValue('115'); await flushPromises(); const signal = state.mock.lastCall![2]!;
     let finishDetail!: (value: Awaited<ReturnType<typeof r18Api.detail>>) => void;
     vi.spyOn(r18Api, 'detail').mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
     nextVideo('local-next'); expect(signal.aborted).toBe(true); await flushPromises(); expect(state).toHaveBeenCalledTimes(1);

@@ -40,7 +40,7 @@ function playPreview() {
 }
 const selectedLocal = computed(() => localSources.value.find(source => source.id === selectedLocalId.value));
 const magnetEnabled = computed(() => route.name === 'r18-detail' && resolvedIdentity.value === identity.value && !!video.value && (!localSources.value.length || magnetFlow.value));
-const selectedCloud = ref<CloudProvider>('115');
+const selectedCloud = ref<CloudProvider>('guangya');
 const cloudConnection = computed(() => selectedCloud.value === 'guangya' ? { id: 'guangya' as const, name: '光鸭', api: guangyaApi } : { id: '115' as const, name: '115', api: cloud115Api });
 const playback = useR18Playback(() => ({ library: libraryId.value, video: id.value, title: video.value?.title || '播放' }), resources, () => magnetEnabled.value, () => cloudConnection.value);
 const { versions, loaded: offlineLoaded, busy: playbackBusy, state: offlineState, waiting, message: playbackMessage } = playback;
@@ -151,7 +151,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
         </div>
         <div v-else class="r18-playback">
           <button v-if="localSources.length" id="r18-use-local" class="btn btn-sm" @click="magnetFlow = false">返回本地 STRM 播放</button>
-          <label class="version-choice r18-cloud-choice" for="r18-cloud-provider"><span>播放网盘</span><select id="r18-cloud-provider" v-model="selectedCloud"><option value="115">115 网盘</option><option value="guangya">光鸭网盘</option></select></label>
+          <label class="version-choice r18-cloud-choice" for="r18-cloud-provider"><span>播放网盘</span><select id="r18-cloud-provider" v-model="selectedCloud"><option value="guangya">光鸭网盘</option><option value="115">115 网盘</option></select></label>
           <label v-if="versions.length" class="version-choice" for="r18-play-version"><span>播放版本 · {{ versions.length }} 个磁力版本</span><select id="r18-play-version" v-model="selectedVersionId" :disabled="playbackBusy"><option v-for="(version, index) in versions" :key="version.id" :value="version.id">版本 {{ index + 1 }} · {{ versionLabel(version) }} · {{ versionStatus(version) }}</option></select></label>
           <div class="r18-play-actions"><button id="detail-play" class="btn btn-accent btn-play-large" :disabled="!offlineLoaded || playbackBusy || !offlineState.configured || !canPlay(selectedVersion) || waiting === selectedVersionId" @click="selectedVersion && playback.play(selectedVersion)"><Play :size="17" fill="currentColor" aria-hidden="true" /> {{ waiting === selectedVersionId && waiting ? '准备播放中…' : '播放' }}</button><button class="btn" @click="showMagnets"><Magnet :size="16" aria-hidden="true" /> 查看磁力列表</button></div>
           <p v-if="waiting" class="hint" role="status">{{ playbackMessage }}</p>

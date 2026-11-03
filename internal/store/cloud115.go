@@ -93,12 +93,17 @@ func (s *Store) CreateOfflineTask(account, folder, magnet, hash string, l Librar
 	if _, err = tx.Exec("INSERT INTO offline_tasks VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,info_hash) DO NOTHING", t.ID, account, hash, t.Status, t.NextPoll, t.Version, string(b)); err != nil {
 		return t, err
 	}
-	var data string
-	if err = tx.QueryRow("SELECT data FROM offline_tasks WHERE account_id=? AND info_hash=?", account, hash).Scan(&data); err != nil {
+	var data, storedID string
+	var storedVersion int64
+	if err = tx.QueryRow("SELECT id,version,data FROM offline_tasks WHERE account_id=? AND info_hash=?", account, hash).Scan(&storedID, &storedVersion, &data); err != nil {
 		return t, err
 	}
 	if err = json.Unmarshal([]byte(data), &t); err != nil {
 		return t, err
+	}
+	// 写绑定前核验持久身份；未完成清理的旧任务不能迁到另一缓存根目录。
+	if t.ID != storedID || t.Version != storedVersion || t.AccountID != account || t.InfoHash != hash || t.Status != "expired" && t.FolderID != folder {
+		return t, ErrConflict
 	}
 	if t.Status == "expired" {
 		t = OfflineTask{ID: t.ID, AccountID: account, FolderID: folder, Magnet: magnet, InfoHash: hash, Status: "queued", CreatedAt: time.Now().Unix(), Version: t.Version + 1, Files: []cloud115.File{}}
@@ -225,6 +230,18 @@ func (s *Store) OfflineBindings(l Library, video, account string) ([]OfflineBind
 	return list, rows.Err()
 }
 func (s *Store) SelectOfflineFile(l Library, video, taskID, fileID string, makeDefault bool) error {
+	return s.selectOfflineFile(l, video, taskID, fileID, makeDefault, 0, false)
+}
+
+// SelectOfflineFileIfUnselected 只为当前版本的空绑定自动选文件，不覆盖人工选择。
+func (s *Store) SelectOfflineFileIfUnselected(l Library, video, taskID, fileID string, expectedVersion int64) error {
+	if expectedVersion <= 0 {
+		return ErrConflict
+	}
+	return s.selectOfflineFile(l, video, taskID, fileID, false, expectedVersion, true)
+}
+
+func (s *Store) selectOfflineFile(l Library, video, taskID, fileID string, makeDefault bool, expectedVersion int64, onlyUnselected bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -236,12 +253,16 @@ func (s *Store) SelectOfflineFile(l Library, video, taskID, fileID string, makeD
 		return err
 	}
 	var data string
-	if err = tx.QueryRow("SELECT data FROM offline_tasks WHERE id=? AND status IN ('ready','waiting_selection')", taskID).Scan(&data); err != nil {
+	var version int64
+	if err = tx.QueryRow("SELECT data,version FROM offline_tasks WHERE id=? AND status IN ('ready','waiting_selection')", taskID).Scan(&data, &version); err != nil {
 		return err
 	}
 	var t OfflineTask
 	if err = json.Unmarshal([]byte(data), &t); err != nil {
 		return err
+	}
+	if onlyUnselected && (version != expectedVersion || t.Version != expectedVersion) {
+		return ErrConflict
 	}
 	if t.CacheExpired(time.Now().Unix()) {
 		return errors.New("115 缓存已到期，不能再选择播放文件")
@@ -256,7 +277,13 @@ func (s *Store) SelectOfflineFile(l Library, video, taskID, fileID string, makeD
 	if !valid {
 		return errors.New("所选文件不属于该任务")
 	}
-	if err = affectedOne(tx.Exec("UPDATE r18_offline_bindings SET file_id=? WHERE library_id=? AND library_revision=? AND video_id=? AND task_id=?", fileID, l.ID, l.Revision, video, taskID)); err != nil {
+	query := "UPDATE r18_offline_bindings SET file_id=? WHERE library_id=? AND library_revision=? AND video_id=? AND task_id=?"
+	arguments := []any{fileID, l.ID, l.Revision, video, taskID}
+	if onlyUnselected {
+		query += " AND file_id='' AND library_id IN (SELECT id FROM libraries WHERE enabled=1 AND source_type=? AND revision=?)"
+		arguments = append(arguments, SourceR18, l.Revision)
+	}
+	if err = affectedOne(tx.Exec(query, arguments...)); err != nil {
 		return err
 	}
 	if makeDefault {

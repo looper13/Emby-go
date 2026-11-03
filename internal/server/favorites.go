@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,7 +15,11 @@ import (
 )
 
 func normalizeEmbyQuery(c *gin.Context) {
-	query := c.Request.URL.Query()
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "查询参数编码无效"})
+		return
+	}
 	for _, canonical := range []string{"UserId", "ParentId", "IncludeItemTypes", "ExcludeItemTypes", "IsFavorite", "IsHidden", "IsFolder", "IsPlaceHolder", "Filters", "SortBy", "SortOrder", "SearchTerm", "StartIndex", "Limit", "EnableImages", "Recursive", "Ids", "NameStartsWith", "NameStartsWithOrGreater", "NameLessThan", "Genres", "GenreIds", "Tags", "TagIds", "Studios", "StudioIds", "Person", "PersonIds", "Years", "OfficialRatings", "MediaTypes"} {
 		if _, exists := query[canonical]; exists {
 			continue

@@ -448,6 +448,11 @@ func (c *Client) magnetResources(ctx context.Context, v Video) ([]Resource, erro
 	return resources, nil
 }
 
+// 原生客户端需要一次列出全部版本，避免逐页重复请求同一份上游磁力列表。
+func (c *Client) AllResources(ctx context.Context, v Video) ([]Resource, error) {
+	return c.magnetResources(ctx, v)
+}
+
 func (c *Client) Resources(ctx context.Context, v Video, offset int) (ResourcePage, error) {
 	page := ResourcePage{Items: []Resource{}}
 	if offset < 0 || offset > 10000 {

@@ -3,18 +3,24 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// 只转派显式本地来源；默认来源和 115 票据继续沿用原分支。
+// 只转派显式本地来源；默认网盘版本继续由网盘播放入口处理。
 func (a *App) r18LocalStream(c *gin.Context) bool {
 	const localPrefix = "mediasource_"
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "播放查询参数编码无效"})
+		return true
+	}
 	values := []string{}
 	local := false
-	for key, sources := range c.Request.URL.Query() {
+	for key, sources := range query {
 		if !strings.EqualFold(key, "MediaSourceId") {
 			continue
 		}

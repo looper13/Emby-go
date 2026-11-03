@@ -7,7 +7,7 @@ import type { R18Resource } from '../src/api/r18';
 import { useAuthStore } from '../src/stores/auth';
 import { usePlayerStore } from '../src/stores/player';
 import { useR18Playback, type R18Playback } from '../src/composables/useR18Playback';
-import { magnetHash, mainVideo, playbackVersions } from '../src/lib/r18-playback';
+import { magnetHash, mainVideo, offlineLabels, offlineStatusLabel, playbackVersions } from '../src/lib/r18-playback';
 import * as playerRuntime from '../src/lib/player';
 
 const hash = 'a'.repeat(40), otherHash = 'b'.repeat(40);
@@ -21,7 +21,7 @@ const item = ref({ library: '2', video: 'id', title: 'Movie' });
 const enabled = ref(true);
 function start(admin = true) {
   useAuthStore().user = { Policy: { IsAdministrator: admin } } as never;
-  wrapper = mount(defineComponent({ setup() { workflow = useR18Playback(() => item.value, ref([resource]), () => enabled.value); return {}; }, template: '<div />' }), { global: { plugins: [pinia] } });
+  wrapper = mount(defineComponent({ setup() { workflow = useR18Playback(() => item.value, ref([resource]), () => enabled.value, () => ({ id: '115', name: '115', api: cloud115Api })); return {}; }, template: '<div />' }), { global: { plugins: [pinia] } });
 }
 beforeEach(() => {
   vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); enabled.value = true; item.value = { library: '2', video: 'id', title: 'Movie' };
@@ -32,6 +32,11 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('R18 one-click playback', () => {
+  it('离线状态默认显示光鸭，显式 115 保留对应名称', () => {
+    expect(offlineStatusLabel('downloading')).toBe('光鸭 离线下载中');
+    expect(offlineStatusLabel('downloading', '115')).toBe('115 离线下载中');
+    expect(offlineLabels.downloading).toBe('离线下载中');
+  });
   it('禁用时不读取或写入115，开启后读取，关闭时同步中断请求和轮询', async () => {
     enabled.value = false;
     const read = vi.spyOn(cloud115Api, 'state');
@@ -99,7 +104,7 @@ describe('R18 one-click playback', () => {
     expect(magnetHash('magnet:?xt=urn:btih:' + 'A'.repeat(32))).toBe('0'.repeat(40));
     expect(magnetHash('magnet:?dn=name&xt=urn:btih:' + hash.toUpperCase())).toBe(hash);
     expect(magnetHash('https://example.com?xt=urn:btih:' + hash)).toBe('');
-    const versions = playbackVersions([resource, { ...resource, id: 'alias', magnet: resource.magnet.toUpperCase().replace('MAGNET', 'magnet') }, { ...resource, id: '2', magnet: `magnet:?xt=urn:btih:${otherHash}` }], { ...empty, tasks: [{ ...task, resource_id: 'alias' }], sources: [source] });
+    const versions = playbackVersions([resource, { ...resource, id: 'alias', magnet: resource.magnet.toUpperCase().replace('MAGNET', 'magnet') }, { ...resource, id: '2', magnet: `magnet:?xt=urn:btih:${otherHash}` }], { ...empty, tasks: [{ ...task, resource_id: 'alias' }], sources: [source] }, '115');
     expect(versions).toHaveLength(2); expect(versions[0]?.task?.id).toBe(task.id); expect(versions[0]?.source?.Id).toBe(source.Id);
     expect(versions[1]?.source).toBeUndefined(); expect(mainVideo(files)?.id).toBe('main');
   });

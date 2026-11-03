@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cloud115Api } from '../src/api/cloud115';
+import { guangyaApi } from '../src/api/guangya';
 import { apiClient } from '../src/api/client';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia } from 'pinia';
@@ -32,7 +33,7 @@ function render(component: typeof R18CatalogPage | typeof R18DetailPage | typeof
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); stores.splice(0).forEach(disposePinia); vi.restoreAllMocks(); router.push.mockReset(); router.replace.mockReset(); applyMediaVisibility(false); useCardSize().setSize('normal'); route.name = 'r18'; route.fullPath = '/r18?library_id=2'; route.query = { library_id: '2' }; route.params = {}; });
 
 describe('R18 library presentation', () => {
-  beforeEach(() => vi.spyOn(cloud115Api, 'state').mockResolvedValue({ configured: false, tasks: [], sources: [] }));
+  beforeEach(() => { for (const api of [cloud115Api, guangyaApi]) vi.spyOn(api, 'state').mockResolvedValue({ configured: false, tasks: [], sources: [] }); });
   it('shares card-size controls and saved preference with the media wall without reloading the catalog', async () => {
     vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: [lib], total: 1 });
     const reads = vi.spyOn(r18Api, 'videos').mockResolvedValue(page);
@@ -282,7 +283,7 @@ describe('R18 library presentation', () => {
     expect(backTo).toHaveBeenCalledExactlyOnceWith('/r18?library_id=2&order=desc');
     expect(router.push).not.toHaveBeenCalled();
   });
-  it('shows distinct magnet versions near the hero, plays a ready version and submits the selected new version', async () => {
+  it('手动选择115后展示不同磁力版本，播放就绪版本并提交选中的新版本', async () => {
     route.name = 'r18-detail'; route.fullPath = '/r18/2/item/' + video.id; route.params = { libraryId: '2', id: video.id };
     const hash = 'a'.repeat(40), nextHash = 'b'.repeat(40);
     const resource = { id: '1', title: '4K', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 1024, tags: ['中文字幕', 'HD'], origins: ['online' as const] };
@@ -296,6 +297,7 @@ describe('R18 library presentation', () => {
     const w = render(R18DetailPage); const pinia = stores.at(-1)!;
     useAuthStore(pinia).user = { Policy: { IsAdministrator: true } } as never;
     await flushPromises();
+    await w.get('#r18-cloud-provider').setValue('115'); await flushPromises();
     expect(w.findAll('.r18-resource')).toHaveLength(2); expect(w.findAll('#r18-play-version option')).toHaveLength(2);
     expect(w.findAll('#r18-play-version option')[0]?.text()).toContain('中文字幕 · HD · 1.00 GiB');
     expect(w.get('#detail-play').attributes('disabled')).toBeUndefined(); expect(submit).not.toHaveBeenCalled();

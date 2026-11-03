@@ -437,7 +437,16 @@ func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video stri
 					u += "&preparation_token=" + proof.Nonce
 				}
 			}
-			source := gin.H{"Id": id, "Name": f.Name, "Type": "Default", "Protocol": "Http", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(f.Name)), "."), "Size": f.Size, "Path": u, "DirectStreamUrl": u, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "IsRemote": true, "AddApiKeyToDirectStreamUrl": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []gin.H{{"Type": "Video", "Index": 0, "IsDefault": true}}, "Default": b.Default}
+			source := gin.H{
+				"Id": id, "Name": f.Name, "Type": "Default", "ItemId": r18ItemID(l.ID, video),
+				"Protocol": "Http", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(f.Name)), "."), "Size": f.Size,
+				"Path": u, "DirectStreamUrl": u, "SupportsDirectPlay": true, "SupportsDirectStream": true,
+				"SupportsTranscoding": false, "SupportsProbing": false, "IsRemote": true, "HasMixedProtocols": false,
+				"AddApiKeyToDirectStreamUrl": false, "RequiresOpening": false, "RequiresClosing": false,
+				"RequiresLooping": false, "IsInfiniteStream": false, "ReadAtNativeFramerate": false,
+				"MediaStreams": genericVideoStream(), "DefaultAudioStreamIndex": -1, "DefaultSubtitleStreamIndex": -1,
+				"Chapters": []gin.H{}, "Formats": []string{}, "RequiredHttpHeaders": gin.H{}, "Default": b.Default,
+			}
 			source["InfoHash"], source["ResourceId"] = b.Task.InfoHash, b.ResourceID
 			source["Provider"] = provider
 			if f.Duration > 0 && f.Duration <= 922337203685 {
@@ -449,6 +458,14 @@ func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video stri
 	return list
 }
 func (a *App) r18Stream(c *gin.Context) {
+	requested, valid := r18RequestedSource(c, false)
+	if !valid {
+		return
+	}
+	// 核验、下载等待、文件查询和直链解析共享预算，播放器断连只结束当前等待。
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
 	started := time.Now()
 	defer func() {
 		slog.Debug(cloudName(requestCloudProvider(c))+" 播放阶段耗时", "stage", "stream", "elapsed_ms", time.Since(started).Milliseconds())
@@ -470,7 +487,7 @@ func (a *App) r18Stream(c *gin.Context) {
 		mac := hmac.New(sha256.New, a.subtitleSigningKey[:])
 		mac.Write(data)
 		var t cloudTicket
-		if e != nil || e2 != nil || !hmac.Equal(sig, mac.Sum(nil)) || json.Unmarshal(data, &t) != nil || t.Expiry <= time.Now().Unix() || t.Item != c.Param("id") || t.Source != c.Query("MediaSourceId") {
+		if e != nil || e2 != nil || !hmac.Equal(sig, mac.Sum(nil)) || json.Unmarshal(data, &t) != nil || t.Expiry <= time.Now().Unix() || t.Item != c.Param("id") || t.Source != requested {
 			c.Status(401)
 			return
 		}
@@ -492,43 +509,74 @@ func (a *App) r18Stream(c *gin.Context) {
 		return
 	}
 	verifyCtx, verifyCancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
-	_, err = client.Get(verifyCtx, video)
+	v, err := client.Get(verifyCtx, video)
 	verifyCancel()
 	if err != nil {
 		c.Status(404)
 		return
 	}
-	requested := c.Query("MediaSourceId")
 	if requested == "" {
-		sources := a.r18ReadySources(c, l, video)
-		if len(sources) > 0 {
-			requested, _ = sources[0]["Id"].(string)
+		sources, err := a.r18NativeSources(c, l, v, true)
+		if err != nil {
+			a.r18Failure(c, "播放版本查询", err)
+			return
+		}
+		for _, source := range sources {
+			id, _ := source["Id"].(string)
+			if _, cloud := cloudSourceProvider(id); cloud {
+				requested = id
+				break
+			}
 		}
 	}
 	provider, valid := cloudSourceProvider(requested)
-	if requested != "" && !valid {
+	if !valid {
 		c.JSON(404, gin.H{"error": "所选网盘播放源不存在"})
 		return
 	}
 	if valid {
 		c.Set("offlineProvider", provider)
 	}
-	p, fresh, ok := a.cloudPlaybackFile(c, l, video, requested, false)
+	var p cloud115.Provider
+	var fresh cloud115.File
+	if _, magnet := parseR18MagnetSourceID(requested); magnet {
+		p, fresh, ok = a.prepareR18MagnetFile(c, l, v, requested)
+	} else {
+		p, fresh, ok = a.cloudPlaybackFile(c, l, video, requested, false)
+	}
 	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
-	defer cancel()
-	raw, err := p.URL(cloud115.WithInteractive(ctx), fresh.PickCode, c.Request.UserAgent())
-	if err != nil {
+	var raw string
+	for attempt := 0; attempt < 2; attempt++ {
+		raw, err = p.URL(cloud115.WithInteractive(ctx), fresh.PickCode, c.Request.UserAgent())
+		if err == nil {
+			break
+		}
+		_, magnet := parseR18MagnetSourceID(requested)
+		if magnet && r18MagnetWaitStopped(c, ctx) {
+			return
+		}
 		var cloudErr *cloud115.Error
 		if errors.As(err, &cloudErr) && cloudErr.Missing && !cloudErr.Auth {
-			// A file can disappear after preflight; recheck before entering recovery.
-			if _, _, ok := a.cloudPlaybackFile(c, l, video, requested, false); !ok {
-				return
+			// 文件可能在核验后消失，完成所选版本恢复后只重试一次直链。
+			if magnet && attempt == 0 {
+				p, fresh, ok = a.prepareR18MagnetFile(c, l, v, requested)
+				if !ok {
+					return
+				}
+				continue
+			}
+			if !magnet {
+				if _, _, ok := a.cloudPlaybackFile(c, l, video, requested, false); !ok {
+					return
+				}
 			}
 		}
 		c.JSON(502, gin.H{"error": cloudName(requestCloudProvider(c)) + " 直链获取失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
+		return
+	}
+	if !a.validateR18MagnetPlayback(c) {
 		return
 	}
 	// 每次播放即时解析直链，并使用实际播放器的 User-Agent。

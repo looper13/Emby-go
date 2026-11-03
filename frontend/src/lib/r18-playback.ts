@@ -1,9 +1,9 @@
 import type { CloudProvider, CloudSource, OfflineFile, OfflineState, OfflineTask } from '../api/cloud115';
 import type { R18Resource } from '../api/r18';
 
-export const offlineLabels: Record<string, string> = { queued: '排队中', submitting: '提交中 / 正在确认任务', downloading: '115 离线下载中', discovering: '正在确认视频文件', waiting_selection: '请选择正片文件', ready: '已就绪', failed: '失败', timed_out: '等待超时', needs_auth: '需要重新授权', cancelled: '已取消本地等待', cleanup_pending: '缓存到期 / 正在自动删除', expired: '缓存已自动删除' };
+export const offlineLabels: Record<string, string> = { queued: '排队中', submitting: '提交中 / 正在确认任务', downloading: '离线下载中', discovering: '正在确认视频文件', waiting_selection: '请选择正片文件', ready: '已就绪', failed: '失败', timed_out: '等待超时', needs_auth: '需要重新授权', cancelled: '已取消本地等待', cleanup_pending: '缓存到期 / 正在自动删除', expired: '缓存已自动删除' };
 export const offlineActive = (t: OfflineTask) => ['queued', 'submitting', 'downloading', 'discovering'].includes(t.status);
-export function offlineStatusLabel(status: string, name = '115') { return status === 'downloading' ? `${name} 离线下载中` : offlineLabels[status] || status; }
+export function offlineStatusLabel(status: string, name = '光鸭') { return status === 'downloading' ? `${name} 离线下载中` : offlineLabels[status] || status; }
 
 export function magnetHash(magnet: string): string {
   try {
@@ -27,7 +27,7 @@ export interface R18PlaybackVersion {
   provider?: CloudProvider;
   task?: OfflineTask; source?: CloudSource;
 }
-export function playbackVersions(resources: R18Resource[], state: OfflineState, sourcePrefix: CloudProvider = '115'): R18PlaybackVersion[] {
+export function playbackVersions(resources: R18Resource[], state: OfflineState, sourcePrefix: CloudProvider = 'guangya'): R18PlaybackVersion[] {
   const versions = new Map<string, R18PlaybackVersion>();
   for (const r of resources) {
     const hash = magnetHash(r.magnet);

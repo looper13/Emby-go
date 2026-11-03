@@ -51,7 +51,11 @@ func (f *namedCloudFixture) Info(ctx context.Context, id string) (cloud115.File,
 		}
 		return cloud115.File{ID: "12", ParentID: "0", Name: cloud115.CacheFolderName, Directory: true}, nil
 	}
-	return f.cloudFixture.Info(ctx, id)
+	file, err := f.cloudFixture.Info(ctx, id)
+	if err == nil && id == f.provider+"-file" {
+		file.Name = f.provider + "-movie.mkv"
+	}
+	return file, err
 }
 
 func (f *namedCloudFixture) List(ctx context.Context, parent string, offset int) ([]cloud115.File, bool, error) {
@@ -458,16 +462,19 @@ func TestCloudGuangyaEmbySourcesTicketsRedirectExpiryAndRevocation(t *testing.T)
 	user, reader := h.reader(t, "ticket-reader")
 	item := r18ItemID(h.library.ID, h.video.ID)
 	_, combined := h.call(t, http.MethodGet, "/Items/"+item+"/PlaybackInfo", reader, nil, http.StatusOK)
-	if len(cloudResponseList(t, combined, "MediaSources")) != 2 {
-		t.Fatal("Emby 未汇总两盘就绪来源")
+	if len(cloudResponseList(t, combined, "MediaSources")) != 1 {
+		t.Fatal("同一磁力的两盘缓存被重复展示为不同版本")
 	}
-	cloudResponseSource(t, combined, "MediaSources", "115-"+legacy.ID)
-	source := cloudResponseSource(t, combined, "MediaSources", "guangya-"+guangya.ID)
+	source := cloudResponseSource(t, combined, "MediaSources", r18MagnetSourceID(guangya.InfoHash))
+	if source["Provider"] != "guangya" || source["Default"] != true {
+		t.Fatal("同一磁力未默认使用光鸭", source)
+	}
 	stream, _ := source["DirectStreamUrl"].(string)
 	_, selected := h.call(t, http.MethodPost, "/Items/"+item+"/PlaybackInfo", reader, map[string]any{"MediaSourceId": "guangya-" + guangya.ID}, http.StatusOK)
 	if len(cloudResponseList(t, selected, "MediaSources")) != 1 || cloudResponseSource(t, selected, "MediaSources", "guangya-"+guangya.ID)["Provider"] != "guangya" {
 		t.Fatal("显式光鸭来源被其它网盘替代")
 	}
+	h.call(t, http.MethodGet, "/Items/"+item+"/PlaybackInfo?MediaSourceId=115-"+legacy.ID, reader, nil, http.StatusOK)
 	h.call(t, http.MethodGet, "/Videos/"+item+"/stream?MediaSourceId=guangya-"+guangya.ID, "", nil, http.StatusUnauthorized)
 	h.ua = "Actual-Guangya-Player-UA"
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
@@ -498,7 +505,8 @@ func TestCloudGuangyaEmbySourcesTicketsRedirectExpiryAndRevocation(t *testing.T)
 	if err := h.a.db.UpdateOfflineTask(guangya, guangya.Version); err != nil {
 		t.Fatal(err)
 	}
-	h.call(t, http.MethodGet, stream, "", nil, http.StatusNotFound)
+	h.call(t, http.MethodGet, stream, "", nil, http.StatusServiceUnavailable)
+	h.call(t, http.MethodGet, "/Videos/"+item+"/stream?MediaSourceId=guangya-"+guangya.ID, reader, nil, http.StatusNotFound)
 	_, expired := h.call(t, http.MethodGet, h.base("guangya"), reader, nil, http.StatusOK)
 	if len(cloudResponseList(t, expired, "sources")) != 0 || h.guangya.urls != before {
 		t.Fatal("过期光鸭来源仍可播放")

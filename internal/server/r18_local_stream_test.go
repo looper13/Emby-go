@@ -366,6 +366,13 @@ func TestR18LocalVirtualStreamRejectsMalformedSourceBeforeDefault115(t *testing.
 			})
 		}
 	}
+	for _, invalid := range []string{"guangya-magnet-" + strings.Repeat("a", 40) + "%ZZ", "guangya-magnet-" + strings.Repeat("a", 40) + ";other=1"} {
+		endpoint := streamURL(f.item()) + "?MediaSourceId=" + source + "&MediaSourceId=" + invalid
+		resp, body := r18LocalVirtualRequest(t, f, "GET", endpoint, http.Header{"X-Emby-Token": {f.token}})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("非法第二来源被丢弃后错误播放本地：状态=%d，响应=%s", resp.StatusCode, body)
+		}
+	}
 	if f.cloudOpens.Load() != 0 {
 		t.Fatal("非规范本地来源访问了 115 提供器", f.cloudOpens.Load())
 	}

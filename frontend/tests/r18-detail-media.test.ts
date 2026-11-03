@@ -4,6 +4,7 @@ import { createPinia, disposePinia } from 'pinia';
 import { reactive } from 'vue';
 import { apiClient } from '../src/api/client';
 import { cloud115Api } from '../src/api/cloud115';
+import { guangyaApi } from '../src/api/guangya';
 import { parseR18Video, r18Api, safeR18PreviewURL, type R18Video } from '../src/api/r18';
 import ArtworkGallery from '../src/components/media/ArtworkGallery.vue';
 import ArtworkLightbox from '../src/components/media/ArtworkLightbox.vue';
@@ -31,7 +32,7 @@ function detail() {
   const pinia = createPinia(); stores.push(pinia);
   const wrapper = mount(R18DetailPage, { attachTo: attach(), global: { plugins: [pinia] } }); wrappers.push(wrapper); return { wrapper, pinia };
 }
-function expectNo115() { for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) expect(cloud115Api[method]).not.toHaveBeenCalled(); }
+function expectNo115() { for (const api of [cloud115Api, guangyaApi]) for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) expect(api[method]).not.toHaveBeenCalled(); }
 function key(name: string, shiftKey = false) { window.dispatchEvent(new KeyboardEvent('keydown', { key: name, shiftKey, cancelable: true })); }
 function unmount(wrapper: VueWrapper) { wrappers.splice(wrappers.indexOf(wrapper), 1); wrapper.unmount(); }
 
@@ -42,7 +43,7 @@ beforeEach(() => {
   vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: '隔离资料库', playable: true, local_sources: [{ id: 'strm-51', item_id: '51', name: '本地夹具.strm', library_name: '本地资料库', container: 'mp4' }] });
   vi.spyOn(r18Api, 'resources').mockResolvedValue({ items: [], next_offset: 0, has_more: false });
   vi.spyOn(r18Api, 'localPlayback').mockRejectedValue(new Error('查看剧照不应请求播放'));
-  for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) vi.spyOn(cloud115Api, method).mockResolvedValue({ configured: false, tasks: [], sources: [] });
+  for (const api of [cloud115Api, guangyaApi]) for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) vi.spyOn(api, method).mockResolvedValue({ configured: false, tasks: [], sources: [] });
 });
 afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount());

@@ -88,7 +88,7 @@ func r18ArtworkTag(l store.Library, raw, kind string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
+func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video, prepared ...[]gin.H) gin.H {
 	id := r18ItemID(l.ID, v.ID)
 	item := gin.H{
 		"Id": id, "Name": v.Title, "SortName": v.Title, "OriginalTitle": v.OriginalTitle,
@@ -100,7 +100,7 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 		"ImageTags": gin.H{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3.0,
 		"UserData":    gin.H{"Key": id, "IsFavorite": false, "Played": false, "PlayCount": 0, "PlaybackPositionTicks": 0},
 		"ProviderIds": gin.H{"JavDB": v.ContentID, "DVD": v.Number},
-		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。在线磁力请在网页详情查看，管理员可通过 115 或光鸭网盘准备播放源。",
+		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。配置光鸭后可直接选择磁力版本播放。",
 		"People":      []gin.H{}, "Genres": []string{}, "Tags": []string{}, "Studios": []gin.H{},
 	}
 	if len(v.Tags) > 0 {
@@ -128,10 +128,11 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 	}
 	// 仅缓存私有元数据，客户端接收图片标记，不接收上游地址。
 	a.r18Presentation(l, v)
-	matches, localErr := a.r18LocalMatches(c, v)
-	sources := a.r18LocalMediaSources(c, matches)
-	if len(sources) == 0 && localErr == nil {
-		sources = a.r18ReadySources(c, l, v.ID)
+	var sources []gin.H
+	if len(prepared) > 0 {
+		sources = prepared[0]
+	} else {
+		sources, _ = a.r18NativeSources(c, l, v, false)
 	}
 	if len(sources) > 0 {
 		item["IsPlaceHolder"] = false
@@ -139,10 +140,18 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 		item["MediaSources"] = sources
 		item["LocationType"] = "Remote"
 		item["MediaStreams"] = sources[0]["MediaStreams"]
-		if len(matches) > 0 {
-			item["Overview"] = v.Number + " · " + l.Name + "\n本地 STRM 已存在，直接沿用目录媒体库播放，不需要 115 下载。"
+		if sources[0]["Provider"] == "guangya" {
+			item["Overview"] = v.Number + " · " + l.Name + "\n默认使用光鸭播放；不同磁力对应不同版本，首次播放会自动准备所选版本。"
+		} else if sources[0]["SourceType"] == "strm" {
+			item["Overview"] = v.Number + " · " + l.Name + "\n本地 STRM 已存在，可直接沿用目录媒体库播放。"
 		} else {
-			item["Overview"] = v.Number + " · " + l.Name + "\n115 已就绪播放源；下载和版本选择请在网页详情中管理。"
+			item["Overview"] = v.Number + " · " + l.Name + "\n网盘播放源已就绪，可直接选择版本播放。"
+		}
+	} else if len(prepared) == 0 && v.MagnetsCount > 0 {
+		if _, err := a.db.CloudGuangyaConnection(); err == nil {
+			// 列表按上游磁力标记开放点播，真实版本由单片详情或 PlaybackInfo 加载。
+			item["IsPlaceHolder"], item["PlayAccess"], item["LocationType"] = false, "Full", "Remote"
+			item["Overview"] = v.Number + " · " + l.Name + "\n光鸭磁力版本可按需播放，首次播放会自动准备所选版本。"
 		}
 	}
 	return item
@@ -454,9 +463,7 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 	items := []gin.H{}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	if placeholder != nil {
-		c.Request = c.Request.WithContext(ctx)
-	}
+	c.Request = c.Request.WithContext(ctx)
 	seen := map[string]bool{}
 	for _, raw := range ids {
 		if placeholder != nil && ctx.Err() != nil {
@@ -506,6 +513,14 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 		}
 		a.cacheR18Video(l, v, true)
 		item := a.r18ItemDTO(c, l, v)
+		if len(ids) == 1 {
+			sources, err := a.r18NativeSources(c, l, v, true)
+			if err != nil {
+				a.r18Failure(c, "播放版本查询", err)
+				return true
+			}
+			item = a.r18ItemDTO(c, l, v, sources)
+		}
 		if r18PlaceholderMatches(item, placeholder) && favoriteCandidateMatches(c, item) {
 			items = append(items, item)
 		}
@@ -518,49 +533,36 @@ func (a *App) r18CompatItems(c *gin.Context) bool {
 }
 
 func (a *App) r18CompatItem(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
 	l, v, ok := a.r18CompatVideo(c)
 	if ok {
-		c.JSON(200, a.r18ItemDTO(c, l, v))
+		sources, err := a.r18NativeSources(c, l, v, true)
+		if err != nil {
+			a.r18Failure(c, "播放版本查询", err)
+			return
+		}
+		c.JSON(200, a.r18ItemDTO(c, l, v, sources))
 	}
 }
 
 func (a *App) r18CompatPlayback(c *gin.Context) {
+	requested, valid := r18RequestedSource(c, true)
+	if !valid {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
 	if l, v, ok := a.r18CompatVideo(c); ok {
-		matches, err := a.r18LocalMatches(c, v)
+		sources, err := a.r18NativePlaybackSources(c, l, v, requested)
 		if err != nil {
-			a.r18Failure(c, "本地播放源查询", err)
+			a.r18Failure(c, "播放版本查询", err)
 			return
 		}
-		sources := a.r18LocalMediaSources(c, matches)
-		requested := c.Query("MediaSourceId")
-		if c.Request.Method == "POST" {
-			var body struct {
-				Source string `json:"MediaSourceId"`
-			}
-			if c.Request.ContentLength > 0 && c.ShouldBindJSON(&body) != nil {
-				c.Status(400)
-				return
-			}
-			if body.Source != "" {
-				requested = body.Source
-			}
-		}
-		// 本地版本优先；显式选择网盘版本时再加入网盘的就绪来源。
-		_, cloudRequested := cloudSourceProvider(requested)
-		if len(sources) == 0 || cloudRequested {
-			sources = append(sources, a.r18ReadySources(c, l, v.ID)...)
-		}
-		if requested != "" {
-			selected := []gin.H{}
-			for _, s := range sources {
-				if s["Id"] == requested {
-					selected = append(selected, s)
-				}
-			}
-			sources = selected
-		}
 		if len(sources) == 0 {
-			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有有效的本地 STRM 或已就绪网盘播放源，请刷新并选择其它播放方式"})
+			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有所选播放版本，请确认光鸭配置、影片磁力或已有播放源"})
 			return
 		}
 		c.JSON(200, gin.H{"MediaSources": sources, "PlaySessionId": randomSessionID()})

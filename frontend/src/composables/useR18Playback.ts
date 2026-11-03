@@ -1,5 +1,6 @@
 import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
-import { cloud115Api, type CloudProvider, type CloudSource, type OfflineApi, type OfflineState, type OfflineTask } from '../api/cloud115';
+import type { CloudProvider, CloudSource, OfflineApi, OfflineState, OfflineTask } from '../api/cloud115';
+import { guangyaApi } from '../api/guangya';
 import type { R18Resource } from '../api/r18';
 import { useAuthStore } from '../stores/auth';
 import { usePlayerStore } from '../stores/player';
@@ -10,7 +11,7 @@ import { startPlaybackTiming, type PlaybackStage } from '../lib/playback-timing'
 import { usePageRequest } from './usePageRequest';
 
 export interface R18CloudConnection { id: CloudProvider; name: string; api: OfflineApi }
-const defaultConnection: R18CloudConnection = { id: '115', name: '115', api: cloud115Api };
+const defaultConnection: R18CloudConnection = { id: 'guangya', name: '光鸭', api: guangyaApi };
 export function useR18Playback(item: () => { library: string; video: string; title: string }, resources: Ref<R18Resource[]> = ref([]), enabled: () => boolean = () => true, connection: () => R18CloudConnection = () => defaultConnection) {
   const auth = useAuthStore(), player = usePlayerStore(), scope = usePageRequest();
   const state = ref<OfflineState>({ configured: false, tasks: [], sources: [] });

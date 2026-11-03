@@ -13,13 +13,15 @@ import { useAuthStore } from '../src/stores/auth';
 import { usePlayerStore } from '../src/stores/player';
 import * as playerRuntime from '../src/lib/player';
 
-const hash = 'a'.repeat(40);
+const hash = 'a'.repeat(40), otherHash = 'b'.repeat(40);
 const resource: R18Resource = { id: 'resource', title: '测试影片', number: 'TEST-001', date: '', magnet: `magnet:?xt=urn:btih:${hash}`, website: '', detail_url: '', size_bytes: 0, size_mb: 0, tags: [], origins: ['online'] };
+const otherResource: R18Resource = { ...resource, id: 'other-resource', title: '另一磁力版本', magnet: `magnet:?xt=urn:btih:${otherHash}` };
 const empty: OfflineState = { configured: true, tasks: [], sources: [] };
 const task: OfflineTask = { id: 'task', resource_id: 'resource', info_hash: hash, magnet: resource.magnet, status: 'downloading', progress: 30, stage: '', error: '', retryable: false, version: 1, files: [], file_id: '' };
 const source = { Id: 'guangya-task', InfoHash: hash, ResourceId: 'resource', Name: '正片.mp4', DirectStreamUrl: '/Videos/r18-2-video/stream?MediaSourceId=guangya-task&playback_token=fixture', Container: 'mp4', Default: false };
+const otherSource = { ...source, Id: 'guangya-other-task', InfoHash: otherHash, ResourceId: otherResource.id, Name: '另一版本.mp4', DirectStreamUrl: '/Videos/r18-2-video/stream?MediaSourceId=guangya-other-task&playback_token=fixture' };
 const ready: OfflineState = { ...empty, tasks: [{ ...task, status: 'ready', progress: 100, file_id: 'main', files: [{ id: 'main', name: source.Name, path: source.Name, size: 1024 ** 3 }] }], sources: [source] };
-const provider = ref<CloudProvider>('115'), enabled = ref(true);
+const provider = ref<CloudProvider>('guangya'), enabled = ref(true);
 let pinia: ReturnType<typeof createPinia>, wrapper: VueWrapper | undefined, workflow: R18Playback;
 function start(admin = true) {
   useAuthStore().user = { Policy: { IsAdministrator: admin } } as never;
@@ -32,7 +34,7 @@ function start(admin = true) {
   }), { global: { plugins: [pinia] } });
 }
 beforeEach(() => {
-  vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); provider.value = '115'; enabled.value = true;
+  vi.useFakeTimers(); pinia = createPinia(); setActivePinia(pinia); provider.value = 'guangya'; enabled.value = true;
   vi.spyOn(cloud115Api, 'state').mockResolvedValue(empty);
   vi.spyOn(guangyaApi, 'state').mockResolvedValue(empty);
   vi.spyOn(playerRuntime, 'loadPlayerFactory').mockResolvedValue(() => ({} as never));
@@ -73,6 +75,15 @@ describe('光鸭配置与 API 契约', () => {
     expect(playbackVersions([resource], { ...ready, sources: [{ ...source, Id: '115-task' }, source] }, 'guangya')[0]?.source?.Id).toBe(source.Id);
     expect(playbackVersions([resource], { ...ready, sources: [{ ...source, InfoHash: undefined, ResourceId: undefined }] }, 'guangya')[0]?.source?.Id).toBe(source.Id);
   });
+  it('版本工具默认光鸭，按 BTIH 合并重复磁力并独立关联各版本来源', () => {
+    const otherTask = { ...ready.tasks[0]!, id: 'other-task', resource_id: otherResource.id, info_hash: otherHash, magnet: otherResource.magnet };
+    const versions = playbackVersions([resource, { ...resource, id: 'alias' }, otherResource], {
+      ...ready, tasks: [...ready.tasks, otherTask], sources: [otherSource, { ...source, Id: '115-task' }, source],
+    });
+    expect(versions).toHaveLength(2);
+    expect(versions[0]).toMatchObject({ id: hash, provider: 'guangya', resourceId: resource.id, task: { id: task.id }, source: { Id: source.Id } });
+    expect(versions[1]).toMatchObject({ id: otherHash, provider: 'guangya', resourceId: otherResource.id, task: { id: otherTask.id }, source: { Id: otherSource.Id } });
+  });
   it('保存后的三种敏感输入均清空，已配置凭据可留空保留', async () => {
     vi.spyOn(guangyaApi, 'config').mockResolvedValue({ configured: false, account_id: '', folder_id: '', revision: 0 });
     const save = vi.spyOn(guangyaApi, 'save').mockResolvedValue(undefined);
@@ -101,12 +112,34 @@ describe('光鸭配置与 API 契约', () => {
 });
 
 describe('网盘选择与播放隔离', () => {
-  it('默认115，切换网盘只读取各自状态，不自动提交磁力', async () => {
+  it('未传网盘连接时默认光鸭，两个磁力版本分别打开对应的播放源', async () => {
+    const current = { ...empty, sources: [otherSource, source] };
+    vi.spyOn(guangyaApi, 'state').mockResolvedValue(current);
+    const prepare = vi.spyOn(guangyaApi, 'prepare').mockResolvedValue(current);
+    const submit = vi.spyOn(guangyaApi, 'submit'), prepare115 = vi.spyOn(cloud115Api, 'prepare'), submit115 = vi.spyOn(cloud115Api, 'submit');
+    useAuthStore().user = { Policy: { IsAdministrator: false } } as never;
+    wrapper = mount(defineComponent({
+      setup() { workflow = useR18Playback(() => ({ library: '2', video: 'video', title: '测试影片' }), ref([resource, otherResource]), () => enabled.value); return {}; },
+      template: '<div />',
+    }), { global: { plugins: [pinia] } });
+    await flushPromises();
+    expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(cloud115Api.state).not.toHaveBeenCalled();
+    expect(workflow.providerName.value).toBe('光鸭'); expect(workflow.versions.value.map(version => version.id)).toEqual([hash, otherHash]);
+    await workflow.play(workflow.versions.value[1]!);
+    expect(prepare).toHaveBeenLastCalledWith('2', 'video', otherSource.Id, expect.any(AbortSignal));
+    expect(usePlayerStore().current?.url).toBe(otherSource.DirectStreamUrl); usePlayerStore().close();
+    await workflow.play(workflow.versions.value[0]!);
+    expect(prepare).toHaveBeenLastCalledWith('2', 'video', source.Id, expect.any(AbortSignal));
+    expect(usePlayerStore().current?.url).toBe(source.DirectStreamUrl);
+    expect(prepare115).not.toHaveBeenCalled(); expect(submit115).not.toHaveBeenCalled(); expect(submit).not.toHaveBeenCalled();
+  });
+  it('默认光鸭，手动切换115只读取各自状态，不自动提交磁力', async () => {
     const submit115 = vi.spyOn(cloud115Api, 'submit'), submitGuangya = vi.spyOn(guangyaApi, 'submit');
-    start(); await flushPromises(); expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(guangyaApi.state).not.toHaveBeenCalled();
-    provider.value = 'guangya'; await flushPromises();
-    expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(workflow.providerName.value).toBe('光鸭');
-    expect(workflow.versions.value[0]?.provider).toBe('guangya'); expect(submit115).not.toHaveBeenCalled(); expect(submitGuangya).not.toHaveBeenCalled();
+    start(); await flushPromises(); expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(cloud115Api.state).not.toHaveBeenCalled();
+    expect(workflow.providerName.value).toBe('光鸭'); expect(workflow.versions.value[0]?.provider).toBe('guangya');
+    provider.value = '115'; await flushPromises();
+    expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(workflow.providerName.value).toBe('115');
+    expect(workflow.versions.value[0]?.provider).toBe('115'); expect(submit115).not.toHaveBeenCalled(); expect(submitGuangya).not.toHaveBeenCalled();
   });
   it('光鸭下载就绪后通过自己的文件选择接口自动播放，115不参与', async () => {
     provider.value = 'guangya';
@@ -136,6 +169,7 @@ describe('网盘选择与播放隔离', () => {
     expect(submit).not.toHaveBeenCalled(); expect(cloud115Api.state).not.toHaveBeenCalled(); expect(usePlayerStore().current).toBeNull();
   });
   it('切换时立即撤销旧请求并清空等待，迟到115结果不能覆盖光鸭或打开播放器', async () => {
+    provider.value = '115';
     const oldSource = { ...source, Id: '115-task' };
     const read115 = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [task] });
     vi.spyOn(guangyaApi, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, id: 'guangya-download' }] });
@@ -171,7 +205,7 @@ describe('网盘选择与播放隔离', () => {
     expect(workflow.error.value).toContain('管理员'); expect(submit).not.toHaveBeenCalled(); expect(select).not.toHaveBeenCalled();
   });
   it('本地模式禁用工作流时，选择光鸭也不发任何云盘请求', async () => {
-    enabled.value = false; start(); await flushPromises(); provider.value = 'guangya'; await flushPromises();
+    enabled.value = false; provider.value = '115'; start(); await flushPromises(); provider.value = 'guangya'; await flushPromises();
     await workflow.load(); await workflow.play(workflow.versions.value[0]!); await vi.advanceTimersByTimeAsync(15000);
     expect(cloud115Api.state).not.toHaveBeenCalled(); expect(guangyaApi.state).not.toHaveBeenCalled();
   });
