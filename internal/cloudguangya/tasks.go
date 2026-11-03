@@ -2,6 +2,7 @@ package cloudguangya
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,6 +20,8 @@ type offlineTask struct {
 	Status   scalar  `json:"status"`
 	Progress scalar  `json:"progress"`
 }
+
+var _ clouddrive.TaskIDProvider = (*Client)(nil)
 
 func normalizeHash(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -48,8 +51,8 @@ func (t offlineTask) hash() (string, error) {
 		}
 		hash = found
 	}
-	if hash == "" && t.Resource == "" && t.URL == "" {
-		return "", &clouddrive.Error{Message: "光鸭任务缺少可核验的资源身份，未重复提交", Retryable: true}
+	if hash == "" {
+		return "", &clouddrive.Error{Message: "光鸭任务缺少可核验的磁力身份", Retryable: true}
 	}
 	return hash, nil
 }
@@ -71,81 +74,105 @@ func taskStatus(raw scalar) (int, error) {
 	}
 }
 
-// listTaskLocked 完整分页后才能认定目标任务不存在，避免重复创建云下载。
-func (c *Client) listTaskLocked(ctx context.Context, hash string) (*offlineTask, error) {
-	var matched *offlineTask
-	seenTasks := map[string]bool{}
-	seenCursors := map[string]bool{}
-	cursor := ""
-	useCursor := false
-	count := int64(0)
-	for page := 0; page < maxPages; page++ {
-		body := map[string]any{"pageSize": pageSize, "status": []int{0, 1, 2, 3, 4, 5}}
-		if useCursor {
-			body["cursor"] = cursor
-		} else {
-			body["page"] = page
+func validTaskID(id string) bool {
+	return validID(id) && id != "0" && strings.TrimSpace(id) == id
+}
+
+func validTaskStatusCounts(raw json.RawMessage) bool {
+	var counts []map[string]json.RawMessage
+	if json.Unmarshal(raw, &counts) != nil || counts == nil {
+		return false
+	}
+	for _, fields := range counts {
+		if fields == nil {
+			return false
 		}
-		var result struct {
-			Total  *scalar       `json:"total"`
-			Cursor *scalar       `json:"cursor"`
-			List   []offlineTask `json:"list"`
-		}
-		if err := c.requestLocked(ctx, http.MethodPost, apiBase+taskAPI+"list_task", body, false, &result); err != nil {
-			return nil, err
-		}
-		if result.List == nil || len(result.List) > pageSize {
-			return nil, &clouddrive.Error{Message: "光鸭任务列表不完整，未重复提交", Retryable: true}
-		}
-		for i := range result.List {
-			task := result.List[i]
-			if !validID(string(task.ID)) || seenTasks[string(task.ID)] {
-				return nil, &clouddrive.Error{Message: "光鸭任务分页返回重复或无效身份，未重复提交", Retryable: true}
+		for key, value := range fields {
+			if key != "status" && key != "count" || string(value) == "null" {
+				return false
 			}
-			seenTasks[string(task.ID)] = true
-			found, err := task.hash()
-			if err != nil {
-				return nil, err
+			var number scalar
+			if json.Unmarshal(value, &number) != nil {
+				return false
 			}
-			if found != hash {
-				continue
+			n, err := number.integer()
+			if err != nil || key == "count" && n < 0 {
+				return false
 			}
-			if matched != nil {
-				return nil, &clouddrive.Error{Message: "光鸭存在多个相同磁力任务，无法确定独立结果目录", Retryable: true}
-			}
-			matched = &task
-		}
-		count += int64(len(result.List))
-		more := len(result.List) == pageSize
-		if result.Total != nil {
-			total, err := result.Total.integer()
-			if err != nil || total < count {
-				return nil, &clouddrive.Error{Message: "光鸭任务分页总数不正确，未重复提交", Retryable: true}
-			}
-			more = count < total
-		}
-		if result.Cursor != nil {
-			next := string(*result.Cursor)
-			if next != "" {
-				if seenCursors[next] {
-					return nil, &clouddrive.Error{Message: "光鸭任务游标分页未前进，未重复提交", Retryable: true}
-				}
-				seenCursors[next], useCursor, cursor = true, true, next
-				more = true
-			} else if result.Total == nil {
-				more = false
-			} else if more {
-				return nil, &clouddrive.Error{Message: "光鸭任务游标提前结束，未重复提交", Retryable: true}
-			}
-		}
-		if !more {
-			return matched, nil
-		}
-		if len(result.List) == 0 {
-			return nil, &clouddrive.Error{Message: "光鸭任务分页未前进，未重复提交", Retryable: true}
 		}
 	}
-	return nil, &clouddrive.Error{Message: "光鸭任务超过分页限制，无法完整对账，未重复提交", Retryable: true}
+	return true
+}
+
+// taskByIDLocked 只核验本次提交的任务；历史数量和非空游标不能触发全库扫描。
+func (c *Client) taskByIDLocked(ctx context.Context, hash, taskID string) (*offlineTask, error) {
+	var result struct {
+		Total   *scalar       `json:"total"`
+		HasMore bool          `json:"hasMore"`
+		Cursor  string        `json:"cursor"`
+		List    []offlineTask `json:"list"`
+	}
+	var payload json.RawMessage
+	if err := c.requestLocked(ctx, http.MethodPost, apiBase+taskAPI+"list_task", map[string]any{
+		"taskIds": []string{taskID}, "pageSize": pageSize, "mode": "cursor",
+	}, false, &payload); err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil || fields == nil || json.Unmarshal(payload, &result) != nil {
+		return nil, &clouddrive.Error{Message: "光鸭按任务 ID 查询返回无效结构", Retryable: true}
+	}
+	for _, key := range []string{"list", "total", "cursor", "hasMore"} {
+		if raw, ok := fields[key]; ok && string(raw) == "null" {
+			return nil, &clouddrive.Error{Message: "光鸭按任务 ID 查询返回空值字段", Retryable: true}
+		}
+	}
+	if len(result.List) > 1 || result.HasMore {
+		return nil, &clouddrive.Error{Message: "光鸭按任务 ID 查询返回不完整或未筛选的结果", Retryable: true}
+	}
+	if len(result.List) == 0 {
+		// 已核验成功的空查询会省略零值，只接受已实测的分页字段和状态计数。
+		for key := range fields {
+			switch key {
+			case "list", "total", "cursor", "hasMore", "statusCounts":
+			default:
+				return nil, &clouddrive.Error{Message: "光鸭任务空查询返回未知字段", Retryable: true}
+			}
+		}
+		// 聚合计数可省略零值并包含重复状态，只核查结构，不推导目标任务是否存在。
+		if raw, ok := fields["statusCounts"]; ok && !validTaskStatusCounts(raw) {
+			return nil, &clouddrive.Error{Message: "光鸭任务状态计数格式不正确", Retryable: true}
+		}
+		if result.Cursor != "" {
+			return nil, &clouddrive.Error{Message: "光鸭任务空查询仍返回后续游标", Retryable: true}
+		}
+		if result.Total != nil {
+			total, err := result.Total.integer()
+			if err != nil || total != 0 {
+				return nil, &clouddrive.Error{Message: "光鸭任务空查询返回非零或无效数量", Retryable: true}
+			}
+		}
+		return nil, nil
+	}
+	if result.Total == nil {
+		return nil, &clouddrive.Error{Message: "光鸭按任务 ID 查询缺少任务数量", Retryable: true}
+	}
+	total, err := result.Total.integer()
+	if err != nil || total != int64(len(result.List)) {
+		return nil, &clouddrive.Error{Message: "光鸭按任务 ID 查询返回不一致的任务数量", Retryable: true}
+	}
+	task := result.List[0]
+	if !validTaskID(string(task.ID)) || string(task.ID) != taskID {
+		return nil, &clouddrive.Error{Message: "光鸭返回的任务 ID 与本次提交不一致", Retryable: true}
+	}
+	found, err := task.hash()
+	if err != nil {
+		return nil, err
+	}
+	if found != hash {
+		return nil, &clouddrive.Error{Message: "光鸭返回的任务磁力身份与本次提交不一致", Retryable: true}
+	}
+	return &task, nil
 }
 
 func (c *Client) Find(ctx context.Context, value string) (*clouddrive.RemoteTask, error) {
@@ -161,7 +188,28 @@ func (c *Client) Find(ctx context.Context, value string) (*clouddrive.RemoteTask
 }
 
 func (c *Client) findLocked(ctx context.Context, hash string) (*clouddrive.RemoteTask, error) {
-	task, err := c.listTaskLocked(ctx, hash)
+	prior, ok := c.submissions[hash]
+	if !ok || !validTaskID(prior.taskID) {
+		return nil, &clouddrive.Error{Message: "光鸭任务缺少已保存的远程任务 ID，请核验本次提交结果后重试", Retryable: true}
+	}
+	return c.findTaskLocked(ctx, hash, prior.taskID)
+}
+
+// FindTask 可使用持久化的任务 ID 在重启后继续轮询，不搜索相同磁力的历史任务。
+func (c *Client) FindTask(ctx context.Context, value, taskID string) (*clouddrive.RemoteTask, error) {
+	hash, err := normalizeHash(value)
+	if err != nil || !validTaskID(taskID) {
+		return nil, &clouddrive.Error{Message: "光鸭任务缺少有效的磁力身份或远程任务 ID", Retryable: true}
+	}
+	if err := c.lock(ctx); err != nil {
+		return nil, err
+	}
+	defer c.unlock()
+	return c.findTaskLocked(ctx, hash, taskID)
+}
+
+func (c *Client) findTaskLocked(ctx context.Context, hash, taskID string) (*clouddrive.RemoteTask, error) {
+	task, err := c.taskByIDLocked(ctx, hash, taskID)
 	if err != nil || task == nil {
 		return nil, err
 	}
@@ -210,11 +258,17 @@ func (c *Client) findLocked(ctx context.Context, hash string) (*clouddrive.Remot
 	return remote, nil
 }
 
-func (c *Client) Add(ctx context.Context, raw, folder string) (returnErr error) {
+func (c *Client) Add(ctx context.Context, raw, folder string) error {
+	_, err := c.AddTask(ctx, raw, folder)
+	return err
+}
+
+// AddTask 直接创建新任务并返回远程身份；是否已有资源由本地任务库判断。
+func (c *Client) AddTask(ctx context.Context, raw, folder string) (taskID string, returnErr error) {
 	createSent := false
 	defer func() {
 		if returnErr != nil && !createSent {
-			// 未发送创建请求的失败可以安全回退到队列并重新解析；已发送的请求必须先对账。
+			// 未发送创建请求的失败可以安全重试；已发送但身份不明时不能自动再次创建。
 			annotated := clouddrive.SafeError(returnErr).(*clouddrive.Error)
 			annotated.NotSubmitted = true
 			returnErr = annotated
@@ -222,13 +276,13 @@ func (c *Client) Add(ctx context.Context, raw, folder string) (returnErr error) 
 	}()
 	magnet, hash, err := clouddrive.NormalizeMagnet(raw)
 	if err != nil {
-		return &clouddrive.Error{Message: err.Error()}
+		return "", &clouddrive.Error{Message: err.Error()}
 	}
 	if !validID(folder) || folder == "0" {
-		return &clouddrive.Error{Message: "光鸭云下载必须使用独立任务目录"}
+		return "", &clouddrive.Error{Message: "光鸭云下载必须使用独立任务目录"}
 	}
 	if err := c.lock(ctx); err != nil {
-		return err
+		return "", err
 	}
 	defer c.unlock()
 	var resolved struct {
@@ -243,25 +297,25 @@ func (c *Client) Add(ctx context.Context, raw, folder string) (returnErr error) 
 		} `json:"btResInfo"`
 	}
 	if err := c.requestLocked(ctx, http.MethodPost, apiBase+taskAPI+"resolve_res", map[string]string{"url": magnet}, false, &resolved); err != nil {
-		return err
+		return "", err
 	}
 	if resolved.BT == nil {
-		return &clouddrive.Error{Message: "光鸭尚未解析出可核验的 BT 资源，请选择其它磁力", Retryable: true}
+		return "", &clouddrive.Error{Message: "光鸭尚未解析出可核验的 BT 资源，请选择其它磁力", Retryable: true}
 	}
 	resolvedHash, err := normalizeHash(resolved.BT.Hash)
 	if err != nil || resolvedHash != hash {
-		return &clouddrive.Error{Message: "光鸭解析返回的磁力 InfoHash 不匹配"}
+		return "", &clouddrive.Error{Message: "光鸭解析返回的磁力 InfoHash 不匹配"}
 	}
 	if strings.HasPrefix(strings.ToLower(resolved.URL), "magnet:") {
 		_, found, err := clouddrive.NormalizeMagnet(resolved.URL)
 		if err != nil || found != hash {
-			return &clouddrive.Error{Message: "光鸭解析返回冲突的下载资源"}
+			return "", &clouddrive.Error{Message: "光鸭解析返回冲突的下载资源"}
 		}
 	}
 	body := map[string]any{"url": magnet, "parentId": folder}
 	if resolved.BT.Name != "" {
 		if strings.ContainsAny(resolved.BT.Name, "/\\\r\n\x00") || resolved.BT.Name == "." || resolved.BT.Name == ".." {
-			return &clouddrive.Error{Message: "光鸭解析返回无效资源名称"}
+			return "", &clouddrive.Error{Message: "光鸭解析返回无效资源名称"}
 		}
 		body["newName"] = resolved.BT.Name
 	}
@@ -278,7 +332,7 @@ func (c *Client) Add(ctx context.Context, raw, folder string) (returnErr error) 
 				index = *file.Index
 			}
 			if index < 0 || seen[index] {
-				return &clouddrive.Error{Message: "光鸭 BT 子文件索引格式不正确"}
+				return "", &clouddrive.Error{Message: "光鸭 BT 子文件索引格式不正确"}
 			}
 			seen[index] = true
 			if !excluded[index] {
@@ -286,7 +340,7 @@ func (c *Client) Add(ctx context.Context, raw, folder string) (returnErr error) 
 			}
 		}
 		if len(indexes) == 0 {
-			return &clouddrive.Error{Message: "光鸭解析出的 BT 文件均不可下载"}
+			return "", &clouddrive.Error{Message: "光鸭解析出的 BT 文件均不可下载"}
 		}
 		body["fileIndexes"] = indexes
 		if len(resolved.BT.Excluded) > 0 {
@@ -298,19 +352,19 @@ func (c *Client) Add(ctx context.Context, raw, folder string) (returnErr error) 
 		URL    string `json:"url"`
 	}
 	if err := c.requestLocked(ctx, http.MethodPost, apiBase+taskAPI+"create_task", body, false, &result, func() { createSent = true }); err != nil {
-		return err
+		return "", err
 	}
-	if !validID(string(result.TaskID)) {
-		return &clouddrive.Error{Message: "光鸭提交结果不明确，将先对账而非再次提交", Retryable: true}
+	if !validTaskID(string(result.TaskID)) {
+		return "", &clouddrive.Error{Message: "光鸭提交结果缺少有效任务 ID，未自动再次创建", Retryable: true}
 	}
 	if strings.HasPrefix(strings.ToLower(result.URL), "magnet:") {
 		_, found, err := clouddrive.NormalizeMagnet(result.URL)
 		if err != nil || found != hash {
-			return &clouddrive.Error{Message: "光鸭创建任务返回冲突的资源身份"}
+			return "", &clouddrive.Error{Message: "光鸭创建任务返回冲突的资源身份"}
 		}
 	}
 	c.submissions[hash] = submission{taskID: string(result.TaskID), folder: folder}
-	return nil
+	return string(result.TaskID), nil
 }
 
 func (c *Client) RemoveTask(ctx context.Context, value string) error {
@@ -322,7 +376,11 @@ func (c *Client) RemoveTask(ctx context.Context, value string) error {
 		return err
 	}
 	defer c.unlock()
-	task, err := c.listTaskLocked(ctx, hash)
+	prior, ok := c.submissions[hash]
+	if !ok || !validTaskID(prior.taskID) {
+		return &clouddrive.Error{Message: "光鸭任务缺少已保存的远程任务 ID，未搜索或删除历史任务", Retryable: true}
+	}
+	task, err := c.taskByIDLocked(ctx, hash, prior.taskID)
 	if err != nil || task == nil {
 		return err
 	}
@@ -331,14 +389,14 @@ func (c *Client) RemoveTask(ctx context.Context, value string) error {
 
 func (c *Client) RemoveTaskIf(ctx context.Context, value string, expected clouddrive.RemoteTask) error {
 	hash, err := normalizeHash(value)
-	if err != nil || expected.Hash != hash || !validID(expected.RemoteID) || !validID(expected.FolderID) || expected.FolderID == "0" {
+	if err != nil || expected.Hash != hash || !validTaskID(expected.RemoteID) || !validID(expected.FolderID) || expected.FolderID == "0" {
 		return &clouddrive.Error{Message: "光鸭取消任务缺少已核验的账号缓存归属与远程身份"}
 	}
 	if err := c.lock(ctx); err != nil {
 		return err
 	}
 	defer c.unlock()
-	current, err := c.findLocked(ctx, hash)
+	current, err := c.findTaskLocked(ctx, hash, expected.RemoteID)
 	if err != nil || current == nil {
 		return err
 	}

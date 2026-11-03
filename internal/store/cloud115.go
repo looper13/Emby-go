@@ -28,6 +28,7 @@ type OfflineTask struct {
 	Retryable        bool            `json:"retryable"`
 	Progress         int             `json:"progress"`
 	ResultID         string          `json:"result_id"`
+	RemoteTaskID     string          `json:"remote_task_id,omitempty"`
 	Attempts         int             `json:"attempts"`
 	NextPoll         int64           `json:"next_poll"`
 	VisibilityUntil  int64           `json:"visibility_until,omitempty"`

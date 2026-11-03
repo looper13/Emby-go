@@ -38,6 +38,46 @@ describe('115 workflow', () => {
     vi.useFakeTimers(); const read = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'downloading', files: [] }] });
     const w = panel(); await flushPromises(); await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(2); w.unmount(); wrapper = undefined; await vi.advanceTimersByTimeAsync(15000); expect(read).toHaveBeenCalledTimes(2);
   });
+  it.each([
+    ['cache', '正在核验缓存目录'],
+    ['reconcile', '正在查询网盘任务'],
+    ['submit', '正在提交到网盘'],
+  ])('排队任务在 %s 阶段显示操作说明，并隐藏尚未开始的下载进度', async (stage, message) => {
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'queued', progress: 0, stage, files: [] }] });
+    const w = panel(); await flushPromises(); const article = w.get('.offline-task');
+    expect(article.get('.offline-stage').text()).toBe(message); expect(article.get('.offline-status strong').text()).toBe('排队中');
+    expect(article.find('.offline-status span').exists()).toBe(false); expect(article.find('progress').exists()).toBe(false);
+    expect(article.find('.offline-error').exists()).toBe(false); expect(article.text()).not.toContain('0%');
+    expect(article.findAll('button').some(b => b.text() === '取消本地等待')).toBe(true);
+  });
+  it('实际下载任务显示查询下载状态阶段，并保留真实百分比和进度条', async () => {
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'downloading', progress: 42, stage: 'poll', files: [] }] });
+    const w = panel(); await flushPromises(); const article = w.get('.offline-task');
+    expect(article.get('.offline-status strong').text()).toBe('115 离线下载中'); expect(article.get('.offline-status span').text()).toBe('42%');
+    expect(article.get('progress').attributes('value')).toBe('42'); expect(article.get('.offline-stage').text()).toBe('正在查询网盘下载状态');
+  });
+  it.each([
+    ['queued', 'cache', '缓存目录'],
+    ['failed', 'reconcile', '任务对账'],
+    ['failed', 'submit', '提交'],
+    ['downloading', 'poll', '轮询'],
+    ['failed', 'unknown-stage', 'unknown-stage'],
+  ])('%s 的 %s 阶段错误保留原因，不同时显示正在处理', async (status, stage, label) => {
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status, stage, error: '网盘请求失败', files: [] }] });
+    const w = panel(); await flushPromises(); const article = w.get('.offline-task');
+    expect(article.get('.offline-error').text()).toBe(`${label}：网盘请求失败`); expect(article.find('.offline-stage').exists()).toBe(false);
+  });
+  it.each([
+    ['queued', '', '排队中'],
+    ['queued', 'unknown-stage', '排队中'],
+    ['ready', 'cache', '已就绪'],
+    ['ready', 'poll', '已就绪'],
+    ['failed', 'submit', '失败'],
+  ])('%s 的空、未知或遗留阶段不生成正在处理提示', async (status, stage, label) => {
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status, stage, files: [] }] });
+    const w = panel(); await flushPromises(); const article = w.get('.offline-task');
+    expect(article.get('.offline-status strong').text()).toBe(label); expect(article.find('.offline-stage').exists()).toBe(false);
+  });
   it('needs only a masked Cookie and clears it after saving without a folder input', async () => {
     vi.spyOn(cloud115Api, 'config').mockResolvedValue({ configured: false, account_id: '', folder_id: '', revision: 0 });
     const save = vi.spyOn(cloud115Api, 'save').mockResolvedValue(undefined);

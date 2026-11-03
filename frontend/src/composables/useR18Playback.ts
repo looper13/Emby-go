@@ -4,6 +4,7 @@ import type { R18Resource } from '../api/r18';
 import { useAuthStore } from '../stores/auth';
 import { usePlayerStore } from '../stores/player';
 import { mainVideo, offlineActive, offlineStatusLabel, playbackVersions, type R18PlaybackVersion } from '../lib/r18-playback';
+import { offlineProgressVisible, offlineStageMessage } from '../lib/offline-stage';
 import { loadPlayerFactory, playbackType } from '../lib/player';
 import { startPlaybackTiming, type PlaybackStage } from '../lib/playback-timing';
 import { usePageRequest } from './usePageRequest';
@@ -19,7 +20,13 @@ export function useR18Playback(item: () => { library: string; video: string; tit
   const statusLabel = (status: string) => offlineStatusLabel(status, providerName.value);
   const versions = computed(() => playbackVersions(resources.value, state.value, connection().id));
   const pending = computed(() => versions.value.find(v => v.id === waiting.value));
-  const message = computed(() => waiting.value ? busy.value ? '正在准备播放…' : `${statusLabel(pending.value?.task?.status || 'queued')} · ${pending.value?.task?.progress || 0}% · 就绪后自动播放` : '');
+  const message = computed(() => {
+    if (!waiting.value) return '';
+    const task = pending.value?.task;
+    // 轮询期间保留最近的任务阶段，避免每次读取状态都退回准备播放提示。
+    if (busy.value && (!task || !offlineActive(task))) return '正在准备播放…';
+    return [statusLabel(task?.status || 'queued'), offlineStageMessage(task), offlineProgressVisible(task) ? `${task!.progress}%` : '', '就绪后自动播放'].filter(Boolean).join(' · ');
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timing: (stage: PlaybackStage) => void = () => {};
   function accept(next: OfflineState) {

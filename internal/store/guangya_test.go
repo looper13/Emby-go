@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"emby-go/internal/cloud115"
 	"emby-go/internal/r18"
 )
 
@@ -101,5 +102,58 @@ func TestCloudGuangyaOfflineAccountNamespaceIsolation(t *testing.T) {
 		if err != nil || len(due) != 1 || due[0].ID != expected.ID {
 			t.Fatal("后台队列跨网盘混用", expected.AccountID, err)
 		}
+	}
+}
+
+func TestCloudGuangyaRemoteTaskIDReopensAndReadyResourceIsReusedLocally(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "task-id.db")
+	s, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if s != nil {
+			_ = s.Close()
+		}
+	}()
+	library, err := s.CreateR18Library("JAVDB", r18.Config{BaseURL: "https://avdb.invalid", APIKey: "fixture-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := CloudGuangyaAccount("fixture-account")
+	video, hash := r18.EncodeID("test", "digital"), strings.Repeat("b", 40)
+	magnet := "magnet:?xt=urn:btih:" + hash
+	task, err := s.CreateOfflineTask(account, "cache-root", magnet, hash, library, video, "resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Status, task.RemoteTaskID, task.CacheFolderID = "ready", "submitted-task", "owned-child"
+	task.ExpiresAt = time.Now().Add(time.Hour).Unix()
+	task.Files = []cloud115.File{{ID: "video", ParentID: "owned-child", PickCode: "video", Name: "正片.mp4", Size: 100}}
+	if err := s.UpdateOfflineTask(task, task.Version); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.CreateOfflineTask(account, "cache-root", magnet, hash, library, video, "resource")
+	if err != nil || again.ID != task.ID || again.RemoteTaskID != "submitted-task" || again.Status != "ready" || again.Version != task.Version+1 {
+		t.Fatal("重启丢失远程任务身份或重复创建本地就绪任务", again, err)
+	}
+	bindings, err := s.OfflineBindings(library, video, account)
+	if err != nil || len(bindings) != 1 || bindings[0].FileID != "video" {
+		t.Fatal("本地已就绪资源未直接复用播放绑定", bindings, err)
+	}
+	again.Status = "expired"
+	if err := s.UpdateOfflineTask(again, again.Version); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := s.CreateOfflineTask(account, "cache-root", magnet, hash, library, video, "resource")
+	if err != nil || restarted.Status != "queued" || restarted.RemoteTaskID != "" || restarted.CacheFolderID != "" {
+		t.Fatal("到期后新下载复用了旧远程任务身份", restarted, err)
 	}
 }

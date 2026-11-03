@@ -47,6 +47,12 @@ type CacheProvider interface {
 	RemoveTask(context.Context, string) error
 }
 
+// TaskIDProvider 直接提交新任务，后续仅按保存的远程任务 ID 查询本次下载。
+type TaskIDProvider interface {
+	AddTask(context.Context, string, string) (string, error)
+	FindTask(context.Context, string, string) (*RemoteTask, error)
+}
+
 // PendingTaskFolderUnknown 表示上游未完成任务可能暂不提供保存目录。
 // 缺失目录仅允许等待对账，不能用于放宽完成结果或删除操作的归属核验。
 type PendingTaskFolderUnknown interface {

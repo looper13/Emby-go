@@ -72,6 +72,29 @@ describe('R18 one-click playback', () => {
     finish({ ...empty, tasks: [task] }); await flushPromises();
     await vi.advanceTimersByTimeAsync(1000); expect(read).toHaveBeenCalledTimes(before + 2);
   });
+  it('等待播放按本地任务展示准备阶段，轮询期间保留阶段，实际下载后显示进度', async () => {
+    const queued = { ...task, status: 'queued', stage: 'cache', progress: 0 };
+    const read = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [queued] });
+    const submit = vi.spyOn(cloud115Api, 'submit');
+    start(); await flushPromises(); await workflow.play(workflow.versions.value[0]!);
+    expect(workflow.message.value).toBe('排队中 · 正在核验缓存目录 · 就绪后自动播放');
+    let finish!: (value: OfflineState) => void;
+    read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refreshing = workflow.load();
+    expect(workflow.busy.value).toBe(true); expect(workflow.message.value).toBe('排队中 · 正在核验缓存目录 · 就绪后自动播放');
+    finish({ ...empty, tasks: [{ ...queued, stage: 'reconcile' }] }); await refreshing;
+    expect(workflow.message.value).toBe('排队中 · 正在查询网盘任务 · 就绪后自动播放');
+    read.mockResolvedValue({ ...empty, tasks: [{ ...queued, stage: 'submit' }] }); await vi.advanceTimersByTimeAsync(1000);
+    expect(workflow.message.value).toBe('排队中 · 正在提交到网盘 · 就绪后自动播放');
+    read.mockResolvedValue({ ...empty, tasks: [{ ...task, stage: 'poll' }] }); await vi.advanceTimersByTimeAsync(1000);
+    expect(workflow.message.value).toBe('115 离线下载中 · 正在查询网盘下载状态 · 40% · 就绪后自动播放');
+    expect(workflow.waiting.value).toBe(hash); expect(submit).not.toHaveBeenCalled(); expect(usePlayerStore().current).toBeNull();
+  });
+  it.each(['', 'unknown-stage'])('排队等待中的空或未知阶段 %s 回退到状态说明，不显示虚假的进度', async stage => {
+    vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status: 'queued', stage, progress: 0 }] });
+    start(); await flushPromises(); await workflow.play(workflow.versions.value[0]!);
+    expect(workflow.message.value).toBe('排队中 · 就绪后自动播放'); expect(workflow.waiting.value).toBe(hash);
+  });
   it('normalizes hex/Base32 magnets, merges duplicate records, and keeps different magnets as versions', () => {
     expect(magnetHash('magnet:?xt=urn:btih:' + 'A'.repeat(32))).toBe('0'.repeat(40));
     expect(magnetHash('magnet:?dn=name&xt=urn:btih:' + hash.toUpperCase())).toBe(hash);

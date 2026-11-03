@@ -55,6 +55,10 @@ func (s *Service) prepareRecovery(ctx context.Context, p clouddrive.Provider, t 
 		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "未确认已完成记录与缺失文件的关系，未重新提交", Retryable: true})
 		return
 	}
+	if _, direct := p.(clouddrive.TaskIDProvider); direct && (!validRemoteTaskID(t.RemoteTaskID) || remote.RemoteID != t.RemoteTaskID) {
+		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "缺失结果没有绑定本次远端任务标识，未重新提交", Retryable: true})
+		return
+	}
 	if t.Recoveries >= maxAutomaticRecoveries {
 		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "文件连续失效，自动重新下载已达 3 次，请检查网盘任务"})
 		return
@@ -93,7 +97,7 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: message, Auth: true})
 		return
 	}
-	remote, err := p.Find(ctx, t.InfoHash)
+	remote, err := s.findRemoteTask(ctx, p, t)
 	if err != nil {
 		s.fail(t, t.Version, "recover", err)
 		return
@@ -104,6 +108,10 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 		t.RecoveryRemoved = false
 		t.VisibilityUntil = 0
 		t.Status, t.Resume, t.Stage, t.Error = status, "", "", ""
+		if status == "queued" {
+			// 旧记录已确认消失，新提交不得继续使用旧任务标识。
+			t.RemoteTaskID = ""
+		}
 		t.NextPoll, t.Attempts = 0, 0
 		_ = s.save(t, t.Version)
 	}
@@ -137,7 +145,7 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "失效记录仍未从 " + s.brand() + " 消失，等待对账后重新下载，未重复提交", Retryable: true})
 		return
 	}
-	latest, err := p.Find(ctx, t.InfoHash)
+	latest, err := s.findRemoteTask(ctx, p, t)
 	if err != nil {
 		s.fail(t, t.Version, "recover", err)
 		return
@@ -170,7 +178,17 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 }
 
 func (s *Service) recoverDiscovery(ctx context.Context, p clouddrive.Provider, t store.OfflineTask, missingID string) {
-	remote, err := p.Find(ctx, t.InfoHash)
+	if remoteTaskStage(p) == "poll" {
+		if !validRemoteTaskID(t.RemoteTaskID) {
+			s.failUntrackedTask(t, t.Version, "recover", nil)
+			return
+		}
+		expected := t.Version
+		if !s.publishStage(&t, &expected, "poll") {
+			return
+		}
+	}
+	remote, err := s.findRemoteTask(ctx, p, t)
 	if err != nil {
 		s.fail(t, t.Version, "recover", err)
 		return
@@ -178,7 +196,7 @@ func (s *Service) recoverDiscovery(ctx context.Context, p clouddrive.Provider, t
 	remote = provenMissingTaskFolder(p, t, remote)
 	if remote == nil {
 		// 已观察到完成结果；完整任务查询缺失加上文件删除证据才允许修复。
-		remote = &clouddrive.RemoteTask{Status: 2, ResultID: t.ResultID, FolderID: t.CacheFolderID}
+		remote = &clouddrive.RemoteTask{Status: 2, ResultID: t.ResultID, FolderID: t.CacheFolderID, RemoteID: t.RemoteTaskID, Hash: t.InfoHash}
 	} else if remote.Status == 0 || remote.Status == 1 || t.ResultID != "" && remote.ResultID != t.ResultID {
 		// 失效来源属于旧结果，继续等待当前磁力的新下载，不发布旧来源。
 		t.Status, t.Resume, t.Stage, t.Error = "downloading", "", "", ""

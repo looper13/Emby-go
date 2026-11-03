@@ -122,6 +122,19 @@ describe('网盘选择与播放隔离', () => {
     expect(select).toHaveBeenCalledExactlyOnceWith('2', 'video', task.id, 'main', expect.any(AbortSignal), false, true);
     expect(usePlayerStore().current?.url).toBe(source.DirectStreamUrl); expect(cloud115Api.state).not.toHaveBeenCalled(); expect(prepare115).not.toHaveBeenCalled();
   });
+  it.each([
+    ['queued', 'cache', '排队中 · 正在核验缓存目录 · 就绪后自动播放'],
+    ['queued', 'submit', '排队中 · 正在提交到网盘 · 就绪后自动播放'],
+    ['downloading', 'poll', '光鸭 离线下载中 · 正在查询网盘下载状态 · 30% · 就绪后自动播放'],
+  ])('光鸭 %s 的 %s 阶段显示操作说明并保持网盘隔离', async (status, stage, message) => {
+    provider.value = 'guangya';
+    vi.spyOn(guangyaApi, 'state').mockResolvedValue({ ...empty, tasks: [{ ...task, status, stage, progress: status === 'downloading' ? task.progress : 0 }] });
+    const submit = vi.spyOn(guangyaApi, 'submit');
+    start(); await flushPromises(); await workflow.play(workflow.versions.value[0]!);
+    expect(workflow.message.value).toBe(message);
+    expect(workflow.providerName.value).toBe('光鸭'); expect(workflow.waiting.value).toBe(hash);
+    expect(submit).not.toHaveBeenCalled(); expect(cloud115Api.state).not.toHaveBeenCalled(); expect(usePlayerStore().current).toBeNull();
+  });
   it('切换时立即撤销旧请求并清空等待，迟到115结果不能覆盖光鸭或打开播放器', async () => {
     const oldSource = { ...source, Id: '115-task' };
     const read115 = vi.spyOn(cloud115Api, 'state').mockResolvedValue({ ...empty, tasks: [task] });

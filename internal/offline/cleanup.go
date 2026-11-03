@@ -3,6 +3,7 @@ package offline
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"emby-go/internal/cloud115"
@@ -104,6 +105,7 @@ func (s *Service) cleanup(p clouddrive.Provider, t store.OfflineTask) {
 		t.Error = "缓存已满 24 小时并自动删除；如需播放请重新提交下载"
 		t.Files = []clouddrive.File{}
 		t.NextPoll = 0
+		t.RemoteTaskID = ""
 	}
 	_ = s.save(t, t.Version)
 }
@@ -143,9 +145,15 @@ func removeCache(ctx context.Context, p clouddrive.Provider, t store.OfflineTask
 			return &clouddrive.Error{Message: "缓存路径已移动、改名或身份变化，为避免误删已停止删除"}
 		}
 	}
-	remote, err := p.Find(ctx, t.InfoHash)
-	if err != nil {
-		return err
+	var remote *clouddrive.RemoteTask
+	if _, direct := p.(clouddrive.TaskIDProvider); direct && !validRemoteTaskID(t.RemoteTaskID) {
+		// 旧版本或未发出请求的任务没有远端标识，仍只清理已核验的专属缓存。
+		slog.Info(brand+" 清理跳过未绑定的远端记录", "task_id", t.ID, "stage", "cleanup", "reason", "missing_remote_task_id")
+	} else {
+		remote, err = lookupRemoteTask(ctx, p, t)
+		if err != nil {
+			return err
+		}
 	}
 	remote = provenMissingTaskFolder(p, t, remote)
 	if remote != nil && remote.FolderID == "" && (remote.Status == 0 || remote.Status == 1 || remote.Status == 2) && allowsUnknownPendingFolder(p) {

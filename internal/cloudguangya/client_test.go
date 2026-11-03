@@ -728,8 +728,8 @@ func TestFindTaskStatusesAndRestoresParentFromResult(t *testing.T) {
 			c := mockClient(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Path == taskAPI+"list_task" {
 					body := requestBody(t, r)
-					if !reflect.DeepEqual(body["status"], []any{float64(0), float64(1), float64(2), float64(3), float64(4), float64(5)}) {
-						t.Fatal("对账遗漏了完成或失败状态")
+					if !reflect.DeepEqual(body, taskQueryBody("task")) {
+						t.Fatalf("未按本次任务 ID 精确轮询：%v", body)
 					}
 					task := taskData("task", strings.ToUpper(testHash), state.upstream)
 					if state.shared == 2 {
@@ -742,7 +742,7 @@ func TestFindTaskStatusesAndRestoresParentFromResult(t *testing.T) {
 				}
 				return successReply(fileData("result", "owned-child", "movie", true))
 			})
-			task, err := c.Find(context.Background(), testHash)
+			task, err := c.FindTask(context.Background(), testHash, "task")
 			if err != nil || task == nil || task.Status != state.shared || task.Hash != testHash {
 				t.Fatalf("状态映射失败：%+v %v", task, err)
 			}
@@ -753,38 +753,43 @@ func TestFindTaskStatusesAndRestoresParentFromResult(t *testing.T) {
 	}
 }
 
-func TestFindStrictHashAndCursorPagination(t *testing.T) {
+func TestFindTaskUsesExactIdentityDespiteLargeHistory(t *testing.T) {
 	bytes, _ := hex.DecodeString(testHash)
 	base32Hash := base32.StdEncoding.EncodeToString(bytes)
 	calls := 0
 	c := mockClient(func(r *http.Request) (*http.Response, error) {
 		calls++
 		body := requestBody(t, r)
-		if calls == 1 {
-			unrelated := taskData("unrelated", strings.Repeat("f", 40), 1)
-			unrelated["fileName"] = testHash
-			return successReply(map[string]any{"list": []any{unrelated}, "total": 2, "cursor": "next-page"})
+		if r.URL.Path != taskAPI+"list_task" || !reflect.DeepEqual(body, taskQueryBody("matching")) {
+			t.Fatalf("大历史账号未使用精确任务查询：%v %v", r.URL, body)
 		}
-		if body["cursor"] != "next-page" || body["page"] != nil {
-			t.Fatalf("游标续页参数错误：%v", body)
-		}
-		return successReply(map[string]any{"list": []any{taskData("matching", base32Hash, 1)}, "total": 2, "cursor": ""})
+		// statusCounts 可包含全部历史数量；精确查询的 total 才是所选任务数量。
+		return successReply(map[string]any{
+			"list":         []any{taskData("matching", base32Hash, 1)},
+			"total":        1,
+			"cursor":       "retained-final-cursor",
+			"statusCounts": []any{map[string]any{"status": 2, "count": 50000}},
+		})
 	})
-	task, err := c.Find(context.Background(), testHash)
-	if err != nil || task == nil || task.Hash != testHash || calls != 2 {
-		t.Fatalf("严格磁力匹配或游标分页失败：%+v %v %d", task, err, calls)
+	task, err := c.FindTask(context.Background(), testHash, "matching")
+	if err != nil || task == nil || task.Hash != testHash || task.RemoteID != "matching" || calls != 1 {
+		t.Fatalf("严格磁力匹配或单次精确查询失败：%+v %v %d", task, err, calls)
 	}
 }
 
-func TestFindDoesNotTreatIncompleteOrDuplicateTasksAsAbsent(t *testing.T) {
+func TestFindTaskDoesNotTreatIncompleteOrWrongIdentityAsAbsent(t *testing.T) {
 	for _, data := range []map[string]any{
-		{},
+		{"list": []any{}, "total": 50000},
 		{"list": []any{}, "total": 1},
+		{"list": []any{taskData("first", testHash, 1)}, "total": 50000},
+		{"list": []any{taskData("first", testHash, 1)}, "total": 1, "hasMore": true},
 		{"list": []any{taskData("first", testHash, 1), taskData("second", testHash, 1)}, "total": 2},
 		{"list": []any{map[string]any{"taskId": "unknown", "status": 1}}, "total": 1},
+		{"list": []any{taskData("other-task", testHash, 1)}, "total": 1},
+		{"list": []any{taskData("first", strings.Repeat("f", 40), 1)}, "total": 1},
 	} {
 		c := mockClient(func(*http.Request) (*http.Response, error) { return successReply(data) })
-		task, err := c.Find(context.Background(), testHash)
+		task, err := c.FindTask(context.Background(), testHash, "first")
 		if err == nil || task != nil || !requireError(t, err).Retryable {
 			t.Fatalf("不完整对账被当作任务不存在：%+v %v", data, err)
 		}
@@ -801,7 +806,7 @@ func TestFindCompletionRequiresIndependentAndOwnedResult(t *testing.T) {
 			}
 			return successReply(fileData(resultID, "foreign-parent", "movie", true))
 		})
-		if task, err := c.Find(context.Background(), testHash); err == nil || task != nil {
+		if task, err := c.FindTask(context.Background(), testHash, "task"); err == nil || task != nil {
 			t.Fatalf("接受了无独立身份或目录不符的结果：%s %+v %v", resultID, task, err)
 		}
 	}
@@ -827,7 +832,7 @@ func TestFindMissingCompletedResultKeepsRemoteIdentity(t *testing.T) {
 					return mockReply(401, `{}`)
 				}
 			})
-			remote, err := c.Find(context.Background(), testHash)
+			remote, err := c.FindTask(context.Background(), testHash, "old-task")
 			if failure == "missing" {
 				if err != nil || remote == nil || !remote.ResultMissing || remote.RemoteID != "old-task" || remote.ResultID != "old-result" || remote.FolderID != "" || remote.Status != 2 {
 					t.Fatalf("缺失结果丢失了可恢复的远程身份：%+v %v", remote, err)
@@ -846,6 +851,9 @@ func TestConditionalRemovalRechecksRecordAndResultBeforeDeleting(t *testing.T) {
 			expected := clouddrive.RemoteTask{Hash: testHash, RemoteID: "old-task", ResultID: "old-result", FolderID: "owned-child", Status: 2, ResultMissing: true}
 			c := mockClient(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Path == taskAPI+"list_task" {
+					if body := requestBody(t, r); !reflect.DeepEqual(body, taskQueryBody(expected.RemoteID)) {
+						t.Fatalf("条件取消扫描了历史或查询了其他任务：%v", body)
+					}
 					task := taskData("old-task", testHash, 2)
 					task["fileId"] = "old-result"
 					switch change {
@@ -1132,6 +1140,9 @@ func TestRemoveTaskNeverDeletesResultFiles(t *testing.T) {
 	c := mockClient(func(r *http.Request) (*http.Response, error) {
 		requests = append(requests, r.URL.Path)
 		if r.URL.Path == taskAPI+"list_task" {
+			if body := requestBody(t, r); !reflect.DeepEqual(body, taskQueryBody("target-task")) {
+				t.Fatalf("移除任务扫描了历史或查询了其他记录：%v", body)
+			}
 			task := taskData("target-task", testHash, 2)
 			task["fileId"] = "keep-this-result"
 			return successReply(map[string]any{"list": []any{task}, "total": 1})
@@ -1142,6 +1153,7 @@ func TestRemoveTaskNeverDeletesResultFiles(t *testing.T) {
 		}
 		return mockReply(200, `{"msg":"success"}`)
 	})
+	c.submissions[testHash] = submission{taskID: "target-task", folder: "owned-child"}
 	if err := c.RemoveTask(context.Background(), testHash); err != nil || len(requests) != 2 {
 		t.Fatalf("移除离线记录失败：%v %v", err, requests)
 	}

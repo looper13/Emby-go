@@ -116,6 +116,87 @@ func (s *Service) save(t store.OfflineTask, expected int64) error {
 	}
 	return err
 }
+
+// 取消不撤销在途的远端创建；成功回执只补标识，不能恢复旧状态或绑定新提交。
+func (s *Service) preserveCancelledSubmissionReceipt(submitted store.OfflineTask, id string) {
+	if !validRemoteTaskID(id) || submitted.CacheFolderID == "" || submitted.CacheFolderID == "0" || submitted.CacheFolderID == submitted.FolderID || submitted.ExpiresAt <= 0 {
+		return
+	}
+	for range 3 {
+		current, err := s.db.OfflineTask(submitted.ID)
+		if err != nil || !sameCancelledSubmission(submitted, current) || !s.ownsTask(current) || current.CacheExpired(time.Now().Unix()) {
+			return
+		}
+		current.RemoteTaskID = id
+		if err = s.save(current, current.Version); !errors.Is(err, store.ErrConflict) {
+			return
+		}
+	}
+}
+
+// 阻塞操作前发布阶段，并同步推进版本，取消或重试后的旧任务不能继续提交。
+func (s *Service) publishStage(t *store.OfflineTask, expected *int64, stage string) bool {
+	if s.ctx.Err() != nil {
+		return false
+	}
+	if t.Stage == stage && t.Error == "" {
+		return true
+	}
+	t.Stage, t.Error = stage, ""
+	if s.save(*t, *expected) != nil {
+		return false
+	}
+	*expected = *expected + 1
+	t.Version = *expected
+	return true
+}
+
+func reconcileErrorCategory(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var remote *clouddrive.Error
+	if errors.As(err, &remote) {
+		switch {
+		case remote.Auth:
+			return "authentication"
+		case remote.Retryable:
+			return "retryable"
+		case remote.Missing:
+			return "missing"
+		default:
+			return "rejected"
+		}
+	}
+	return "unknown"
+}
+
+func (s *Service) findRemoteTask(ctx context.Context, p clouddrive.Provider, t store.OfflineTask) (*clouddrive.RemoteTask, error) {
+	level := slog.LevelDebug
+	if t.Status == "queued" || t.Status == "submitting" {
+		level = slog.LevelInfo
+	}
+	stage, operation := remoteTaskStage(p), "远端任务对账"
+	if stage == "poll" {
+		operation = "远端任务轮询"
+	}
+	started := time.Now()
+	slog.Log(ctx, level, s.brand()+" "+operation+"开始", "task_id", t.ID, "status", t.Status, "stage", stage)
+	remote, err := lookupRemoteTask(ctx, p, t)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		level = slog.LevelWarn
+	}
+	// 只记录固定错误类别，原始错误可能携带磁力、直链或认证凭据。
+	slog.Log(ctx, level, s.brand()+" "+operation+"完成", "task_id", t.ID, "status", t.Status, "stage", stage, "elapsed_ms", time.Since(started).Milliseconds(), "error_category", reconcileErrorCategory(err), "found", remote != nil)
+	return remote, err
+}
+
 func (s *Service) tick()        { s.tickQueue(false) }
 func (s *Service) tickCleanup() { s.tickQueue(true) }
 func (s *Service) tickQueue(cleanup bool) {
@@ -207,6 +288,13 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 		return
 	}
 	if t.RecoveryResultID != "" {
+		if _, direct := p.(clouddrive.TaskIDProvider); direct && !validRemoteTaskID(t.RemoteTaskID) {
+			s.failUntrackedTask(t, expected, "recover", nil)
+			return
+		}
+		if !s.publishStage(&t, &expected, remoteTaskStage(p)) {
+			return
+		}
 		s.recoverResult(ctx, p, t)
 		return
 	}
@@ -218,6 +306,9 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 				message = "请更新" + s.brand() + "凭据后提交缓存任务"
 			}
 			s.fail(t, expected, "configuration", &clouddrive.Error{Message: message, Auth: true})
+			return
+		}
+		if !s.publishStage(&t, &expected, "cache") {
 			return
 		}
 		root, err := p.Info(ctx, t.FolderID)
@@ -296,9 +387,25 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 		s.discover(ctx, p, t, nil)
 		return
 	}
-	remote, err := p.Find(ctx, t.InfoHash)
+	if _, direct := p.(clouddrive.TaskIDProvider); direct {
+		if t.Status == "queued" {
+			// 新任务直接解析和提交，已有资源由本地绑定展示，不查询远端历史。
+			s.submitTask(ctx, p, t, expected)
+			return
+		}
+		if !validRemoteTaskID(t.RemoteTaskID) {
+			s.failUntrackedTask(t, expected, "poll", nil)
+			return
+		}
+	}
+	stage := remoteTaskStage(p)
+	// 已在下载的轮询状态本身可见，不为每次查询额外增加一次状态写入。
+	if (stage == "poll" || t.Status == "queued" || t.Status == "submitting") && !s.publishStage(&t, &expected, stage) {
+		return
+	}
+	remote, err := s.findRemoteTask(ctx, p, t)
 	if err != nil {
-		s.fail(t, expected, "reconcile", err)
+		s.fail(t, expected, stage, err)
 		return
 	}
 	remote = provenMissingTaskFolder(p, t, remote)
@@ -332,7 +439,11 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 		}
 		unknownPending := allowsUnknownPendingFolder(p) && remote.FolderID == "" && remote.Status != 2
 		if t.CacheFolderID != "" && remote.FolderID != t.CacheFolderID && !unknownPending {
-			s.fail(t, expected, "cache", &clouddrive.Error{Message: "该磁力已有任务，但不在本服务缓存子目录；不会使用或删除既有网盘文件"})
+			message := "该磁力已有任务，但不在本服务缓存子目录；不会使用或删除既有网盘文件"
+			if stage == "poll" {
+				message = "本次下载结果不在服务专属缓存子目录，未使用或删除外部网盘文件"
+			}
+			s.fail(t, expected, "cache", &clouddrive.Error{Message: message})
 			return
 		}
 		t.Attempts = 0
@@ -353,6 +464,9 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 			t.NextPoll = 0
 		case 0, 1:
 			t.Status = "downloading"
+			if stage == "poll" {
+				t.Stage = "poll"
+			}
 		default:
 			s.fail(t, expected, "poll", &clouddrive.Error{Message: s.brand() + " 返回未知离线状态"})
 			return
@@ -365,35 +479,65 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 		return
 	}
 	if t.Status != "queued" {
-		if s.waitForVisibility(t, expected, "reconcile", "任务已提交，等待 "+s.brand()+" 状态同步") {
+		if s.waitForVisibility(t, expected, stage, "任务已提交，等待 "+s.brand()+" 状态同步") {
 			return
 		}
-		s.fail(t, expected, "reconcile", &clouddrive.Error{Message: "暂未找到 " + s.brand() + " 任务；提交结果可能不明确，未再次提交", Retryable: true})
+		s.fail(t, expected, stage, &clouddrive.Error{Message: "暂未找到 " + s.brand() + " 本次任务；提交结果可能不明确，未再次提交", Retryable: true})
 		return
 	}
+	s.submitTask(ctx, p, t, expected)
+}
+
+func (s *Service) submitTask(ctx context.Context, p clouddrive.Provider, t store.OfflineTask, expected int64) {
 	if t.CacheExpired(time.Now().Unix()) {
 		s.cleanup(p, t)
 		return
 	}
-	// 远程写入前持久化不明确边界；重启或超时后先对账，避免重复提交磁力。
+	// 持久化创建边界后才发送请求；任务 ID 网盘重启后只精确轮询，115 保留原对账。
 	t.Status = "submitting"
 	t.Resume = "submitting"
+	t.Stage, t.Error = "submit", ""
+	byID, direct := p.(clouddrive.TaskIDProvider)
+	if direct {
+		// 新提交的持久意图不能携带上一次下载的任务标识。
+		t.RemoteTaskID = ""
+	}
 	if s.save(t, expected) != nil {
 		return
 	}
 	expected++
 	t.Version = expected
+	submitted := t
 	folder := t.CacheFolderID
 	if folder == "" {
 		folder = t.FolderID
 	}
-	if err = p.Add(ctx, t.Magnet, folder); err != nil {
+	var err error
+	if direct {
+		var id string
+		id, err = byID.AddTask(ctx, t.Magnet, folder)
+		if validRemoteTaskID(id) {
+			t.RemoteTaskID = id
+		} else if err == nil {
+			err = &clouddrive.Error{Message: "创建响应缺少可用任务标识，提交结果不明确", Retryable: true}
+		}
+	} else {
+		err = p.Add(ctx, t.Magnet, folder)
+	}
+	if err != nil {
 		var submissionErr *clouddrive.Error
 		if errors.As(err, &submissionErr) && submissionErr.NotSubmitted {
 			// 只有明确证据表明创建请求尚未发送时，才允许重新进入提交队列。
 			t.Status, t.Resume = "queued", "queued"
+			t.RemoteTaskID = ""
+		} else if direct && t.RemoteTaskID == "" {
+			s.failUntrackedTask(t, expected, "submit", err)
+			return
 		}
 		s.fail(t, expected, "submit", err)
+		if direct && validRemoteTaskID(t.RemoteTaskID) {
+			s.preserveCancelledSubmissionReceipt(submitted, t.RemoteTaskID)
+		}
 		return
 	}
 	t.Status = "downloading"
@@ -401,7 +545,29 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 	t.NextPoll = time.Now().Add(pollInterval).Unix()
 	t.Error = ""
 	t.Stage = ""
+	if direct {
+		t.Stage = "poll"
+	}
 	t.Attempts = 0
+	if err := s.save(t, expected); direct && errors.Is(err, store.ErrConflict) {
+		s.preserveCancelledSubmissionReceipt(submitted, t.RemoteTaskID)
+	}
+}
+
+// 缺标识的模糊提交停止自动重写，由用户明确重试后重新进入提交队列。
+func (s *Service) failUntrackedTask(t store.OfflineTask, expected int64, stage string, err error) {
+	if s.ctx.Err() != nil {
+		return
+	}
+	t.Resume, t.Status = t.Status, "failed"
+	t.Stage = stage
+	t.Error = s.brand() + " 未取得远端任务标识，提交结果不明确；已停止自动提交。点击重试将重新添加磁力"
+	t.Retryable, t.NextPoll = true, 0
+	t.Attempts++
+	var remote *clouddrive.Error
+	if errors.As(err, &remote) && remote.Auth {
+		t.Status = "needs_auth"
+	}
 	_ = s.save(t, expected)
 }
 
@@ -478,9 +644,18 @@ func (s *Service) Retry(id string, version int64) error {
 	if !t.Retryable || !(t.Status == "failed" || t.Status == "timed_out" || t.Status == "needs_auth" || t.Status == "cancelled") {
 		return errors.New("当前任务不支持重试")
 	}
-	t.Status = t.Resume
-	if t.Status != "queued" && t.Status != "submitting" && t.Status != "downloading" && t.Status != "discovering" {
-		t.Status = "downloading"
+	if s.retryWithoutTaskID(t) {
+		// 用户明确选择重新添加；保留私有缓存归属和原到期时间，不再引用旧结果。
+		t.Status, t.Resume = "queued", "queued"
+		t.RemoteTaskID, t.ResultID = "", ""
+		t.Files, t.Progress = []clouddrive.File{}, 0
+		t.RecoveryFileID, t.RecoveryResultID, t.RecoveryFolderID = "", "", ""
+		t.RecoveryRemoved, t.VisibilityUntil = false, 0
+	} else {
+		t.Status = t.Resume
+		if t.Status != "queued" && t.Status != "submitting" && t.Status != "downloading" && t.Status != "discovering" {
+			t.Status = "downloading"
+		}
 	}
 	t.Error = ""
 	t.Stage = ""
