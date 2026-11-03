@@ -5,7 +5,7 @@ const labels = new Map([
   ['submit', '提交'], ['reconcile', '任务对账'], ['discover', '文件确认'],
   ['poll', '轮询'], ['remote', '网盘下载'], ['file', '文件检查'],
   ['configuration', '凭证装载'], ['cancel', '取消'], ['cache', '缓存目录'],
-  ['cleanup', '自动清理'],
+  ['cleanup', '自动清理'], ['identity', '任务确认'], ['recover', '恢复下载'],
 ]);
 const runningLabels = new Map([
   ['cache', '正在核验缓存目录'],

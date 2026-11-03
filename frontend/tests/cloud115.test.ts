@@ -60,6 +60,8 @@ describe('115 workflow', () => {
     ['queued', 'cache', '缓存目录'],
     ['failed', 'reconcile', '任务对账'],
     ['failed', 'submit', '提交'],
+    ['failed', 'identity', '任务确认'],
+    ['failed', 'recover', '恢复下载'],
     ['downloading', 'poll', '轮询'],
     ['failed', 'unknown-stage', 'unknown-stage'],
   ])('%s 的 %s 阶段错误保留原因，不同时显示正在处理', async (status, stage, label) => {

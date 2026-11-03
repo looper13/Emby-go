@@ -74,6 +74,9 @@ func verifyCacheResult(ctx context.Context, p clouddrive.Provider, t store.Offli
 }
 
 func (s *Service) cleanup(p clouddrive.Provider, t store.OfflineTask) {
+	if !s.ownsTask(t) {
+		return
+	}
 	if t.CacheFolderID == "0" || t.CacheFolderID == t.FolderID {
 		return
 	}
@@ -81,6 +84,12 @@ func (s *Service) cleanup(p clouddrive.Provider, t store.OfflineTask) {
 	defer cancel()
 	ctx = cloud115.WithCleanup(ctx)
 	if t.Status != "cleanup_pending" {
+		// 保存清理前的阶段，确定性 hash 本身不能证明排队任务曾经提交。
+		switch t.Status {
+		case "failed", "timed_out", "needs_auth", "cancelled":
+		default:
+			t.Resume = t.Status
+		}
 		t.Status = "cleanup_pending"
 		t.Stage = "cleanup"
 		t.Error = "缓存已满 24 小时，正在自动删除任务缓存"
@@ -146,7 +155,11 @@ func removeCache(ctx context.Context, p clouddrive.Provider, t store.OfflineTask
 		}
 	}
 	var remote *clouddrive.RemoteTask
-	if _, direct := p.(clouddrive.TaskIDProvider); direct && !validRemoteTaskID(t.RemoteTaskID) {
+	_, stable := p.(clouddrive.StableTaskIDProvider)
+	if stable && !hasSubmittedTaskIntent(t) {
+		// 旧排队或排队时取消的任务仅清理自己的目录，不凭 hash 操作远端记录。
+		slog.Info(brand+" 清理跳过未提交的远端记录", "task_id", t.ID, "stage", "cleanup", "reason", "missing_submission_intent")
+	} else if _, direct := p.(clouddrive.TaskIDProvider); direct && !stable && !validRemoteTaskID(t.RemoteTaskID) {
 		// 旧版本或未发出请求的任务没有远端标识，仍只清理已核验的专属缓存。
 		slog.Info(brand+" 清理跳过未绑定的远端记录", "task_id", t.ID, "stage", "cleanup", "reason", "missing_remote_task_id")
 	} else {

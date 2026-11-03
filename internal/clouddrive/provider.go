@@ -53,6 +53,13 @@ type TaskIDProvider interface {
 	FindTask(context.Context, string, string) (*RemoteTask, error)
 }
 
+// StableTaskIDProvider 的远端身份由磁力确定，可在提交前保存，重启后精确确认结果。
+// 返回身份只用于定位，不能代替提交成功或结果缓存归属的核验。
+type StableTaskIDProvider interface {
+	TaskIDProvider
+	TaskIDForHash(string) (string, error)
+}
+
 // PendingTaskFolderUnknown 表示上游未完成任务可能暂不提供保存目录。
 // 缺失目录仅允许等待对账，不能用于放宽完成结果或删除操作的归属核验。
 type PendingTaskFolderUnknown interface {

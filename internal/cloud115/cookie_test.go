@@ -151,10 +151,10 @@ func TestCookieOnlyAPIsDirectoryPaginationAndUserAgent(t *testing.T) {
 	if _, err := c.URL(ctx, "pick", "Actual-Player-UA"); err == nil {
 		t.Fatal("malformed encrypted payload accepted")
 	}
-	if err := c.RemoveTask(ctx, strings.Repeat("a", 40)); err != nil {
+	if err := c.RemoveTaskIf(ctx, strings.Repeat("a", 40), *remote); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 6 {
+	if len(calls) != 8 {
 		t.Fatal(calls)
 	}
 	if _, ok := New(Tokens{Cookie: fixtureCookie}, nil).(*CookieClient); !ok {

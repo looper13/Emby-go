@@ -151,6 +151,34 @@ func (s *Service) publishStage(t *store.OfflineTask, expected *int64, stage stri
 	return true
 }
 
+// 旧的确定性身份任务只补本地标识；成功保存版本后才能查询远端。
+func (s *Service) bindStableTaskID(p clouddrive.Provider, t *store.OfflineTask, expected *int64) bool {
+	if !s.ownsTask(*t) {
+		return false
+	}
+	id, stable, err := stableTaskID(p, *t)
+	if !stable {
+		return true
+	}
+	if err == nil && !validPrivateCacheIntent(*t) {
+		err = &clouddrive.Error{Message: "缺少本任务专属缓存的持久归属，未查询远端记录", Retryable: true}
+	}
+	if err != nil {
+		s.failTaskTracking(*t, *expected, "identity", s.brand()+" "+err.Error()+"；点击重试将重新添加磁力", err)
+		return false
+	}
+	if t.RemoteTaskID == id {
+		return true
+	}
+	t.RemoteTaskID = id
+	if s.save(*t, *expected) != nil {
+		return false
+	}
+	*expected = *expected + 1
+	t.Version = *expected
+	return true
+}
+
 func reconcileErrorCategory(err error) string {
 	if err == nil {
 		return "none"
@@ -184,7 +212,7 @@ func (s *Service) findRemoteTask(ctx context.Context, p clouddrive.Provider, t s
 	}
 	stage, operation := remoteTaskStage(p), "远端任务对账"
 	if stage == "poll" {
-		operation = "远端任务轮询"
+		operation = "下载查询"
 	}
 	started := time.Now()
 	slog.Log(ctx, level, s.brand()+" "+operation+"开始", "task_id", t.ID, "status", t.Status, "stage", stage)
@@ -252,6 +280,9 @@ func (s *Service) tickQueue(cleanup bool) {
 	}
 }
 func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
+	if !s.ownsTask(t) {
+		return
+	}
 	started := time.Now()
 	due := t.NextPoll
 	if due == 0 {
@@ -286,6 +317,20 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 		t.Retryable = true
 		_ = s.save(t, expected)
 		return
+	}
+	if _, direct := p.(clouddrive.TaskIDProvider); direct && t.RecoveryResultID != "" && (t.RecoveryFolderID != t.CacheFolderID || t.CacheFolderID == "" || t.CacheFolderID == "0" || t.CacheFolderID == t.FolderID) {
+		err := &clouddrive.Error{Message: "恢复记录不属于当前任务缓存子目录，未删除远端记录", Retryable: true}
+		s.failTaskTracking(t, expected, "recover", s.brand()+" "+err.Error()+"；点击重试将重新添加磁力", err)
+		return
+	}
+	if _, stable, err := stableTaskID(p, t); stable {
+		if err != nil {
+			s.failTaskTracking(t, expected, "identity", s.brand()+" "+err.Error()+"；点击重试将重新添加磁力", err)
+			return
+		}
+		if hasSubmittedTaskIntent(t) && !s.bindStableTaskID(p, &t, &expected) {
+			return
+		}
 	}
 	if t.RecoveryResultID != "" {
 		if _, direct := p.(clouddrive.TaskIDProvider); direct && !validRemoteTaskID(t.RemoteTaskID) {
@@ -489,16 +534,29 @@ func (s *Service) process(p clouddrive.Provider, t store.OfflineTask) {
 }
 
 func (s *Service) submitTask(ctx context.Context, p clouddrive.Provider, t store.OfflineTask, expected int64) {
+	if !s.ownsTask(t) {
+		return
+	}
 	if t.CacheExpired(time.Now().Unix()) {
 		s.cleanup(p, t)
 		return
 	}
-	// 持久化创建边界后才发送请求；任务 ID 网盘重启后只精确轮询，115 保留原对账。
+	id, stable, identityErr := stableTaskID(p, t)
+	if stable && identityErr == nil && !validPrivateCacheIntent(t) {
+		identityErr = &clouddrive.Error{Message: "缺少本任务专属缓存的持久归属，未发送创建请求", Retryable: true}
+	}
+	if identityErr != nil {
+		s.failTaskTracking(t, expected, "identity", s.brand()+" "+identityErr.Error()+"；点击重试将重新添加磁力", identityErr)
+		return
+	}
+	// 创建边界同次保存稳定标识；网络结果不明时只能精确确认，不能自动再次添加。
 	t.Status = "submitting"
 	t.Resume = "submitting"
 	t.Stage, t.Error = "submit", ""
 	byID, direct := p.(clouddrive.TaskIDProvider)
-	if direct {
+	if stable {
+		t.RemoteTaskID = id
+	} else if direct {
 		// 新提交的持久意图不能携带上一次下载的任务标识。
 		t.RemoteTaskID = ""
 	}
@@ -517,7 +575,11 @@ func (s *Service) submitTask(ctx context.Context, p clouddrive.Provider, t store
 		var id string
 		id, err = byID.AddTask(ctx, t.Magnet, folder)
 		if validRemoteTaskID(id) {
-			t.RemoteTaskID = id
+			if stable && id != t.RemoteTaskID {
+				err = &clouddrive.Error{Message: "创建响应与本次稳定任务标识不匹配，未绑定其他任务", Retryable: true}
+			} else {
+				t.RemoteTaskID = id
+			}
 		} else if err == nil {
 			err = &clouddrive.Error{Message: "创建响应缺少可用任务标识，提交结果不明确", Retryable: true}
 		}
@@ -535,7 +597,7 @@ func (s *Service) submitTask(ctx context.Context, p clouddrive.Provider, t store
 			return
 		}
 		s.fail(t, expected, "submit", err)
-		if direct && validRemoteTaskID(t.RemoteTaskID) {
+		if direct && !stable && validRemoteTaskID(t.RemoteTaskID) {
 			s.preserveCancelledSubmissionReceipt(submitted, t.RemoteTaskID)
 		}
 		return
@@ -549,19 +611,23 @@ func (s *Service) submitTask(ctx context.Context, p clouddrive.Provider, t store
 		t.Stage = "poll"
 	}
 	t.Attempts = 0
-	if err := s.save(t, expected); direct && errors.Is(err, store.ErrConflict) {
+	if err := s.save(t, expected); direct && !stable && errors.Is(err, store.ErrConflict) {
 		s.preserveCancelledSubmissionReceipt(submitted, t.RemoteTaskID)
 	}
 }
 
 // 缺标识的模糊提交停止自动重写，由用户明确重试后重新进入提交队列。
 func (s *Service) failUntrackedTask(t store.OfflineTask, expected int64, stage string, err error) {
+	s.failTaskTracking(t, expected, stage, s.brand()+" 未取得远端任务标识，提交结果不明确；已停止自动提交。点击重试将重新添加磁力", err)
+}
+
+func (s *Service) failTaskTracking(t store.OfflineTask, expected int64, stage, message string, err error) {
 	if s.ctx.Err() != nil {
 		return
 	}
 	t.Resume, t.Status = t.Status, "failed"
 	t.Stage = stage
-	t.Error = s.brand() + " 未取得远端任务标识，提交结果不明确；已停止自动提交。点击重试将重新添加磁力"
+	t.Error = message
 	t.Retryable, t.NextPoll = true, 0
 	t.Attempts++
 	var remote *clouddrive.Error

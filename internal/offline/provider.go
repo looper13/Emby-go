@@ -19,19 +19,76 @@ func remoteTaskStage(p clouddrive.Provider) string {
 	return "reconcile"
 }
 
-func (s *Service) retryWithoutTaskID(t store.OfflineTask) bool {
-	if validRemoteTaskID(t.RemoteTaskID) {
-		return false
+func validPrivateCacheIntent(t store.OfflineTask) bool {
+	return t.ID != "" && t.AccountID != "" && t.FolderID != "" && t.FolderID != "0" &&
+		t.CacheFolderID != "" && t.CacheFolderID != "0" && t.CacheFolderID != t.FolderID &&
+		t.CreatedAt > 0 && t.ExpiresAt > 0
+}
+
+func hasSubmittedTaskIntent(t store.OfflineTask) bool {
+	if t.RecoveryResultID != "" {
+		return true
 	}
+	status := t.Status
+	switch status {
+	case "failed", "timed_out", "needs_auth", "cancelled", "cleanup_pending":
+		status = t.Resume
+	}
+	switch status {
+	case "submitting", "downloading", "discovering", "ready", "waiting_selection":
+		return true
+	}
+	// 老版本清理状态未保存恢复阶段，已绑定的结果仍可证明曾经提交。
+	return t.Status == "cleanup_pending" && t.Resume == "" && (t.ResultID != "" || len(t.Files) != 0)
+}
+
+// 确定性标识只用于定位；生成前核验磁力与持久 hash，不能覆盖已有的错误标识。
+func stableTaskID(p clouddrive.Provider, t store.OfflineTask) (string, bool, error) {
+	stable, ok := p.(clouddrive.StableTaskIDProvider)
+	if !ok {
+		return "", false, nil
+	}
+	_, hash, err := clouddrive.NormalizeMagnet(t.Magnet)
+	if err != nil || !strings.EqualFold(hash, t.InfoHash) {
+		return "", true, &clouddrive.Error{Message: "磁力与保存的 InfoHash 不一致，未查询或提交任务", Retryable: true}
+	}
+	id, err := stable.TaskIDForHash(hash)
+	if err != nil || !validRemoteTaskID(id) {
+		return "", true, &clouddrive.Error{Message: "无法根据磁力生成可靠的远端任务标识", Retryable: true}
+	}
+	if t.RemoteTaskID != "" && t.RemoteTaskID != id {
+		return id, true, &clouddrive.Error{Message: "保存的远端任务标识与磁力不匹配，未使用或覆盖该记录", Retryable: true}
+	}
+	return id, true, nil
+}
+
+func (s *Service) retryWithoutTaskID(t store.OfflineTask) bool {
 	if s.provider != nil {
 		p, account, err := s.provider()
 		if err == nil {
+			if account != t.AccountID {
+				return false
+			}
+			if _, direct := p.(clouddrive.TaskIDProvider); direct && t.RecoveryResultID != "" && t.RecoveryFolderID != t.CacheFolderID {
+				return true
+			}
+			if id, stable, err := stableTaskID(p, t); stable {
+				if err != nil {
+					// 错误标识只能在用户明确重新添加时清除，不可自动冒用。
+					return true
+				}
+				if t.RemoteTaskID == id {
+					return false
+				}
+				// 老的已提交任务可本地补标识后继续查询，尚未提交的任务才重新添加。
+				return !hasSubmittedTaskIntent(t) || !validPrivateCacheIntent(t)
+			}
 			_, direct := p.(clouddrive.TaskIDProvider)
-			return direct && account == t.AccountID
+			return direct && !validRemoteTaskID(t.RemoteTaskID)
 		}
 	}
 	// 凭据尚未装载时仍能保存用户的重试意图，下一轮队列再检查连接。
-	return strings.HasPrefix(t.AccountID, store.CloudGuangyaAccount(""))
+	return !validRemoteTaskID(t.RemoteTaskID) && strings.HasPrefix(t.AccountID, store.CloudGuangyaAccount(""))
 }
 
 func sameCancelledSubmission(submitted, current store.OfflineTask) bool {
@@ -45,17 +102,27 @@ func sameCancelledSubmission(submitted, current store.OfflineTask) bool {
 		current.RecoveryFileID == submitted.RecoveryFileID && current.RecoveryResultID == submitted.RecoveryResultID && current.RecoveryFolderID == submitted.RecoveryFolderID && current.RecoveryRemoved == submitted.RecoveryRemoved
 }
 
-// 支持任务 ID 的网盘只能查询本次提交，缺失标识时禁止回退扫描磁力历史。
+// 只按明确身份查询；确定性标识可本地推导，其他网盘缺标识时禁止扫描历史。
 func lookupRemoteTask(ctx context.Context, p clouddrive.Provider, task store.OfflineTask) (*clouddrive.RemoteTask, error) {
 	byID, ok := p.(clouddrive.TaskIDProvider)
 	if !ok {
 		return p.Find(ctx, task.InfoHash)
 	}
-	if !validRemoteTaskID(task.RemoteTaskID) {
+	id := task.RemoteTaskID
+	if derived, stable, err := stableTaskID(p, task); stable {
+		if err != nil {
+			return nil, err
+		}
+		if !hasSubmittedTaskIntent(task) || !validPrivateCacheIntent(task) {
+			return nil, &clouddrive.Error{Message: "未确认本任务提交与专属缓存的关系，未查询远端记录", Retryable: true}
+		}
+		id = derived
+	}
+	if !validRemoteTaskID(id) {
 		return nil, &clouddrive.Error{Message: "本任务缺少远端任务标识，无法精确查询；不会搜索历史或自动重复提交", Retryable: true}
 	}
-	remote, err := byID.FindTask(ctx, task.InfoHash, task.RemoteTaskID)
-	if err == nil && remote != nil && (remote.RemoteID != task.RemoteTaskID || remote.Hash != "" && remote.Hash != task.InfoHash) {
+	remote, err := byID.FindTask(ctx, task.InfoHash, id)
+	if err == nil && remote != nil && (remote.RemoteID != id || remote.Hash != "" && !strings.EqualFold(remote.Hash, task.InfoHash)) {
 		return nil, &clouddrive.Error{Message: "远端返回了其他任务身份，未使用该记录", Retryable: true}
 	}
 	return remote, err

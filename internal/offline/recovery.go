@@ -55,8 +55,8 @@ func (s *Service) prepareRecovery(ctx context.Context, p clouddrive.Provider, t 
 		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "未确认已完成记录与缺失文件的关系，未重新提交", Retryable: true})
 		return
 	}
-	if _, direct := p.(clouddrive.TaskIDProvider); direct && (!validRemoteTaskID(t.RemoteTaskID) || remote.RemoteID != t.RemoteTaskID) {
-		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "缺失结果没有绑定本次远端任务标识，未重新提交", Retryable: true})
+	if _, direct := p.(clouddrive.TaskIDProvider); direct && (!validRemoteTaskID(t.RemoteTaskID) || remote.RemoteID != t.RemoteTaskID || remote.FolderID != t.CacheFolderID) {
+		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: "缺失结果没有绑定本次远端任务和缓存子目录，未删除或重新提交", Retryable: true})
 		return
 	}
 	if t.Recoveries >= maxAutomaticRecoveries {
@@ -88,6 +88,9 @@ func (s *Service) prepareRecovery(ctx context.Context, p clouddrive.Provider, t 
 }
 
 func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t store.OfflineTask) {
+	if !s.ownsTask(t) {
+		return
+	}
 	cache, ok := p.(clouddrive.CacheProvider)
 	if !ok {
 		message := "请更新 Cookie 后恢复下载"
@@ -96,6 +99,21 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 		}
 		s.fail(t, t.Version, "recover", &clouddrive.Error{Message: message, Auth: true})
 		return
+	}
+	if _, direct := p.(clouddrive.TaskIDProvider); direct {
+		if t.RecoveryFolderID != t.CacheFolderID || t.CacheFolderID == "" || t.CacheFolderID == "0" || t.CacheFolderID == t.FolderID {
+			err := &clouddrive.Error{Message: "恢复记录不属于当前任务缓存子目录，未删除远端记录", Retryable: true}
+			s.failTaskTracking(t, t.Version, "recover", s.brand()+" "+err.Error()+"；点击重试将重新添加磁力", err)
+			return
+		}
+		expected := t.Version
+		if !s.bindStableTaskID(p, &t, &expected) {
+			return
+		}
+		if !validRemoteTaskID(t.RemoteTaskID) {
+			s.failUntrackedTask(t, t.Version, "recover", nil)
+			return
+		}
 	}
 	remote, err := s.findRemoteTask(ctx, p, t)
 	if err != nil {
@@ -121,7 +139,7 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 		return
 	}
 	if remote.Status != 2 || remote.ResultID != t.RecoveryResultID || remote.FolderID != t.RecoveryFolderID {
-		// 新下载替换了旧记录，只继续对账，不删除新记录。
+		// 新下载替换了旧记录，只继续查询，不删除新记录。
 		clearIntent("downloading")
 		return
 	}
@@ -179,11 +197,14 @@ func (s *Service) recoverResult(ctx context.Context, p clouddrive.Provider, t st
 
 func (s *Service) recoverDiscovery(ctx context.Context, p clouddrive.Provider, t store.OfflineTask, missingID string) {
 	if remoteTaskStage(p) == "poll" {
+		expected := t.Version
+		if !s.bindStableTaskID(p, &t, &expected) {
+			return
+		}
 		if !validRemoteTaskID(t.RemoteTaskID) {
 			s.failUntrackedTask(t, t.Version, "recover", nil)
 			return
 		}
-		expected := t.Version
 		if !s.publishStage(&t, &expected, "poll") {
 			return
 		}
