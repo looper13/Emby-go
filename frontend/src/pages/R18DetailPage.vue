@@ -16,7 +16,9 @@ import ReadState from '../components/common/ReadState.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import { viewHistoryKey } from '../router/view-history';
 import { useR18Playback } from '../composables/useR18Playback';
-import { magnetHash, offlineLabels, type R18PlaybackVersion } from '../lib/r18-playback';
+import { cloud115Api, type CloudProvider } from '../api/cloud115';
+import { guangyaApi } from '../api/guangya';
+import { magnetHash, type R18PlaybackVersion } from '../lib/r18-playback';
 import { playbackType } from '../lib/player';
 
 const route = useRoute(), scope = usePageRequest(), resourceScope = usePageRequest(), localScope = usePageRequest(), toasts = useToastStore();
@@ -38,12 +40,14 @@ function playPreview() {
 }
 const selectedLocal = computed(() => localSources.value.find(source => source.id === selectedLocalId.value));
 const magnetEnabled = computed(() => route.name === 'r18-detail' && resolvedIdentity.value === identity.value && !!video.value && (!localSources.value.length || magnetFlow.value));
-const playback = useR18Playback(() => ({ library: libraryId.value, video: id.value, title: video.value?.title || '播放' }), resources, () => magnetEnabled.value);
+const selectedCloud = ref<CloudProvider>('115');
+const cloudConnection = computed(() => selectedCloud.value === 'guangya' ? { id: 'guangya' as const, name: '光鸭', api: guangyaApi } : { id: '115' as const, name: '115', api: cloud115Api });
+const playback = useR18Playback(() => ({ library: libraryId.value, video: id.value, title: video.value?.title || '播放' }), resources, () => magnetEnabled.value, () => cloudConnection.value);
 const { versions, loaded: offlineLoaded, busy: playbackBusy, state: offlineState, waiting, message: playbackMessage } = playback;
 const selectedVersionId = ref('');
 const selectedVersion = computed(() => versions.value.find(v => v.id === selectedVersionId.value));
 const canPlay = (version?: R18PlaybackVersion) => !!version && (auth.isAdministrator || !!version.source);
-function versionStatus(version?: R18PlaybackVersion) { return !magnetEnabled.value ? '115 状态未读取' : version?.source ? '已就绪' : version?.task ? offlineLabels[version.task.status] : '未下载'; }
+function versionStatus(version?: R18PlaybackVersion) { return !magnetEnabled.value ? '网盘状态未读取' : version?.source ? '已就绪' : version?.task ? playback.statusLabel(version.task.status) : '未下载'; }
 function choose(version: R18PlaybackVersion) { selectedVersionId.value = version.id; void playback.play(version); }
 function resourceVersion(resource: R18Resource) { return versions.value.find(v => v.id === magnetHash(resource.magnet)); }
 function versionLabel(version: R18PlaybackVersion) {
@@ -91,7 +95,7 @@ async function loadResources(more = false) {
   finally { if (request.isCurrent()) resourceLoading.value = false; }
 }
 async function load() {
-  // 先撤销已解析身份，同步停止旧影片的 115 请求，再读取新详情。
+  // 先撤销已解析身份，同步停止旧影片的网盘请求，再读取新详情。
   resolvedIdentity.value = ''; magnetFlow.value = false;
   const request = scope.begin(); resourceScope.cancel(); localScope.cancel(); loading.value = true; error.value = '';
   localSources.value = []; selectedLocalId.value = ''; localBusy.value = false; localError.value = ''; libraryName.value = '';
@@ -142,11 +146,12 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
         <div v-if="localSources.length && !magnetFlow" class="r18-playback r18-local-playback">
           <label class="version-choice" for="r18-local-version"><span>本地 STRM 版本 · {{ localSources.length }} 个可播放源</span><select id="r18-local-version" v-model="selectedLocalId" :disabled="localBusy"><option v-for="source in localSources" :key="source.id" :value="source.id">{{ source.library_name }} · {{ source.name }}</option></select></label>
           <div class="r18-play-actions"><button id="detail-play" class="btn btn-accent btn-play-large" :disabled="localBusy || !selectedLocal" @click="playLocal"><Play :size="17" fill="currentColor" aria-hidden="true" /> {{ localBusy ? '正在检查本地版本…' : '播放本地 STRM' }}</button><button class="btn" @click="showMagnets"><Magnet :size="16" aria-hidden="true" /> 查看磁力列表</button></div>
-          <p class="hint">优先使用已有本地 STRM，沿用普通影片播放；不提交磁力、不读取或轮询 115 下载任务。</p>
+          <p class="hint">优先使用已有本地 STRM，沿用普通影片播放；不提交磁力、不读取或轮询网盘下载任务。</p>
           <p v-if="localError" class="r18-local-error" role="alert">{{ localError }}。不会自动转入磁力下载，可刷新详情或手动选择磁力流程。</p>
         </div>
         <div v-else class="r18-playback">
           <button v-if="localSources.length" id="r18-use-local" class="btn btn-sm" @click="magnetFlow = false">返回本地 STRM 播放</button>
+          <label class="version-choice r18-cloud-choice" for="r18-cloud-provider"><span>播放网盘</span><select id="r18-cloud-provider" v-model="selectedCloud"><option value="115">115 网盘</option><option value="guangya">光鸭网盘</option></select></label>
           <label v-if="versions.length" class="version-choice" for="r18-play-version"><span>播放版本 · {{ versions.length }} 个磁力版本</span><select id="r18-play-version" v-model="selectedVersionId" :disabled="playbackBusy"><option v-for="(version, index) in versions" :key="version.id" :value="version.id">版本 {{ index + 1 }} · {{ versionLabel(version) }} · {{ versionStatus(version) }}</option></select></label>
           <div class="r18-play-actions"><button id="detail-play" class="btn btn-accent btn-play-large" :disabled="!offlineLoaded || playbackBusy || !offlineState.configured || !canPlay(selectedVersion) || waiting === selectedVersionId" @click="selectedVersion && playback.play(selectedVersion)"><Play :size="17" fill="currentColor" aria-hidden="true" /> {{ waiting === selectedVersionId && waiting ? '准备播放中…' : '播放' }}</button><button class="btn" @click="showMagnets"><Magnet :size="16" aria-hidden="true" /> 查看磁力列表</button></div>
           <p v-if="waiting" class="hint" role="status">{{ playbackMessage }}</p>
@@ -157,7 +162,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
     <section id="r18-magnets" class="panel r18-resources" :aria-busy="resourceLoading">
       <div class="panel-head"><h2><Magnet :size="18" aria-hidden="true" /> JavDB 磁力列表</h2><span class="hint">已加载 {{ magnetVersions.length + extraVersions.length }} 个磁力版本{{ hasMore ? ' · 还有更多' : '' }}</span></div>
       <p class="hint">合并 JavDB 在线与 AVdb 本地资源库磁力，相同 BTIH 的多来源合并展示。AVdb 本地资源库磁力不代表本服务已有 STRM；已有 STRM 通过上方本地版本直接播放。磁力资源可用性未经下载验证。</p>
-      <button v-if="localSources.length && !magnetFlow" id="r18-use-magnets" class="btn" @click="magnetFlow = true"><Magnet :size="16" aria-hidden="true" /> 手动使用 115 磁力流程</button>
+      <button v-if="localSources.length && !magnetFlow" id="r18-use-magnets" class="btn" @click="magnetFlow = true"><Magnet :size="16" aria-hidden="true" /> 手动使用网盘磁力流程</button>
       <ReadState :loading="resourceLoading" :empty="!resources.length" :error="resourceError" @retry="loadResources(false)" />
       <EmptyState v-if="!resourceLoading && !resourceError && !resources.length && !extraVersions.length" title="暂无匹配的磁力资源" hint="当前影片的 JavDB 在线与 AVdb 本地资源库来源暂未提供有效磁力链接。" />
       <article v-for="(r, index) in magnetVersions" :key="r.id" class="r18-resource" :class="{ 'is-selected': resourceVersion(r)?.id === selectedVersionId }">
@@ -189,6 +194,7 @@ watch(() => route.fullPath, () => { if (route.name === 'r18-detail') void load()
 .r18-facts { display:flex; flex-wrap:wrap; gap:22px; margin:26px 0; }
 .r18-facts dt { color:var(--muted); font-size:12px; margin-bottom:6px; }.r18-facts dd { margin:0; overflow-wrap:anywhere; }
 .r18-playback { max-width:560px; }.version-choice { display:grid; gap:8px; color:var(--muted); font-size:12px; }.version-choice select { width:100%; min-width:0; min-height:44px; }.r18-play-actions { display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }.btn-play-large { padding:0 20px; font-size:14px; font-weight:600; box-shadow:0 4px 14px rgba(26,113,255,.25); }.r18-playback .hint { line-height:1.8; }
+.r18-cloud-choice { margin-bottom:14px; }
 .r18-resources h2 { display:flex; gap:8px; align-items:center; }
 .r18-resource { padding:20px 0; border-bottom:1px solid var(--line); }.r18-resource.is-selected h3 { color:var(--accent); }.r18-resources { margin:24px 0; scroll-margin-top:24px; }.r18-resource .btn,.r18-play-actions .btn { min-height:44px; }
 .r18-resource-head { display:flex; justify-content:space-between; gap:16px; align-items:baseline; }.r18-resource-head h3 { margin:0; font-size:15px; line-height:1.7; overflow-wrap:anywhere; }.r18-resource-head > span { flex-shrink:0; color:var(--accent); font-size:12px; }

@@ -4,6 +4,7 @@ import { createPinia, disposePinia } from 'pinia';
 import { reactive } from 'vue';
 import { apiClient } from '../src/api/client';
 import { cloud115Api, type OfflineState } from '../src/api/cloud115';
+import { guangyaApi } from '../src/api/guangya';
 import { parseR18LocalSource, parseR18Resources, r18Api, type R18LocalSource, type R18Video } from '../src/api/r18';
 import R18DetailPage from '../src/pages/R18DetailPage.vue';
 import { usePlayerStore } from '../src/stores/player';
@@ -21,7 +22,7 @@ const empty: OfflineState = { configured: false, tasks: [], sources: [] };
 let wrapper: VueWrapper | undefined, pinia: ReturnType<typeof createPinia>;
 function render() { wrapper = mount(R18DetailPage, { global: { plugins: [pinia], stubs: { RouterLink: true } } }); return wrapper; }
 function nextVideo(id: string) { route.params = { libraryId: '3', id }; route.fullPath = `/r18/3/item/${id}`; }
-function expectNo115() { for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) expect(cloud115Api[method]).not.toHaveBeenCalled(); }
+function expectNo115() { for (const api of [cloud115Api, guangyaApi]) for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) expect(api[method]).not.toHaveBeenCalled(); }
 beforeEach(() => {
   pinia = createPinia(); route.name = 'r18-detail'; route.params = { libraryId: '2', id: 'video' }; route.fullPath = '/r18/2/item/video';
   vi.spyOn(r18Api, 'detail').mockResolvedValue({ video, library_name: '在线资料库', playable: true, local_sources: sources });
@@ -29,6 +30,7 @@ beforeEach(() => {
   vi.spyOn(r18Api, 'localPlayback').mockImplementation(async (_library, _video, sourceId) => ({ source: sources.find(source => source.id === sourceId)! }));
   vi.spyOn(cloud115Api, 'state').mockResolvedValue(empty);
   for (const method of ['submit', 'prepare', 'select', 'change'] as const) vi.spyOn(cloud115Api, method).mockResolvedValue(empty);
+  for (const method of ['state', 'submit', 'prepare', 'select', 'change'] as const) vi.spyOn(guangyaApi, method).mockResolvedValue(empty);
 });
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -67,6 +69,17 @@ describe('JavDB 本地 STRM 优先播放', () => {
     expect(w.get('#detail-play').text()).toBe('播放本地 STRM'); expect(w.find('.offline-panel').exists()).toBe(false);
     await vi.advanceTimersByTimeAsync(15000); expect(cloud115Api.state).toHaveBeenCalledTimes(1);
     expect(cloud115Api.submit).not.toHaveBeenCalled();
+  });
+  it('本地播放优先，手动进入后可选择光鸭，返回本地停止两个网盘请求', async () => {
+    vi.useFakeTimers(); const w = render(); await flushPromises(); expectNo115(); expect(w.find('#r18-cloud-provider').exists()).toBe(false);
+    await w.get('#r18-use-magnets').trigger('click'); await flushPromises();
+    expect(w.get('#r18-cloud-provider').element).toHaveProperty('value', '115');
+    await w.get('#r18-cloud-provider').setValue('guangya'); await flushPromises();
+    expect(guangyaApi.state).toHaveBeenCalledTimes(1); expect(w.get('.offline-panel h2').text()).toBe('光鸭 播放源');
+    expect(cloud115Api.submit).not.toHaveBeenCalled(); expect(guangyaApi.submit).not.toHaveBeenCalled();
+    await w.get('#r18-use-local').trigger('click'); await flushPromises(); await vi.advanceTimersByTimeAsync(15000);
+    expect(w.get('#detail-play').text()).toBe('播放本地 STRM'); expect(w.find('.offline-panel').exists()).toBe(false);
+    expect(cloud115Api.state).toHaveBeenCalledTimes(1); expect(guangyaApi.state).toHaveBeenCalledTimes(1);
   });
   it('详情尚未解析时不读取115，无本地版本解析完成后沿用115流程', async () => {
     let finish!: (value: Awaited<ReturnType<typeof r18Api.detail>>) => void;

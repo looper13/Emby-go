@@ -1,31 +1,32 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { Play } from '@lucide/vue';
 import { useAuthStore } from '../../stores/auth';
 import { useR18Playback, type R18Playback } from '../../composables/useR18Playback';
-import { magnetHash, offlineLabels as labels, offlineActive as active, mainVideo } from '../../lib/r18-playback';
+import { magnetHash, offlineActive as active, mainVideo } from '../../lib/r18-playback';
 import { externalPlayerURL } from '../../lib/external-player';
 const props = defineProps<{ library: string; video: string; title: string; playback?: R18Playback }>();
 const auth = useAuthStore(), workflow = props.playback ?? useR18Playback(() => props);
-const { state, loaded, busy, error, waiting, message, selections, load, select, change, stopWaiting } = workflow;
+const { state, loaded, busy, error, waiting, message, selections, providerName, statusLabel, load, select, change, stopWaiting } = workflow;
 const magnet = ref(''), selectedSource = ref('');
 const stages: Record<string, string> = { submit: '提交', reconcile: '任务对账', discover: '文件确认', poll: '轮询', remote: '网盘下载', file: '文件检查', configuration: '凭证装载', cancel: '取消', cache: '缓存目录', cleanup: '自动清理' };
 const source = computed(() => state.value.sources.find(s => s.Id === selectedSource.value) ?? state.value.sources[0]);
 async function playManual() {
-  const value = magnet.value.trim(), hash = magnetHash(value);
+  const value = magnet.value.trim(), hash = magnetHash(value), provider = providerName.value;
   if (!hash) { error.value = '请输入有效的 BTIH 磁力链接'; return; }
   await workflow.play({ id: hash, name: '手动磁力版本', magnet: value, resourceId: '' });
-  if (!error.value) magnet.value = '';
+  if (!error.value && providerName.value === provider && magnet.value.trim() === value) magnet.value = '';
 }
+watch(providerName, () => { magnet.value = ''; selectedSource.value = ''; }, { flush: 'sync' });
 function play() { const version = workflow.versions.value.find(v => v.source?.Id === source.value?.Id); if (version) void workflow.play(version); }
 function external() { return source.value ? externalPlayerURL('potplayer', new URL(source.value.DirectStreamUrl, location.origin).href) : ''; }
 </script>
 <template>
   <section class="panel offline-panel" :aria-busy="busy">
-    <div class="panel-head"><h2>115 播放源</h2><button class="btn btn-sm" :disabled="busy" @click="load">刷新状态</button></div>
+    <div class="panel-head"><h2>{{ providerName }} 播放源</h2><button class="btn btn-sm" :disabled="busy" @click="load">刷新状态</button></div>
     <p v-if="error" class="offline-error" role="alert">{{ error }}</p>
     <p v-if="!loaded && !error" class="hint">正在读取本地任务…</p>
-    <p v-else-if="loaded && !state.configured" class="hint">尚未配置 115 连接。<RouterLink v-if="auth.isAdministrator" to="/settings">前往设置</RouterLink></p>
+    <p v-else-if="loaded && !state.configured" class="hint">尚未配置 {{ providerName }} 连接。<RouterLink v-if="auth.isAdministrator" to="/settings">前往设置</RouterLink></p>
     <div v-if="waiting" class="offline-wait" role="status"><span>{{ message }}</span><button class="btn btn-sm" @click="stopWaiting">停止自动播放</button></div>
     <div v-if="source" class="offline-play">
       <label for="r18-cloud-source">播放版本<select id="r18-cloud-source" v-model="selectedSource"><option value="">默认就绪版本</option><option v-for="s in state.sources" :key="s.Id" :value="s.Id">{{ s.Name }}{{ s.Default ? '（默认）' : '' }}</option></select></label>
@@ -35,9 +36,9 @@ function external() { return source.value ? externalPlayerURL('potplayer', new U
     <p class="hint">播放按实际客户端 User-Agent 获取临时直链并 302 跳转；不转码、不记录 R18 观看进度。浏览器不支持的编码可使用外部播放器。</p>
     <article v-for="t in state.tasks" :key="t.id" class="offline-task">
       <p class="offline-version">{{ workflow.versions.value.find(v => v.task?.id === t.id)?.name || '磁力版本' }}<span v-if="t.info_hash" class="mono">{{ t.info_hash.slice(0, 12) }}</span></p>
-      <div class="offline-status"><strong>{{ labels[t.status] }}</strong><span>{{ t.progress }}%</span></div>
+      <div class="offline-status"><strong>{{ statusLabel(t.status) }}</strong><span>{{ t.progress }}%</span></div>
       <p v-if="t.expires_at && t.status !== 'expired'" class="hint">自动删除时间：{{ new Date(t.expires_at * 1000).toLocaleString() }}（缓存保留 24 小时）</p>
-      <progress v-if="active(t)" :value="t.progress" max="100" :aria-label="labels[t.status]" />
+      <progress v-if="active(t)" :value="t.progress" max="100" :aria-label="statusLabel(t.status)" />
       <p v-if="t.error" class="offline-error">{{ t.stage ? `${stages[t.stage] || t.stage}：` : '' }}{{ t.error }}</p>
       <div v-if="t.files.length" class="offline-select"><label :for="`file-${t.id}`">正片文件<select :id="`file-${t.id}`" v-model="selections[t.id]" :disabled="busy"><option v-for="f in t.files" :key="f.id" :value="f.id">{{ f.path }} · {{ (f.size / 1024 ** 3).toFixed(2) }} GiB{{ f.id === mainVideo(t.files)?.id ? '（推荐正片）' : '' }}</option></select></label><button class="btn" :disabled="busy || !selections[t.id]" @click="select(t)">设为默认播放源</button></div>
       <div class="offline-actions"><button v-if="active(t)" class="btn btn-sm" :disabled="busy" @click="change(t, 'cancel')">取消本地等待</button><button v-if="t.retryable && !active(t) && !['ready', 'waiting_selection'].includes(t.status)" class="btn btn-sm" :disabled="busy" @click="change(t, 'retry')">重试当前阶段</button></div>

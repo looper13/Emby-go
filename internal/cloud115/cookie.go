@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"emby-go/internal/clouddrive"
 	"github.com/SheltonZhu/115driver/pkg/crypto/m115"
 )
 
@@ -25,12 +26,7 @@ const cookieOfflineUserAgent = "Mozilla/5.0 115disk/" + cookieOfflineAppVersion 
 
 // Cache operations are separate from legacy OAuth providers. Only dedicated,
 // service-owned children of the named cache root may be removed by the worker.
-type CacheProvider interface {
-	Provider
-	Mkdir(context.Context, string, string) (string, error)
-	Delete(context.Context, string) error
-	RemoveTask(context.Context, string) error
-}
+type CacheProvider = clouddrive.CacheProvider
 
 func NormalizeCookie(raw string) (string, error) {
 	if len(raw) > 16384 || strings.ContainsAny(raw, "\r\n") {

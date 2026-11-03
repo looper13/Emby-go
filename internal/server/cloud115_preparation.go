@@ -23,7 +23,7 @@ type preparedCloudFile struct {
 // Only fresh metadata crosses this single-play, bounded in-memory handoff.
 // Neither credentials nor signed CDN URLs are cached or included in the nonce.
 func (a *App) prepareCloudFile(c *gin.Context, l store.Library, video string, task store.OfflineTask, file cloud115.File) {
-	conn, err := a.db.Cloud115Connection()
+	conn, err := a.offlineConnection(requestCloudProvider(c))
 	if err != nil || conn.AccountID != task.AccountID {
 		return
 	}
@@ -46,7 +46,7 @@ func (a *App) takeCloudPreparation(c *gin.Context, l store.Library, video string
 	if len(nonce) != 36 {
 		return cloud115.File{}, false
 	}
-	conn, err := a.db.Cloud115Connection()
+	conn, err := a.offlineConnection(requestCloudProvider(c))
 	if err != nil {
 		return cloud115.File{}, false
 	}

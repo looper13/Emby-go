@@ -100,7 +100,7 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video) gin.H {
 		"ImageTags": gin.H{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3.0,
 		"UserData":    gin.H{"Key": id, "IsFavorite": false, "Played": false, "PlayCount": 0, "PlaybackPositionTicks": 0},
 		"ProviderIds": gin.H{"JavDB": v.ContentID, "DVD": v.Number},
-		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。在线磁力请在网页详情查看，管理员可通过 115 准备播放源。",
+		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。在线磁力请在网页详情查看，管理员可通过 115 或光鸭网盘准备播放源。",
 		"People":      []gin.H{}, "Genres": []string{}, "Tags": []string{}, "Studios": []gin.H{},
 	}
 	if len(v.Tags) > 0 {
@@ -545,8 +545,9 @@ func (a *App) r18CompatPlayback(c *gin.Context) {
 				requested = body.Source
 			}
 		}
-		// 默认只提供本地版本；显式选择 115 时才读取该来源的就绪绑定。
-		if len(sources) == 0 || strings.HasPrefix(requested, "115-") {
+		// 本地版本优先；显式选择网盘版本时再加入网盘的就绪来源。
+		_, cloudRequested := cloudSourceProvider(requested)
+		if len(sources) == 0 || cloudRequested {
 			sources = append(sources, a.r18ReadySources(c, l, v.ID)...)
 		}
 		if requested != "" {
@@ -559,7 +560,7 @@ func (a *App) r18CompatPlayback(c *gin.Context) {
 			sources = selected
 		}
 		if len(sources) == 0 {
-			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有有效的本地 STRM 或已就绪 115 播放源，请刷新并选择其它播放方式"})
+			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有有效的本地 STRM 或已就绪网盘播放源，请刷新并选择其它播放方式"})
 			return
 		}
 		c.JSON(200, gin.H{"MediaSources": sources, "PlaySessionId": randomSessionID()})

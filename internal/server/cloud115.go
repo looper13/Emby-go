@@ -195,13 +195,13 @@ func (a *App) r18Offline(c *gin.Context) {
 	if !ok {
 		return
 	}
-	conn, err := a.db.Cloud115Connection()
+	conn, err := a.offlineConnection(requestCloudProvider(c))
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(200, gin.H{"configured": false, "tasks": []gin.H{}, "sources": []gin.H{}})
 		return
 	}
 	if err != nil {
-		c.JSON(500, gin.H{"error": "读取 115 状态失败"})
+		c.JSON(500, gin.H{"error": "读取 " + cloudName(requestCloudProvider(c)) + " 状态失败"})
 		return
 	}
 	bindings, err := a.db.OfflineBindings(l, c.Param("video"), conn.AccountID)
@@ -236,7 +236,7 @@ func (a *App) r18Offline(c *gin.Context) {
 func (a *App) createR18Offline(c *gin.Context) {
 	started := time.Now()
 	defer func() {
-		slog.Debug("115 播放阶段耗时", "stage", "local_submit", "elapsed_ms", time.Since(started).Milliseconds())
+		slog.Debug(cloudName(requestCloudProvider(c))+" 播放阶段耗时", "stage", "local_submit", "elapsed_ms", time.Since(started).Milliseconds())
 	}()
 	l, v, client, ok := a.offlineItem(c)
 	if !ok {
@@ -256,7 +256,7 @@ func (a *App) createR18Offline(c *gin.Context) {
 		defer cancel()
 		started := time.Now()
 		resource, err := client.Resource(ctx, v, req.ResourceID)
-		slog.Debug("115 播放阶段耗时", "stage", "resource_lookup", "elapsed_ms", time.Since(started).Milliseconds())
+		slog.Debug(cloudName(requestCloudProvider(c))+" 播放阶段耗时", "stage", "resource_lookup", "elapsed_ms", time.Since(started).Milliseconds())
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(404, gin.H{"error": "资源不存在、已拒绝或不属于当前影片"})
 			return
@@ -272,9 +272,10 @@ func (a *App) createR18Offline(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	conn, err := a.db.Cloud115Connection()
+	provider := requestCloudProvider(c)
+	conn, err := a.offlineConnection(provider)
 	if err != nil {
-		c.JSON(409, gin.H{"error": "请先配置 115 连接"})
+		c.JSON(409, gin.H{"error": "请先配置 " + cloudName(provider) + " 连接"})
 		return
 	}
 	_, err = a.db.CreateOfflineTask(conn.AccountID, conn.FolderID, magnet, hash, l, v.ID, req.ResourceID)
@@ -282,20 +283,20 @@ func (a *App) createR18Offline(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存离线任务失败"})
 		return
 	}
-	a.offlineService.Wake()
+	a.offlineQueue(provider).Wake()
 	a.r18Offline(c)
 }
 func (a *App) prepareR18Offline(c *gin.Context) {
 	started := time.Now()
 	defer func() {
-		slog.Debug("115 播放阶段耗时", "stage", "prepare", "elapsed_ms", time.Since(started).Milliseconds())
+		slog.Debug(cloudName(requestCloudProvider(c))+" 播放阶段耗时", "stage", "prepare", "elapsed_ms", time.Since(started).Milliseconds())
 	}()
 	l, v, _, ok := a.offlineItem(c)
 	if !ok {
 		return
 	}
 	source := c.Query("source_id")
-	if !strings.HasPrefix(source, "115-") || len(source) > 128 {
+	if !strings.HasPrefix(source, requestCloudProvider(c)+"-") || len(source) > 128 {
 		c.JSON(400, gin.H{"error": "请指定播放版本"})
 		return
 	}
@@ -304,7 +305,7 @@ func (a *App) prepareR18Offline(c *gin.Context) {
 	}
 }
 func (a *App) boundTask(c *gin.Context, l store.Library, id string) bool {
-	conn, err := a.db.Cloud115Connection()
+	conn, err := a.offlineConnection(requestCloudProvider(c))
 	if err != nil {
 		return false
 	}
@@ -322,7 +323,7 @@ func (a *App) boundTask(c *gin.Context, l store.Library, id string) bool {
 func (a *App) selectR18Offline(c *gin.Context) {
 	started := time.Now()
 	defer func() {
-		slog.Debug("115 播放阶段耗时", "stage", "selection", "elapsed_ms", time.Since(started).Milliseconds())
+		slog.Debug(cloudName(requestCloudProvider(c))+" 播放阶段耗时", "stage", "selection", "elapsed_ms", time.Since(started).Milliseconds())
 	}()
 	l, v, _, ok := a.offlineItem(c)
 	if !ok {
@@ -343,7 +344,7 @@ func (a *App) selectR18Offline(c *gin.Context) {
 		return
 	}
 	if req.Prepare {
-		if _, _, ok := a.cloudPlaybackFile(c, l, v.ID, "115-"+req.Task, true); !ok {
+		if _, _, ok := a.cloudPlaybackFile(c, l, v.ID, requestCloudProvider(c)+"-"+req.Task, true); !ok {
 			return
 		}
 	}
@@ -369,9 +370,9 @@ func (a *App) changeR18Offline(c *gin.Context) {
 	var err error
 	switch c.Param("action") {
 	case "retry":
-		err = a.offlineService.Retry(id, req.Version)
+		err = a.offlineQueue(requestCloudProvider(c)).Retry(id, req.Version)
 	case "cancel":
-		err = a.offlineService.Cancel(id, req.Version)
+		err = a.offlineQueue(requestCloudProvider(c)).Cancel(id, req.Version)
 	default:
 		c.Status(404)
 		return
@@ -399,15 +400,19 @@ func (a *App) cloudStreamURL(l store.Library, video, source string) string {
 	return streamURL(id) + "?" + url.Values{"MediaSourceId": {source}, "playback_token": {ticket}, "Static": {"true"}}.Encode()
 }
 func (a *App) r18ReadySources(c *gin.Context, l store.Library, video string) []gin.H {
-	conn, err := a.db.Cloud115Connection()
-	if err != nil {
-		return []gin.H{}
+	sources := []gin.H{}
+	for _, provider := range []string{"115", "guangya"} {
+		conn, err := a.offlineConnection(provider)
+		if err != nil {
+			continue
+		}
+		bindings, err := a.db.OfflineBindings(l, video, conn.AccountID)
+		if err != nil {
+			continue
+		}
+		sources = append(sources, a.r18SourcesFromBindings(c, l, video, bindings)...)
 	}
-	bindings, err := a.db.OfflineBindings(l, video, conn.AccountID)
-	if err != nil {
-		return []gin.H{}
-	}
-	return a.r18SourcesFromBindings(c, l, video, bindings)
+	return sources
 }
 
 func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video string, bindings []store.OfflineBinding) []gin.H {
@@ -420,7 +425,11 @@ func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video stri
 			if f.ID != b.FileID || !cloud115.VideoFile(f) {
 				continue
 			}
-			id := "115-" + b.Task.ID
+			provider := "115"
+			if strings.HasPrefix(b.Task.AccountID, "guangya:") {
+				provider = "guangya"
+			}
+			id := provider + "-" + b.Task.ID
 			u := a.cloudStreamURL(l, video, id)
 			if prepared, ok := c.Get("cloud115Preparation"); ok {
 				proof := prepared.(preparedCloudFile)
@@ -430,6 +439,7 @@ func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video stri
 			}
 			source := gin.H{"Id": id, "Name": f.Name, "Type": "Default", "Protocol": "Http", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(f.Name)), "."), "Size": f.Size, "Path": u, "DirectStreamUrl": u, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "IsRemote": true, "AddApiKeyToDirectStreamUrl": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []gin.H{{"Type": "Video", "Index": 0, "IsDefault": true}}, "Default": b.Default}
 			source["InfoHash"], source["ResourceId"] = b.Task.InfoHash, b.ResourceID
+			source["Provider"] = provider
 			if f.Duration > 0 && f.Duration <= 922337203685 {
 				source["RunTimeTicks"] = f.Duration * 10000000
 			}
@@ -441,19 +451,18 @@ func (a *App) r18SourcesFromBindings(c *gin.Context, l store.Library, video stri
 func (a *App) r18Stream(c *gin.Context) {
 	started := time.Now()
 	defer func() {
-		slog.Debug("115 播放阶段耗时", "stage", "stream", "elapsed_ms", time.Since(started).Milliseconds())
+		slog.Debug(cloudName(requestCloudProvider(c))+" 播放阶段耗时", "stage", "stream", "elapsed_ms", time.Since(started).Milliseconds())
 	}()
 	library, video, ok := parseR18ItemID(c.Param("id"))
 	if !ok {
 		c.Status(404)
 		return
 	}
-	// Legacy local streams accept anonymous clients. Shared-cloud sources do not:
-	// only a real authenticated account or an item/source/user-bound ticket enters.
+	// 网盘播放只接受真实登录账号或绑定用户、影片和来源的有效票据。
 	if _, authenticated := c.Get("accountUser"); !authenticated {
 		parts := strings.Split(c.Query("playback_token"), ".")
 		if len(parts) != 2 || len(parts[0]) > 2048 {
-			c.JSON(401, gin.H{"error": "115 播放需要登录或有效播放票据"})
+			c.JSON(401, gin.H{"error": "网盘播放需要登录或有效播放票据"})
 			return
 		}
 		data, e := base64.RawURLEncoding.DecodeString(parts[0])
@@ -489,7 +498,22 @@ func (a *App) r18Stream(c *gin.Context) {
 		c.Status(404)
 		return
 	}
-	p, fresh, ok := a.cloudPlaybackFile(c, l, video, c.Query("MediaSourceId"), false)
+	requested := c.Query("MediaSourceId")
+	if requested == "" {
+		sources := a.r18ReadySources(c, l, video)
+		if len(sources) > 0 {
+			requested, _ = sources[0]["Id"].(string)
+		}
+	}
+	provider, valid := cloudSourceProvider(requested)
+	if requested != "" && !valid {
+		c.JSON(404, gin.H{"error": "所选网盘播放源不存在"})
+		return
+	}
+	if valid {
+		c.Set("offlineProvider", provider)
+	}
+	p, fresh, ok := a.cloudPlaybackFile(c, l, video, requested, false)
 	if !ok {
 		return
 	}
@@ -500,14 +524,14 @@ func (a *App) r18Stream(c *gin.Context) {
 		var cloudErr *cloud115.Error
 		if errors.As(err, &cloudErr) && cloudErr.Missing && !cloudErr.Auth {
 			// A file can disappear after preflight; recheck before entering recovery.
-			if _, _, ok := a.cloudPlaybackFile(c, l, video, c.Query("MediaSourceId"), false); !ok {
+			if _, _, ok := a.cloudPlaybackFile(c, l, video, requested, false); !ok {
 				return
 			}
 		}
-		c.JSON(502, gin.H{"error": "115 直链获取失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
+		c.JSON(502, gin.H{"error": cloudName(requestCloudProvider(c)) + " 直链获取失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
 		return
 	}
-	// No long-lived signed URL cache; each playback uses the actual client's UA.
+	// 每次播放即时解析直链，并使用实际播放器的 User-Agent。
 	u, e := url.Parse(raw)
 	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || strings.ContainsAny(raw, "\r\n\\") {
 		c.Status(502)
@@ -522,9 +546,10 @@ func (a *App) r18Stream(c *gin.Context) {
 // The page preflight and the stream use identical file-identity/recovery checks.
 // A preflight never obtains a signed URL: the actual player still supplies its UA.
 func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requested string, preparing bool) (cloud115.Provider, cloud115.File, bool) {
-	p, account, err := a.cloudProvider()
+	provider := requestCloudProvider(c)
+	p, account, err := a.providerFor(provider)
 	if err != nil {
-		c.JSON(503, gin.H{"error": "115 凭证不可用，请管理员检查配置"})
+		c.JSON(503, gin.H{"error": cloudName(provider) + " 凭证不可用，请管理员检查配置"})
 		return nil, cloud115.File{}, false
 	}
 	bindings, err := a.db.OfflineBindings(l, video, account)
@@ -535,7 +560,7 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 	var chosen *cloud115.File
 	var task store.OfflineTask
 	for _, b := range bindings {
-		if b.Task.Status != "ready" || b.Task.CacheExpired(time.Now().Unix()) || requested != "" && requested != "115-"+b.Task.ID {
+		if b.Task.Status != "ready" || b.Task.CacheExpired(time.Now().Unix()) || requested != "" && requested != provider+"-"+b.Task.ID {
 			continue
 		}
 		for _, f := range b.Task.Files {
@@ -560,7 +585,7 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 	}
 	if !preparing {
 		if fresh, ok := a.takeCloudPreparation(c, l, video, task, *chosen); ok {
-			slog.Debug("115 播放复用本次新鲜文件核验", "stage", "file_info_reused")
+			slog.Debug(cloudName(provider)+" 播放复用本次新鲜文件核验", "stage", "file_info_reused")
 			return p, fresh, true
 		}
 	}
@@ -572,7 +597,10 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 	defer cancel()
 	fresh, err := p.Info(cloud115.WithInteractive(ctx), chosen.ID)
 	if err == nil && (fresh.ID != chosen.ID || fresh.Directory || fresh.PickCode == "" || chosen.SHA1 != "" && fresh.SHA1 != chosen.SHA1) {
-		err = &cloud115.Error{Message: "115 文件身份变化或文件不可播放"}
+		err = &cloud115.Error{Message: cloudName(provider) + " 文件身份变化或文件不可播放"}
+	}
+	if err == nil && provider == "guangya" && (!cloud115.VideoFile(fresh) || chosen.ParentID != "" && fresh.ParentID != chosen.ParentID) {
+		err = &cloud115.Error{Message: "光鸭视频已改名或移动，请重新确认播放文件"}
 	}
 	if err != nil {
 		var e *cloud115.Error
@@ -580,13 +608,13 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 			task.Status = "discovering"
 			task.Resume = ""
 			task.Stage = "file"
-			task.Error = "115 文件已删除，正在确认并自动重新下载，请稍后刷新状态"
+			task.Error = cloudName(provider) + " 文件已删除，正在确认并自动重新下载，请稍后刷新状态"
 			task.Retryable = true
 			task.RecoveryFileID = chosen.ID
 			task.Files = []cloud115.File{}
 			task.NextPoll = 0
 			if a.db.UpdateOfflineTask(task, task.Version) == nil {
-				a.offlineService.Wake()
+				a.offlineQueue(provider).Wake()
 				if preparing {
 					a.r18Offline(c)
 				} else {
@@ -595,7 +623,7 @@ func (a *App) cloudPlaybackFile(c *gin.Context, l store.Library, video, requeste
 				return nil, cloud115.File{}, false
 			}
 		}
-		c.JSON(502, gin.H{"error": "115 文件确认失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
+		c.JSON(502, gin.H{"error": cloudName(provider) + " 文件确认失败：" + cloud115.SafeError(err, cloud115.Tokens{}).Error()})
 		return nil, cloud115.File{}, false
 	}
 	if preparing {

@@ -5,21 +5,21 @@ import (
 	"log/slog"
 	"time"
 
-	"emby-go/internal/cloud115"
+	"emby-go/internal/clouddrive"
 	"emby-go/internal/store"
 )
 
-func (s *Service) discover(ctx context.Context, p cloud115.Provider, t store.OfflineTask, fresh *cloud115.File) {
+func (s *Service) discover(ctx context.Context, p clouddrive.Provider, t store.OfflineTask, fresh *clouddrive.File) {
 	started := time.Now()
 	defer func() {
-		slog.Debug("115 视频扫描耗时", "task_id", t.ID, "elapsed_ms", time.Since(started).Milliseconds())
+		slog.Debug(s.brand()+" 视频扫描耗时", "task_id", t.ID, "elapsed_ms", time.Since(started).Milliseconds())
 	}()
 	if t.CacheExpired(time.Now().Unix()) {
 		s.cleanup(p, t)
 		return
 	}
 	if t.RecoveryFileID != "" {
-		gone, err := resultGone(ctx, p, t.RecoveryFileID)
+		gone, err := resultGone(ctx, p, t.RecoveryFileID, s.brand())
 		if err != nil {
 			s.fail(t, t.Version, "file", err)
 			return
@@ -30,7 +30,7 @@ func (s *Service) discover(ctx context.Context, p cloud115.Provider, t store.Off
 		}
 		t.RecoveryFileID = ""
 	}
-	var result cloud115.File
+	var result clouddrive.File
 	if fresh != nil {
 		result = *fresh
 	} else {
@@ -46,7 +46,7 @@ func (s *Service) discover(ctx context.Context, p cloud115.Provider, t store.Off
 		}
 	}
 	if t.CacheFolderID != "" {
-		if err := verifyCacheResult(ctx, p, t, result); err != nil {
+		if err := verifyCacheResult(ctx, p, t, result, s.brand()); err != nil {
 			if isMissing(err) {
 				s.recoverDiscovery(ctx, p, t, t.ResultID)
 				return
@@ -55,7 +55,7 @@ func (s *Service) discover(ctx context.Context, p cloud115.Provider, t store.Off
 			return
 		}
 	}
-	files, err := cloud115.DiscoverFrom(ctx, p, t.ResultID, t.FolderID, result)
+	files, err := clouddrive.DiscoverFrom(ctx, p, t.ResultID, t.FolderID, result, s.brand())
 	if err != nil {
 		if isMissing(err) {
 			s.recoverDiscovery(ctx, p, t, t.ResultID)

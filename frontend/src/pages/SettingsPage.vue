@@ -5,6 +5,7 @@ import { adminApi } from '../api/admin';
 import { configLabels, systemConfigApi, type ConfigPatch } from '../api/system-config';
 import SystemConfigForm from '../components/settings/SystemConfigForm.vue';
 import Cloud115Settings from '../components/settings/Cloud115Settings.vue';
+import CloudGuangyaSettings from '../components/settings/CloudGuangyaSettings.vue';
 import { useAdminRead } from '../composables/useAdminRead';
 import ReadState from '../components/common/ReadState.vue';
 const { data, loading, error, load } = useAdminRead(adminApi.settings);
@@ -58,4 +59,5 @@ const fields = computed(() => {
     <p class="hint">此处显示当前进程使用的配置。MetaTube、GFriends 与翻译选项请前往 <a href="#/scrape">刮削配置</a>。</p>
   </section>
   <Cloud115Settings />
+  <CloudGuangyaSettings />
 </template>

@@ -191,7 +191,7 @@ watch(() => auth.token, () => {
 <template>
   <section class="panel r18-catalog">
     <header class="r18-header">
-      <div><p class="r18-eyebrow"><Database :size="14" aria-hidden="true" /> AVDB-ONLY API / JAVDB</p><h2>{{ currentLibrary?.Name || 'JavDB 在线资料库' }}</h2><p class="hint">浏览 JavDB 在线影片，已有本地 STRM 优先直接播放；JavDB 在线与 AVdb 资源库磁力可另选 115 流程。</p></div>
+      <div><p class="r18-eyebrow"><Database :size="14" aria-hidden="true" /> AVDB-ONLY API / JAVDB</p><h2>{{ currentLibrary?.Name || 'JavDB 在线资料库' }}</h2><p class="hint">浏览 JavDB 在线影片，已有本地 STRM 优先直接播放；JavDB 在线与 AVdb 资源库磁力可选择 115 或光鸭网盘播放。</p></div>
       <button class="btn btn-sm" :disabled="loading" @click="load(true, true)"><RefreshCw :size="14" aria-hidden="true" /> 刷新</button>
     </header>
     <nav v-if="libraries.length" class="r18-modes filters" aria-label="JavDB 浏览模式">
@@ -228,7 +228,7 @@ watch(() => auth.token, () => {
         <p v-if="categories.length && !groups.length" class="hint">没有匹配的题材标签，请调整类型或标签搜索。</p>
       </section>
     </form>
-    <p v-if="libraries.length" id="r18-query-hint" class="hint r18-query-hint">{{ queryHint }} 在线分页获取，不导入整库，也不伪造全库总数。上游可播放不代表本服务已有 115 播放源。<span v-if="draft.mode === 'top250'"> 排除已看针对 AVdb 的 JavDB 账户，与本 Emby 用户已看无关。</span></p>
+    <p v-if="libraries.length" id="r18-query-hint" class="hint r18-query-hint">{{ queryHint }} 在线分页获取，不导入整库，也不伪造全库总数。上游可播放不代表本服务已有网盘播放源。<span v-if="draft.mode === 'top250'"> 排除已看针对 AVdb 的 JavDB 账户，与本 Emby 用户已看无关。</span></p>
     <ReadState :loading="loading" :empty="!page" :error="error" @retry="load(true, true)" />
     <EmptyState v-if="!loading && !error && !libraries.length" title="还没有可访问的 JavDB 资料库" hint="管理员可在媒体库页面添加 AVdb-Only API 来源，并在用户管理中授权。" />
     <RouterLink v-if="!libraries.length && auth.isAdministrator" class="btn btn-accent" to="/libraries">添加 JavDB 资料库</RouterLink>

@@ -17,6 +17,7 @@ import (
 
 	"emby-go/internal/cache"
 	"emby-go/internal/cloud115"
+	"emby-go/internal/cloudguangya"
 	"emby-go/internal/config"
 	"emby-go/internal/librarywatch"
 	"emby-go/internal/logging"
@@ -144,6 +145,12 @@ type appState struct {
 	cloud115PrepareMu  sync.Mutex
 	cloud115Prepared   *cache.Memory
 	offlineService     *offline.Service
+	guangyaMu          sync.Mutex
+	guangyaVault       *cloud115.Vault
+	guangyaClient      cloud115.Provider
+	guangyaRevision    int64
+	guangyaOpen        func(cloudguangya.Tokens, func(cloudguangya.Tokens) error) cloud115.Provider
+	guangyaOffline     *offline.Service
 }
 
 // scanStatus 管理端可轮询的扫描进度快照。
@@ -273,6 +280,10 @@ func newApp(cfg config.Config, cacheStore cache.Cache) (*App, error) {
 	// 元数据服务是外部依赖，它挂了不该让整个媒体库服务起不来。
 	go a.checkScrapeBackend()
 	a.offlineService = offline.New(a.rootCtx, db, a.cloudProvider)
+	a.guangyaOffline = offline.NewForProvider(a.rootCtx, db, a.guangyaProvider, "光鸭", func() (string, error) {
+		connection, err := db.CloudGuangyaConnection()
+		return store.CloudGuangyaAccount(connection.AccountID), err
+	})
 	ready = true
 	return a, nil
 }
@@ -301,6 +312,9 @@ func (a *App) Close() {
 	a.rootCancel()
 	if a.offlineService != nil {
 		a.offlineService.Wait()
+	}
+	if a.guangyaOffline != nil {
+		a.guangyaOffline.Wait()
 	}
 	a.closeR18Clients()
 	a.mediaMu.Lock()
@@ -337,6 +351,7 @@ func (a *App) routes() {
 	r.GET("/api/browse/libraries", a.requireAuth, noStore, a.bind((*App).browseLibraries))
 	a.registerR18Routes(r)
 	a.registerCloud115Routes(r)
+	a.registerCloudGuangyaRoutes(r)
 	// Browser image requests use the read-only session cookie.
 	r.GET("/api/admin/scrape/image", a.requireAuth, a.requireAdministrator, a.bind((*App).adminScrapeImage))
 

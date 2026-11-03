@@ -200,7 +200,7 @@ describe('R18 library presentation', () => {
     expect(router.push.mock.lastCall?.[0].query).toEqual(expect.objectContaining({ page: '1', type: '0', page_size: '50' }));
     await w.get('#r18-filter').setValue('can_play');
     expect(router.push.mock.lastCall?.[0].query).toEqual(expect.objectContaining({ page: '1', filter: 'can_play' }));
-    expect(w.get('#r18-query-hint').text()).toContain('不代表本服务已有 115 播放源');
+    expect(w.get('#r18-query-hint').text()).toContain('不代表本服务已有网盘播放源');
     expect(w.get('.r18-list-meta').text()).not.toMatch(/总数|共\s*\d|约\s*\d/u);
   });
   it('rejects invalid video measurements and invalid numbered-page responses', () => {

@@ -1,8 +1,9 @@
-import type { CloudSource, OfflineFile, OfflineState, OfflineTask } from '../api/cloud115';
+import type { CloudProvider, CloudSource, OfflineFile, OfflineState, OfflineTask } from '../api/cloud115';
 import type { R18Resource } from '../api/r18';
 
 export const offlineLabels: Record<string, string> = { queued: '排队中', submitting: '提交中 / 正在确认任务', downloading: '115 离线下载中', discovering: '正在确认视频文件', waiting_selection: '请选择正片文件', ready: '已就绪', failed: '失败', timed_out: '等待超时', needs_auth: '需要重新授权', cancelled: '已取消本地等待', cleanup_pending: '缓存到期 / 正在自动删除', expired: '缓存已自动删除' };
 export const offlineActive = (t: OfflineTask) => ['queued', 'submitting', 'downloading', 'discovering'].includes(t.status);
+export function offlineStatusLabel(status: string, name = '115') { return status === 'downloading' ? `${name} 离线下载中` : offlineLabels[status] || status; }
 
 export function magnetHash(magnet: string): string {
   try {
@@ -23,9 +24,10 @@ export function magnetHash(magnet: string): string {
 
 export interface R18PlaybackVersion {
   id: string; name: string; magnet: string; resourceId: string;
+  provider?: CloudProvider;
   task?: OfflineTask; source?: CloudSource;
 }
-export function playbackVersions(resources: R18Resource[], state: OfflineState): R18PlaybackVersion[] {
+export function playbackVersions(resources: R18Resource[], state: OfflineState, sourcePrefix: CloudProvider = '115'): R18PlaybackVersion[] {
   const versions = new Map<string, R18PlaybackVersion>();
   for (const r of resources) {
     const hash = magnetHash(r.magnet);
@@ -37,14 +39,16 @@ export function playbackVersions(resources: R18Resource[], state: OfflineState):
     version.task = task; versions.set(key, version);
   }
   for (const source of state.sources) {
-    const key = source.InfoHash?.toLowerCase() || [...versions.values()].find(v => `115-${v.task?.id}` === source.Id || !!source.ResourceId && v.resourceId === source.ResourceId)?.id || `source:${source.Id}`;
+    // 同一磁力可存在于两个网盘，播放源必须属于当前选择的网盘。
+    if (!source.Id.startsWith(`${sourcePrefix}-`)) continue;
+    const key = source.InfoHash?.toLowerCase() || [...versions.values()].find(v => `${sourcePrefix}-${v.task?.id}` === source.Id || !!source.ResourceId && v.resourceId === source.ResourceId)?.id || `source:${source.Id}`;
     const version = versions.get(key) ?? { id: key, name: source.Name, magnet: '', resourceId: source.ResourceId || '' };
     version.source = source; versions.set(key, version);
   }
-  return [...versions.values()];
+  return [...versions.values()].map(version => ({ ...version, provider: sourcePrefix }));
 }
 
-// Recommend the largest video, never the first directory entry (often a short attachment).
+// 默认推荐最大的视频文件，避免误选目录中的短视频附件。
 export function mainVideo(files: OfflineFile[]): OfflineFile | undefined {
   return [...files].sort((a, b) => b.size - a.size || a.path.localeCompare(b.path))[0];
 }

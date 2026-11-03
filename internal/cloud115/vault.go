@@ -9,11 +9,26 @@ import (
 	"os"
 )
 
-type Vault struct{ aead cipher.AEAD }
+type Vault struct {
+	aead   cipher.AEAD
+	domain []byte
+	name   string
+}
 
 func OpenVault(filename string) (*Vault, error) {
+	return OpenVaultFor(filename, "115")
+}
+
+// 不同网盘使用独立密钥和认证域，避免将一方的密文误用于另一方。
+func OpenVaultFor(filename, provider string) (*Vault, error) {
+	name := "115"
+	if provider == "guangya" {
+		name = "光鸭"
+	} else if provider != "115" {
+		return nil, errors.New("不支持的网盘密钥类型")
+	}
 	if info, err := os.Lstat(filename); err == nil && !info.Mode().IsRegular() {
-		return nil, errors.New("115 密钥必须是普通文件，不能使用符号链接")
+		return nil, errors.New(name + " 密钥必须是普通文件，不能使用符号链接")
 	}
 	key, err := os.ReadFile(filename)
 	if os.IsNotExist(err) {
@@ -24,7 +39,7 @@ func OpenVault(filename string) (*Vault, error) {
 		f, e := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if e != nil {
 			if os.IsExist(e) {
-				return OpenVault(filename)
+				return OpenVaultFor(filename, provider)
 			}
 			return nil, e
 		}
@@ -47,7 +62,7 @@ func OpenVault(filename string) (*Vault, error) {
 		return nil, err
 	}
 	if len(key) != 32 {
-		return nil, errors.New("115 密钥损坏，不能解密既有凭证；请恢复密钥备份")
+		return nil, errors.New(name + " 密钥损坏，不能解密既有凭证；请恢复密钥备份")
 	}
 	if err = privateFile(filename); err != nil {
 		return nil, err
@@ -57,10 +72,14 @@ func OpenVault(filename string) (*Vault, error) {
 		return nil, err
 	}
 	aead, err := cipher.NewGCM(block)
-	return &Vault{aead}, err
+	return &Vault{aead: aead, domain: []byte("emby-go/" + provider + "/v1"), name: name}, err
 }
 func (v *Vault) Seal(t Tokens) ([]byte, error) {
-	b, err := json.Marshal(t)
+	return v.SealValue(t)
+}
+
+func (v *Vault) SealValue(value any) ([]byte, error) {
+	b, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
@@ -68,18 +87,22 @@ func (v *Vault) Seal(t Tokens) ([]byte, error) {
 	if _, err = rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return v.aead.Seal(nonce, nonce, b, []byte("emby-go/115/v1")), nil
+	return v.aead.Seal(nonce, nonce, b, v.domain), nil
 }
 func (v *Vault) Open(b []byte) (Tokens, error) {
 	var t Tokens
+	err := v.OpenValue(b, &t)
+	return t, err
+}
+
+func (v *Vault) OpenValue(b []byte, value any) error {
 	n := v.aead.NonceSize()
 	if len(b) < n {
-		return t, errors.New("115 凭证密文无效")
+		return errors.New(v.name + " 凭证密文无效")
 	}
-	plain, err := v.aead.Open(nil, b[:n], b[n:], []byte("emby-go/115/v1"))
+	plain, err := v.aead.Open(nil, b[:n], b[n:], v.domain)
 	if err != nil {
-		return t, errors.New("115 凭证解密失败，请恢复匹配的密钥")
+		return errors.New(v.name + " 凭证解密失败，请恢复匹配的密钥")
 	}
-	err = json.Unmarshal(plain, &t)
-	return t, err
+	return json.Unmarshal(plain, value)
 }

@@ -2,19 +2,16 @@ package cloud115
 
 import (
 	"context"
-	"encoding/base32"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"emby-go/internal/clouddrive"
 	sdk "github.com/OpenListTeam/115-sdk-go"
 )
 
@@ -24,42 +21,10 @@ type Tokens struct {
 	Cookie  string `json:"cookie,omitempty"`
 }
 
-type RemoteTask struct {
-	Hash             string
-	Status, Progress int
-	ResultID         string
-	FolderID         string
-}
-
-type File struct {
-	ID        string `json:"id"`
-	ParentID  string `json:"parent_id"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Size      int64  `json:"size"`
-	SHA1      string `json:"sha1"`
-	PickCode  string `json:"pick_code"`
-	Directory bool   `json:"directory"`
-	Duration  int64  `json:"duration"`
-}
-
-type Provider interface {
-	Check(context.Context, string) (string, error)
-	Find(context.Context, string) (*RemoteTask, error)
-	Add(context.Context, string, string) error
-	Info(context.Context, string) (File, error)
-	List(context.Context, string, int) ([]File, bool, error)
-	URL(context.Context, string, string) (string, error)
-}
-
-type Error struct {
-	Message                  string
-	Auth, Retryable, Missing bool
-}
-
-func (e *Error) Error() string { return e.Message }
-
-var signedURL = regexp.MustCompile(`https?://[^\s"<>]+`)
+type RemoteTask = clouddrive.RemoteTask
+type File = clouddrive.File
+type Provider = clouddrive.Provider
+type Error = clouddrive.Error
 
 func SafeError(err error, tokens Tokens) error {
 	if err == nil {
@@ -67,7 +32,6 @@ func SafeError(err error, tokens Tokens) error {
 	}
 	var prior *Error
 	hasPrior := errors.As(err, &prior)
-	message := err.Error()
 	secrets := []string{tokens.Access, tokens.Refresh, tokens.Cookie}
 	for _, part := range strings.Split(tokens.Cookie, ";") {
 		_, value, ok := strings.Cut(strings.TrimSpace(part), "=")
@@ -75,16 +39,7 @@ func SafeError(err error, tokens Tokens) error {
 			secrets = append(secrets, value)
 		}
 	}
-	for _, secret := range secrets {
-		if secret != "" {
-			message = strings.ReplaceAll(message, secret, "[REDACTED]")
-		}
-	}
-	message = signedURL.ReplaceAllString(message, "[URL]")
-	if len(message) > 500 {
-		message = message[:500]
-	}
-	e := &Error{Message: message, Retryable: true}
+	e := clouddrive.SafeError(err, secrets...).(*Error)
 	if hasPrior {
 		e.Auth = prior.Auth
 		e.Retryable = prior.Retryable
@@ -101,43 +56,7 @@ func SafeError(err error, tokens Tokens) error {
 }
 
 func NormalizeMagnet(raw string) (string, string, error) {
-	if len(raw) > 8192 {
-		return "", "", errors.New("磁力链接过长")
-	}
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "magnet" || u.Host != "" || u.Fragment != "" {
-		return "", "", errors.New("请输入有效的 magnet 链接")
-	}
-	var hash string
-	for _, xt := range u.Query()["xt"] {
-		if !strings.HasPrefix(strings.ToLower(xt), "urn:btih:") {
-			continue
-		}
-		value := xt[len("urn:btih:"):]
-		var b []byte
-		if len(value) == 40 {
-			b, err = hex.DecodeString(value)
-		} else if len(value) == 32 {
-			b, err = base32.StdEncoding.DecodeString(strings.ToUpper(value))
-		} else {
-			err = errors.New("invalid hash")
-		}
-		if err != nil || len(b) != 20 {
-			return "", "", errors.New("磁力 InfoHash 格式不正确")
-		}
-		next := hex.EncodeToString(b)
-		if hash != "" && next != hash {
-			return "", "", errors.New("磁力包含冲突的 InfoHash")
-		}
-		hash = next
-	}
-	if hash == "" {
-		return "", "", errors.New("磁力缺少 BTIH InfoHash（暂不支持仅 BTv2 的磁力）")
-	}
-	q := u.Query()
-	q.Set("xt", "urn:btih:"+hash)
-	u.RawQuery = q.Encode()
-	return u.String(), hash, nil
+	return clouddrive.NormalizeMagnet(raw)
 }
 
 type Client struct {
@@ -350,96 +269,15 @@ func (c *Client) URL(ctx context.Context, code, ua string) (string, error) {
 	return u.String(), nil
 }
 
-var sampleName = regexp.MustCompile(`(?i)(^|[\s._\-\[\]()])(sample|trailer|preview)([\s._\-\[\]()]|$)`)
-
 func VideoFile(f File) bool {
-	if f.Directory || f.Size <= 0 || f.ID == "" || f.PickCode == "" || sampleName.MatchString(strings.TrimSuffix(f.Name, path.Ext(f.Name))) {
-		return false
-	}
-	switch strings.ToLower(path.Ext(f.Name)) {
-	case ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".ts", ".m2ts", ".wmv", ".webm", ".flv", ".mpg", ".mpeg":
-		return true
-	}
-	return false
+	return clouddrive.VideoFile(f)
 }
 
 func Discover(ctx context.Context, p Provider, root, workFolder string) ([]File, error) {
-	if root == "" || root == "0" || root == workFolder {
-		return nil, &Error{Message: "115 未提供独立结果目录，拒绝扫描整个工作目录", Retryable: true}
-	}
-	first, err := p.Info(ctx, root)
-	if err != nil {
-		return nil, err
-	}
-	return DiscoverFrom(ctx, p, root, workFolder, first)
+	return clouddrive.Discover(ctx, p, root, workFolder, "115")
 }
 
-// DiscoverFrom reuses metadata fetched in this operation, not a persisted cache.
-// The caller still verifies cache ancestry; pagination and scan limits are unchanged.
+// DiscoverFrom 复用本次请求的新鲜元数据，保留原有的身份核验和扫描边界。
 func DiscoverFrom(ctx context.Context, p Provider, root, workFolder string, first File) ([]File, error) {
-	if root == "" || root == "0" || root == workFolder {
-		return nil, &Error{Message: "115 未提供独立结果目录，拒绝扫描整个工作目录", Retryable: true}
-	}
-	if first.ID != root {
-		return nil, &Error{Message: "115 返回的结果文件身份不匹配"}
-	}
-	first.Path = first.Name
-	if !first.Directory {
-		if VideoFile(first) {
-			return []File{first}, nil
-		}
-		return nil, &Error{Message: "任务完成，但结果不是可用视频"}
-	}
-	type dir struct {
-		id, prefix string
-		depth      int
-	}
-	queue := []dir{{root, first.Name, 0}}
-	seen := map[string]bool{root: true}
-	files := []File{}
-	scanned := 0
-	for len(queue) > 0 {
-		d := queue[0]
-		queue = queue[1:]
-		for offset := 0; ; {
-			batch, more, err := p.List(ctx, d.id, offset)
-			if err != nil {
-				return nil, err
-			}
-			scanned += len(batch)
-			if scanned > 10000 {
-				return nil, &Error{Message: "结果目录超过 10000 项，扫描未完成"}
-			}
-			for _, f := range batch {
-				if f.ID == "" || path.Base(f.Name) != f.Name || f.Name == "." || f.Name == ".." || strings.Contains(f.Name, "\\") {
-					return nil, &Error{Message: "115 返回无效文件身份或名称"}
-				}
-				f.Path = path.Join(d.prefix, f.Name)
-				if f.Directory {
-					if seen[f.ID] || d.depth >= 16 || f.ID == workFolder || f.ID == "0" {
-						return nil, &Error{Message: "结果目录循环或超过 16 层，扫描未完成"}
-					}
-					seen[f.ID] = true
-					queue = append(queue, dir{f.ID, f.Path, d.depth + 1})
-				} else if VideoFile(f) {
-					if seen[f.ID] {
-						return nil, &Error{Message: "115 分页重复文件，扫描未完成"}
-					}
-					seen[f.ID] = true
-					files = append(files, f)
-				}
-			}
-			if !more {
-				break
-			}
-			if len(batch) == 0 {
-				return nil, &Error{Message: "115 分页未前进"}
-			}
-			offset += len(batch)
-		}
-	}
-	if len(files) == 0 {
-		return nil, &Error{Message: "任务完成，但未找到可用视频（图片、压缩包和样片不作为正片）", Retryable: true, Missing: scanned == 0}
-	}
-	return files, nil
+	return clouddrive.DiscoverFrom(ctx, p, root, workFolder, first, "115")
 }
