@@ -276,6 +276,14 @@ func statusError(status int) error {
 	}
 }
 
+// 账号不匹配和响应缺少身份同样属于 Auth 错误，只有明确的 HTTP 拒绝允许自动刷新。
+type accountAccessRejectedError struct {
+	cause error
+}
+
+func (e *accountAccessRejectedError) Error() string { return e.cause.Error() }
+func (e *accountAccessRejectedError) Unwrap() error { return e.cause }
+
 func (c *Client) refreshLocked(ctx context.Context) error {
 	if c.pendingRefresh {
 		return c.finishRefreshLocked(ctx)
@@ -340,6 +348,9 @@ func (c *Client) verifyAccountLocked(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return "", &accountAccessRejectedError{cause: statusError(status)}
+	}
 	if status < 200 || status >= 300 {
 		return "", statusError(status)
 	}
@@ -393,7 +404,15 @@ func (c *Client) requestLocked(ctx context.Context, method, endpoint string, bod
 	}
 	if !account && c.expectedAccount != "" && c.checkedAccess != c.tokens.Access {
 		if _, err := c.verifyAccountLocked(ctx); err != nil {
-			return err
+			var rejected *accountAccessRejectedError
+			if !errors.As(err, &rejected) || refreshed || c.tokens.Refresh == "" {
+				return err
+			}
+			// 冷启动后旧令牌可能已过期；候选令牌仍须核验账号并保存后才访问资源。
+			if err := c.refreshLocked(ctx); err != nil {
+				return err
+			}
+			refreshed = true
 		}
 	}
 	for {

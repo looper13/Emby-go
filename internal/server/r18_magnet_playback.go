@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -34,6 +35,12 @@ type r18MagnetPlaybackProof struct {
 }
 
 func r18MagnetPlaybackError(c *gin.Context, status int, code, message string) {
+	// 原生播放器通常只显示状态码，固定原因必须同步落日志；不记录请求 URL 或票据。
+	attrs := []any{"method", c.Request.Method, "status", status, "error_code", code, "reason", message}
+	if stage := c.GetString("r18MagnetPlaybackErrorStage"); stage != "" {
+		attrs = append(attrs, "stage", stage)
+	}
+	slog.WarnContext(c.Request.Context(), "光鸭磁力播放失败", attrs...)
 	c.Header("Cache-Control", "no-store")
 	if status == http.StatusServiceUnavailable {
 		c.Header("Retry-After", "3")
@@ -206,7 +213,8 @@ func r18MagnetStoppedTask(c *gin.Context, task store.OfflineTask) bool {
 	}
 	switch task.Status {
 	case "needs_auth":
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaAuthorizationRequired", "光鸭授权已失效，请管理员重新配置连接")
+		c.Set("r18MagnetPlaybackErrorStage", task.Stage)
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaAuthorizationRequired", "所选光鸭任务因授权问题暂停，请管理员检查光鸭连接后在网页重试该任务")
 		return true
 	case "failed", "timed_out", "cancelled":
 		r18MagnetPlaybackError(c, http.StatusConflict, "MagnetTaskStopped", "所选光鸭任务已失败、超时或取消，请在网页检查该任务或选择其它磁力")
@@ -309,7 +317,13 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 	}
 	p, account, err := a.providerFor("guangya")
 	if err != nil || p == nil || account != connection.AccountID {
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaUnavailable", "光鸭凭证不可用，请管理员检查配置")
+		message := "光鸭凭证不可用，请管理员检查配置"
+		var loadError *guangyaProviderLoadError
+		if errors.As(err, &loadError) {
+			c.Set("r18MagnetPlaybackErrorStage", loadError.stage)
+			message = loadError.Error()
+		}
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaUnavailable", message)
 		return nil, cloud115.File{}, false
 	}
 	if !a.checkR18MagnetScope(c, scope) {

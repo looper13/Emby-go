@@ -89,12 +89,22 @@ func (a *App) guangyaSecretsVault() (*cloud115.Vault, error) {
 	return vault, err
 }
 
+// 装载失败只对外暴露固定原因，底层错误通过 Unwrap 保留，避免输出凭据内容。
+type guangyaProviderLoadError struct {
+	stage   string
+	message string
+	cause   error
+}
+
+func (e *guangyaProviderLoadError) Error() string { return e.message }
+func (e *guangyaProviderLoadError) Unwrap() error { return e.cause }
+
 func (a *App) guangyaProvider() (cloud115.Provider, string, error) {
 	a.guangyaMu.Lock()
 	defer a.guangyaMu.Unlock()
 	connection, err := a.db.CloudGuangyaConnection()
 	if err != nil {
-		return nil, "", err
+		return nil, "", &guangyaProviderLoadError{"connection", "读取光鸭连接失败，请管理员检查配置", err}
 	}
 	account := store.CloudGuangyaAccount(connection.AccountID)
 	if a.guangyaClient != nil && a.guangyaRevision == connection.Revision {
@@ -102,11 +112,11 @@ func (a *App) guangyaProvider() (cloud115.Provider, string, error) {
 	}
 	vault, err := a.guangyaSecretsVault()
 	if err != nil {
-		return nil, "", err
+		return nil, "", &guangyaProviderLoadError{"key", "光鸭密钥无法装载，请检查数据目录内的 .guangya.key 及其访问权限", err}
 	}
 	var tokens cloudguangya.Tokens
 	if err = vault.OpenValue(connection.Secrets, &tokens); err != nil {
-		return nil, "", err
+		return nil, "", &guangyaProviderLoadError{"credentials", "光鸭凭据无法解密或解析，请恢复与数据库匹配的 .guangya.key 或重新配置光鸭连接", err}
 	}
 	persist := func(tokens cloudguangya.Tokens) error {
 		secrets, err := vault.SealValue(tokens)

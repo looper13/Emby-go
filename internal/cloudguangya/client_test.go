@@ -1013,6 +1013,232 @@ func TestBoundAccountIsVerifiedBeforeFirstResourceRequest(t *testing.T) {
 	}
 }
 
+func TestColdBoundAccountRefreshesRejectedSavedAccessBeforeResources(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		for _, operation := range []string{"info", "url"} {
+			t.Run(fmt.Sprintf("%d/%s", status, operation), func(t *testing.T) {
+				accountCalls, refreshes, resources, persisted := 0, 0, 0, 0
+				device := strings.Repeat("a", 32)
+				c := newClient(Tokens{Access: "saved-expired-access", Refresh: "saved-refresh", DeviceID: device}, func(tokens Tokens) error {
+					persisted++
+					if tokens.Access != "new-access" || tokens.Refresh != "new-refresh" || tokens.DeviceID != device {
+						t.Fatal("冷启动刷新改变了设备身份或没有保存轮换凭证")
+					}
+					return nil
+				}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					switch r.URL.Path {
+					case "/v1/user/me":
+						accountCalls++
+						if r.Header.Get("Authorization") == "Bearer saved-expired-access" {
+							return mockReply(status, `{}`)
+						}
+						if r.Header.Get("Authorization") != "Bearer new-access" {
+							t.Fatal("账号核验没有使用本次候选访问令牌")
+						}
+						return mockReply(200, `{"sub":"saved-account"}`)
+					case "/v1/auth/token":
+						refreshes++
+						body := requestBody(t, r)
+						if body["grant_type"] != "refresh_token" || body["refresh_token"] != "saved-refresh" || r.Header.Get("X-Device-Id") != device {
+							t.Fatal("冷启动刷新没有使用原刷新令牌或设备身份")
+						}
+						return mockReply(200, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
+					case "/userres/v1/file/get_info_by_file_id", fileAPI + "get_res_download_url":
+						resources++
+						if persisted != 1 || r.Header.Get("Authorization") != "Bearer new-access" || requestBody(t, r)["fileId"] != "owned-file" {
+							t.Fatal("候选账号核验和凭证持久化完成前访问了资源")
+						}
+						if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+							return successReply(fileData("owned-file", "owned-folder", "正片.mkv", false))
+						}
+						return successReply(map[string]string{"downloadUrl": "https://cdn.example/owned.mp4"})
+					default:
+						t.Fatalf("冷启动刷新请求了无关接口：%s", r.URL.Path)
+						return nil, nil
+					}
+				}), 0)
+				c.SetExpectedAccount("saved-account")
+				if operation == "info" {
+					if file, err := c.Info(context.Background(), "owned-file"); err != nil || file.ID != "owned-file" {
+						t.Fatalf("有效刷新令牌没有恢复首次文件核验：%v", err)
+					}
+				} else if raw, err := c.URL(context.Background(), "owned-file", ""); err != nil || raw != "https://cdn.example/owned.mp4" {
+					t.Fatalf("有效刷新令牌没有恢复首次直链请求：%v", err)
+				}
+				if accountCalls != 2 || refreshes != 1 || resources != 1 || persisted != 1 || c.expectedAccount != "saved-account" || c.checkedAccess != "new-access" || c.pendingRefresh {
+					t.Fatalf("首次刷新、账号核验或持久化次数错误：account=%d refresh=%d resources=%d persist=%d", accountCalls, refreshes, resources, persisted)
+				}
+				if _, err := c.URL(context.Background(), "owned-file", ""); err != nil || accountCalls != 2 || refreshes != 1 || resources != 2 || persisted != 1 {
+					t.Fatalf("后续资源调用重复刷新或回退旧凭证：%v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestColdBoundAccountRefreshFailuresKeepAccountAndPersistenceGuards(t *testing.T) {
+	for _, scenario := range []string{
+		"foreign-before-refresh", "missing-sub-before-refresh", "malformed-before-refresh", "missing-refresh",
+		"refresh-unauthorized", "refresh-malformed", "foreign-after-refresh", "candidate-unauthorized",
+		"missing-sub-after-refresh", "persist-failed", "resource-unauthorized",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			accountCalls, refreshes, resources, persisted := 0, 0, 0, 0
+			tokens := Tokens{Access: "saved-expired-access", Refresh: "saved-refresh", DeviceID: strings.Repeat("b", 32)}
+			if scenario == "missing-refresh" {
+				tokens.Refresh = ""
+			}
+			c := newClient(tokens, func(next Tokens) error {
+				persisted++
+				if next.Access != "new-access" || next.Refresh != "new-refresh" || next.DeviceID != tokens.DeviceID {
+					t.Fatal("未核验的凭证或改变后的设备身份进入持久化")
+				}
+				if scenario == "persist-failed" {
+					return errors.New("new-refresh https://private.invalid/token?key=private-secret")
+				}
+				return nil
+			}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case "/v1/user/me":
+					accountCalls++
+					if r.Header.Get("Authorization") == "Bearer saved-expired-access" {
+						switch scenario {
+						case "foreign-before-refresh":
+							return mockReply(200, `{"sub":"foreign-account"}`)
+						case "missing-sub-before-refresh":
+							return mockReply(200, `{}`)
+						case "malformed-before-refresh":
+							return mockReply(200, `{"sub":`)
+						default:
+							return mockReply(http.StatusUnauthorized, `{}`)
+						}
+					}
+					if r.Header.Get("Authorization") != "Bearer new-access" {
+						t.Fatal("候选账号核验使用了其他令牌")
+					}
+					switch scenario {
+					case "foreign-after-refresh":
+						return mockReply(200, `{"sub":"foreign-account"}`)
+					case "candidate-unauthorized":
+						return mockReply(http.StatusUnauthorized, `{}`)
+					case "missing-sub-after-refresh":
+						return mockReply(200, `{}`)
+					default:
+						return mockReply(200, `{"sub":"saved-account"}`)
+					}
+				case "/v1/auth/token":
+					refreshes++
+					if requestBody(t, r)["refresh_token"] != "saved-refresh" {
+						t.Fatal("请求重复轮换了尚未验证的候选刷新令牌")
+					}
+					switch scenario {
+					case "refresh-unauthorized":
+						return mockReply(http.StatusUnauthorized, `{"error":"saved-refresh https://private.invalid/token"}`)
+					case "refresh-malformed":
+						return mockReply(200, `{"access_token":""}`)
+					default:
+						return mockReply(200, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
+					}
+				default:
+					resources++
+					if scenario != "resource-unauthorized" || persisted != 1 || r.Header.Get("Authorization") != "Bearer new-access" {
+						t.Fatal("账号核验或持久化失败后仍访问了资源")
+					}
+					return mockReply(http.StatusUnauthorized, `{"error":"new-access new-refresh https://private.invalid/file"}`)
+				}
+			}), 0)
+			c.SetExpectedAccount("saved-account")
+			_, err := c.URL(context.Background(), "owned-file", "")
+			if !requireError(t, err).Auth || c.expectedAccount != "saved-account" {
+				t.Fatalf("认证失败被忽略或连接切换到其他账号：%v", err)
+			}
+			wantAccounts, wantRefresh, wantPersist, wantResources, wantPending := 1, 0, 0, 0, false
+			switch scenario {
+			case "refresh-unauthorized", "refresh-malformed":
+				wantRefresh = 1
+			case "foreign-after-refresh", "candidate-unauthorized", "missing-sub-after-refresh":
+				wantAccounts, wantRefresh, wantPending = 2, 1, true
+			case "persist-failed":
+				wantAccounts, wantRefresh, wantPersist, wantPending = 2, 1, 1, true
+			case "resource-unauthorized":
+				wantAccounts, wantRefresh, wantPersist, wantResources = 2, 1, 1, 1
+			}
+			if accountCalls != wantAccounts || refreshes != wantRefresh || persisted != wantPersist || resources != wantResources || c.pendingRefresh != wantPending {
+				t.Fatalf("冷启动拒绝路径绕过核验或发生多次刷新：account=%d refresh=%d resources=%d persist=%d pending=%v", accountCalls, refreshes, resources, persisted, c.pendingRefresh)
+			}
+			for _, secret := range []string{tokens.Access, "saved-refresh", "new-access", "new-refresh", "private.invalid", "private-secret"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatal("认证失败错误泄漏了候选凭证或远程地址")
+				}
+			}
+			if wantPending || wantPersist > 0 {
+				if c.tokens.Access != "new-access" || c.tokens.Refresh != "new-refresh" || c.tokens.DeviceID != tokens.DeviceID {
+					t.Fatal("已轮换候选凭证被回滚，或设备身份被改变")
+				}
+			} else if c.tokens != tokens {
+				t.Fatal("刷新未完成时更改了原凭证")
+			}
+			if wantPending {
+				_, err = c.URL(context.Background(), "owned-file", "")
+				if !requireError(t, err).Auth || refreshes != wantRefresh || resources != 0 || persisted != wantPersist {
+					t.Fatalf("后续请求绕过 pendingRefresh 或 persistErr，或再次轮换令牌：%v", err)
+				}
+				if scenario == "persist-failed" && accountCalls != wantAccounts {
+					t.Fatal("持久化失败后仍发送了远端请求")
+				}
+			}
+		})
+	}
+}
+
+func TestColdBoundAccountRefreshRetainsCandidateUntilTemporaryValidationRecovers(t *testing.T) {
+	accountCalls, refreshes, resources, persisted, candidateChecks := 0, 0, 0, 0, 0
+	c := newClient(Tokens{Access: "saved-expired-access", Refresh: "saved-refresh", DeviceID: strings.Repeat("c", 32)}, func(tokens Tokens) error {
+		persisted++
+		if tokens.Access != "new-access" || tokens.Refresh != "new-refresh" {
+			t.Fatal("账号核验重试后未保存原候选凭证")
+		}
+		return nil
+	}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v1/user/me":
+			accountCalls++
+			if r.Header.Get("Authorization") == "Bearer saved-expired-access" {
+				return mockReply(http.StatusUnauthorized, `{}`)
+			}
+			if r.Header.Get("Authorization") != "Bearer new-access" {
+				t.Fatal("临时失败后没有复核原候选令牌")
+			}
+			candidateChecks++
+			if candidateChecks == 1 {
+				return mockReply(http.StatusInternalServerError, `{}`)
+			}
+			return mockReply(200, `{"sub":"saved-account"}`)
+		case "/v1/auth/token":
+			refreshes++
+			if requestBody(t, r)["refresh_token"] != "saved-refresh" {
+				t.Fatal("临时核验失败后提前轮换了候选令牌")
+			}
+			return mockReply(200, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
+		default:
+			resources++
+			if persisted != 1 || r.Header.Get("Authorization") != "Bearer new-access" {
+				t.Fatal("临时核验失败尚未恢复时访问了资源")
+			}
+			return successReply(map[string]string{"downloadUrl": "https://cdn.example/owned.mp4"})
+		}
+	}), 0)
+	c.SetExpectedAccount("saved-account")
+	_, err := c.URL(context.Background(), "owned-file", "")
+	first := requireError(t, err)
+	if first.Auth || !first.Retryable || !c.pendingRefresh || persisted != 0 || resources != 0 || refreshes != 1 || c.expectedAccount != "saved-account" {
+		t.Fatalf("临时核验失败被当成授权丢失，或提前保存/访问资源：%v", err)
+	}
+	if raw, err := c.URL(context.Background(), "owned-file", ""); err != nil || raw != "https://cdn.example/owned.mp4" || refreshes != 1 || candidateChecks != 2 || accountCalls != 3 || resources != 1 || persisted != 1 || c.pendingRefresh || c.checkedAccess != "new-access" {
+		t.Fatalf("临时失败后没有复核并保存候选令牌，或重复刷新：%v", err)
+	}
+}
+
 func TestRefreshVerifiesBoundAccountBeforePersistingOrRetrying(t *testing.T) {
 	for _, bindViaCheck := range []bool{false, true} {
 		t.Run(fmt.Sprint(bindViaCheck), func(t *testing.T) {
