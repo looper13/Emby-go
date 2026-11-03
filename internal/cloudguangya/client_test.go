@@ -67,6 +67,12 @@ func fileData(id, parent, name string, directory bool) map[string]any {
 	return map[string]any{"fileId": id, "parentId": parent, "fileName": name, "fileSize": "300000", "resType": resource}
 }
 
+func fileDataWithoutParent(id, name string, directory bool) map[string]any {
+	item := fileData(id, "", name, directory)
+	delete(item, "parentId")
+	return item
+}
+
 func TestNormalizeTokensAndSafeError(t *testing.T) {
 	tokens, err := NormalizeTokens(Tokens{Access: " Bearer opaque-access ", Refresh: " refresh-secret ", DeviceID: strings.Repeat("AB", 16)})
 	if err != nil || tokens.Access != "opaque-access" || tokens.Refresh != "refresh-secret" || tokens.DeviceID != strings.Repeat("ab", 16) {
@@ -99,14 +105,14 @@ func TestRefreshPersistsDeviceAndPrefersSignedURL(t *testing.T) {
 	}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host == "account.guangyapan.com" {
 			if r.URL.Path == "/v1/user/me" {
-				if r.Header.Get("Authorization") != "Bearer new-access" {
+				if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer new-access" {
 					t.Fatal("账号核验没有使用刷新后的令牌")
 				}
 				return mockReply(200, `{"sub":"account-id"}`)
 			}
 			refreshCalls++
 			body := requestBody(t, r)
-			if r.URL.Path != "/v1/auth/token" || body["refresh_token"] != "old-refresh" || body["grant_type"] != "refresh_token" || r.Header.Get("X-Device-Id") == "" {
+			if r.Method != http.MethodPost || r.URL.Path != "/v1/auth/token" || body["refresh_token"] != "old-refresh" || body["grant_type"] != "refresh_token" || r.Header.Get("X-Device-Id") == "" {
 				t.Fatalf("刷新请求错误：%v %v", r.URL, body)
 			}
 			return mockReply(200, `{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}`)
@@ -169,8 +175,14 @@ func TestCheckRefreshOnlyAndRootDoesNotQueryFile(t *testing.T) {
 		calls++
 		switch r.URL.Path {
 		case "/v1/auth/token":
+			if r.Method != http.MethodPost {
+				t.Fatal("刷新令牌必须使用 POST")
+			}
 			return mockReply(200, `{"access_token":"access-new"}`)
 		case "/v1/user/me":
+			if r.Method != http.MethodGet || r.Body != nil {
+				t.Fatal("账号核验必须使用无请求体的 GET")
+			}
 			return mockReply(200, `{"sub":"account-id"}`)
 		default:
 			t.Fatalf("根目录不应请求文件详情：%s", r.URL)
@@ -207,6 +219,469 @@ func TestFilePaginationRootMappingAndDownloadIdentity(t *testing.T) {
 	last, more, err := c.List(context.Background(), "0", len(first))
 	if err != nil || more || len(last) != 2 || last[0].ID != "file-100" {
 		t.Fatalf("末页读取失败：%+v %v %v", last, more, err)
+	}
+}
+
+func TestInfoUsesFileIdentityEndpoint(t *testing.T) {
+	c := mockClient(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || requestBody(t, r)["fileId"] != "video-id" {
+			t.Fatalf("文件身份请求参数错误：%s %v", r.Method, r.URL)
+		}
+		if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+			return successReply(fileData("video-id", "owned-child", "film.mp4", false))
+		}
+		// 详情接口返回嵌套结构，不能作为平铺资源身份接口使用。
+		return successReply(map[string]any{"fileInfo": fileData("video-id", "owned-child", "film.mp4", false), "location": "缓存/film.mp4"})
+	})
+	file, err := c.Info(context.Background(), "video-id")
+	if err != nil || file.ID != "video-id" || file.ParentID != "owned-child" || file.Directory {
+		t.Fatalf("未使用平铺资源身份接口：%+v %v", file, err)
+	}
+}
+
+func TestInfoConfirmsOmittedRootParentFromCurrentListing(t *testing.T) {
+	rootCalls := 0
+	c := mockClient(func(r *http.Request) (*http.Response, error) {
+		body := requestBody(t, r)
+		item := fileData("cache-root", "", clouddrive.CacheFolderName, true)
+		delete(item, "parentId")
+		if r.URL.Path == fileAPI+"file/get_file_list" {
+			rootCalls++
+			if body["parentId"] != "" || body["page"] != float64(0) {
+				t.Fatalf("省略父目录后未从当前根列表核验：%v", body)
+			}
+			return successReply(map[string]any{"list": []any{item}, "total": 1})
+		}
+		if body["fileId"] != "cache-root" {
+			t.Fatalf("缓存目录身份错误：%v", body)
+		}
+		item["depth"] = 1
+		return successReply(item)
+	})
+	file, err := c.Info(context.Background(), "cache-root")
+	if err != nil || file.ID != "cache-root" || file.ParentID != "0" || !file.Directory || rootCalls != 1 {
+		t.Fatalf("未核验服务端省略父目录的缓存根：%+v %v root=%d", file, err, rootCalls)
+	}
+}
+
+func TestInfoConfirmsRootIdentityAcrossCompletePagination(t *testing.T) {
+	for _, targetOnFirstPage := range []bool{false, true} {
+		t.Run(fmt.Sprint(targetOnFirstPage), func(t *testing.T) {
+			rootCalls := 0
+			c := mockClient(func(r *http.Request) (*http.Response, error) {
+				body := requestBody(t, r)
+				if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+					if body["fileId"] != "target" {
+						t.Fatalf("目标文件身份错误：%v", body)
+					}
+					item := fileDataWithoutParent("target", "目标目录", true)
+					item["parentId"] = nil
+					// 深度和显示路径都不能代替真实根目录成员证明。
+					item["depth"], item["location"] = 4, "其它/显示/路径/目标目录"
+					return successReply(item)
+				}
+				if r.URL.Path != fileAPI+"file/get_file_list" || body["parentId"] != "" || body["pageSize"] != float64(pageSize) || body["page"] != float64(rootCalls) {
+					t.Fatalf("根目录分页请求错误：%v %v", r.URL, body)
+				}
+				page := rootCalls
+				rootCalls++
+				if page == 0 {
+					items := make([]any, pageSize)
+					for i := range items {
+						items[i] = fileDataWithoutParent(fmt.Sprintf("first-%d", i), "普通文件.mp4", false)
+					}
+					if targetOnFirstPage {
+						items[0] = fileDataWithoutParent("target", "目标目录", true)
+					}
+					return successReply(map[string]any{"list": items, "total": pageSize + 1})
+				}
+				last := fileDataWithoutParent("last", "普通文件.mp4", false)
+				if !targetOnFirstPage {
+					last = fileDataWithoutParent("target", "目标目录", true)
+				}
+				return successReply(map[string]any{"list": []any{last}, "total": pageSize + 1})
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			file, err := c.Info(ctx, "target")
+			if err != nil || file.ParentID != "0" || !file.Directory || rootCalls != 2 {
+				t.Fatalf("未完成所有根目录分页核验：%+v %v pages=%d", file, err, rootCalls)
+			}
+		})
+	}
+}
+
+func TestInfoDoesNotReusePriorRootMembership(t *testing.T) {
+	rootCalls := 0
+	c := mockClient(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+			return successReply(fileDataWithoutParent("target", "目标目录", true))
+		}
+		if r.URL.Path != fileAPI+"file/get_file_list" {
+			t.Fatalf("未预期的文件接口：%v", r.URL)
+		}
+		rootCalls++
+		if rootCalls == 1 {
+			return successReply(map[string]any{"list": []any{fileDataWithoutParent("target", "目标目录", true)}, "total": 1})
+		}
+		return mockReply(200, `{"msg":"success","data":{}}`)
+	})
+	if file, err := c.Info(context.Background(), "target"); err != nil || file.ParentID != "0" {
+		t.Fatalf("首次根目录归属核验失败：%+v %v", file, err)
+	}
+	file, err := c.Info(context.Background(), "target")
+	if err == nil || file.ID != "" || requireError(t, err).Missing || rootCalls != 2 {
+		t.Fatalf("文件移出根目录后复用了旧归属证明：%+v %v root=%d", file, err, rootCalls)
+	}
+}
+
+func TestInfoRejectsUnprovenRootMembership(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data any
+	}{
+		{"empty-object", map[string]any{}},
+		{"empty-list", map[string]any{"list": []any{}, "total": 0}},
+		{"same-name-different-id", map[string]any{"list": []any{fileData("different-id", "", "目标目录", true)}, "total": 1}},
+		{"same-id-different-name", map[string]any{"list": []any{fileData("target", "", "不同目录", true)}, "total": 1}},
+		{"same-id-wrong-type", map[string]any{"list": []any{fileData("target", "", "目标目录", false)}, "total": 1}},
+		{"foreign-parent", map[string]any{"list": []any{fileData("target", "foreign-folder", "目标目录", true)}, "total": 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := mockClient(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+					item := fileDataWithoutParent("target", "目标目录", true)
+					item["depth"], item["location"] = 1, "目标目录"
+					return successReply(item)
+				}
+				if r.URL.Path != fileAPI+"file/get_file_list" {
+					t.Fatalf("未预期的根目录请求：%v", r.URL)
+				}
+				return successReply(test.data)
+			})
+			file, err := c.Info(context.Background(), "target")
+			if err == nil || file.ID != "" || requireError(t, err).Missing {
+				t.Fatalf("无法证明根归属时接受了文件或误判删除：%+v %v", file, err)
+			}
+		})
+	}
+}
+
+func TestInfoRejectsIncompleteRootPagination(t *testing.T) {
+	firstPage := make([]any, pageSize)
+	for i := range firstPage {
+		firstPage[i] = fileDataWithoutParent(fmt.Sprintf("first-%d", i), "普通文件.mp4", false)
+	}
+	firstPage[0] = fileDataWithoutParent("target", "目标目录", true)
+	for _, test := range []struct {
+		name      string
+		first     any
+		next      any
+		wantCalls int
+	}{
+		{"missing-list", map[string]any{"unknownField": 1}, nil, 1},
+		{"short-nonfinal-page", map[string]any{"list": []any{firstPage[0]}, "total": pageSize + 1}, nil, 1},
+		{"missing-final-page", map[string]any{"list": firstPage, "total": pageSize + 1}, map[string]any{}, 2},
+		{"empty-nonfinal-page", map[string]any{"list": firstPage, "total": pageSize + 1}, map[string]any{"list": []any{}, "total": pageSize + 1}, 2},
+		{"repeated-page", map[string]any{"list": firstPage, "total": 2 * pageSize}, map[string]any{"list": firstPage, "total": 2 * pageSize}, 2},
+		{"changing-total", map[string]any{"list": firstPage, "total": pageSize + 1}, map[string]any{"list": []any{fileDataWithoutParent("last", "最后文件.mp4", false)}, "total": pageSize + 2}, 2},
+		{"invalid-total", map[string]any{"list": []any{firstPage[0]}, "total": "unknown"}, nil, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootCalls := 0
+			c := mockClient(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+					return successReply(fileDataWithoutParent("target", "目标目录", true))
+				}
+				if r.URL.Path != fileAPI+"file/get_file_list" {
+					t.Fatalf("未预期的接口：%v", r.URL)
+				}
+				rootCalls++
+				if rootCalls == 1 {
+					return successReply(test.first)
+				}
+				if rootCalls > test.wantCalls {
+					t.Fatal("不完整分页后仍继续请求根目录")
+				}
+				return successReply(test.next)
+			})
+			file, err := c.Info(context.Background(), "target")
+			if err == nil || file.ID != "" || requireError(t, err).Missing || rootCalls != test.wantCalls {
+				t.Fatalf("分页不完整时提前确认了归属：%+v %v calls=%d", file, err, rootCalls)
+			}
+		})
+	}
+}
+
+func TestInfoRootVerificationHasPageLimit(t *testing.T) {
+	rootCalls := 0
+	c := mockClient(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+			return successReply(fileDataWithoutParent("target", "目标目录", true))
+		}
+		body := requestBody(t, r)
+		if r.URL.Path != fileAPI+"file/get_file_list" || body["page"] != float64(rootCalls) {
+			t.Fatalf("分页未递增：%v %v", r.URL, body)
+		}
+		items := make([]any, pageSize)
+		for i := range items {
+			items[i] = fileDataWithoutParent(fmt.Sprintf("page-%d-file-%d", rootCalls, i), "普通文件.mp4", false)
+		}
+		if rootCalls == 0 {
+			items[0] = fileDataWithoutParent("target", "目标目录", true)
+		}
+		rootCalls++
+		return successReply(map[string]any{"list": items, "total": maxPages*pageSize + 1})
+	})
+	file, err := c.Info(context.Background(), "target")
+	if err == nil || file.ID != "" || !requireError(t, err).Retryable || rootCalls != maxPages {
+		t.Fatalf("根目录核验未限制分页或提前确认归属：%+v %v pages=%d", file, err, rootCalls)
+	}
+}
+
+func TestInfoAcceptsExactPageBoundaryWithoutTotal(t *testing.T) {
+	rootCalls := 0
+	c := mockClient(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+			return successReply(fileDataWithoutParent("target", "目标文件.mp4", false))
+		}
+		if r.URL.Path != fileAPI+"file/get_file_list" {
+			t.Fatalf("未预期的目录请求：%v", r.URL)
+		}
+		rootCalls++
+		if rootCalls == 2 {
+			return mockReply(200, `{"msg":"success","data":{}}`)
+		}
+		items := make([]any, pageSize)
+		for i := range items {
+			items[i] = fileDataWithoutParent(fmt.Sprintf("file-%d", i), "普通文件.mp4", false)
+		}
+		items[0] = fileDataWithoutParent("target", "目标文件.mp4", false)
+		return successReply(map[string]any{"list": items})
+	})
+	file, err := c.Info(context.Background(), "target")
+	if err != nil || file.ParentID != "0" || file.Directory || rootCalls != 2 {
+		t.Fatalf("没有总数的整页目录不能完成核验：%+v %v pages=%d", file, err, rootCalls)
+	}
+}
+
+func TestInfoRootVerificationPreservesUnknownFailureClassification(t *testing.T) {
+	for _, failure := range []string{"network", "auth", "http404", "business-missing", "server-error"} {
+		t.Run(failure, func(t *testing.T) {
+			c := mockClient(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
+					return successReply(fileDataWithoutParent("target", "目标目录", true))
+				}
+				switch failure {
+				case "network":
+					return nil, errors.New("目录列表连接中断")
+				case "auth":
+					return mockReply(401, `{}`)
+				case "http404":
+					return mockReply(404, `{}`)
+				case "business-missing":
+					return mockReply(200, `{"code":404,"msg":"file not found"}`)
+				default:
+					return mockReply(500, `{}`)
+				}
+			})
+			file, err := c.Info(context.Background(), "target")
+			cloudErr := requireError(t, err)
+			if file.ID != "" || cloudErr.Missing || cloudErr.Auth != (failure == "auth") || failure == "business-missing" && !cloudErr.Retryable {
+				t.Fatalf("归属核验失败被误判为文件删除：%+v %v", file, err)
+			}
+		})
+	}
+}
+
+func TestInfoExplicitParentDoesNotNeedRootInference(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		parent any
+		want   string
+	}{
+		{"non-root", "owned-folder", "owned-folder"},
+		{"explicit-empty-root", "", "0"},
+		{"numeric-root", 0, "0"},
+		{"invalid-parent", "foreign/parent", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			c := mockClient(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.URL.Path != "/userres/v1/file/get_info_by_file_id" {
+					t.Fatalf("明确父字段时仍查询根目录：%v", r.URL)
+				}
+				item := fileData("file", "", "film.mp4", false)
+				item["parentId"] = test.parent
+				return successReply(item)
+			})
+			file, err := c.Info(context.Background(), "file")
+			if calls != 1 || test.want == "" && err == nil || test.want != "" && (err != nil || file.ParentID != test.want) {
+				t.Fatalf("明确父字段的处理发生改变：%+v %v calls=%d", file, err, calls)
+			}
+		})
+	}
+}
+
+func TestListAcceptsOnlyConfirmedEmptyResponses(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		ok   bool
+	}{
+		{"success-empty-object", `{"msg":"success","data":{}}`, true},
+		{"code-empty-object", `{"code":0,"data":{}}`, true},
+		{"zero-code-success-message", `{"code":0,"msg":"success","data":{}}`, true},
+		{"200-code-success-message", `{"code":200,"msg":"success","data":{}}`, true},
+		{"200-code-no-message", `{"code":200,"data":{}}`, true},
+		{"success-omitted-list-zero-total", `{"msg":"success","data":{"total":0}}`, true},
+		{"success-string-zero-total", `{"msg":"success","data":{"total":"0"}}`, true},
+		{"success-explicit-empty-list", `{"msg":"success","data":{"list":[],"total":0}}`, true},
+		{"unconfirmed-empty-object", `{"data":{}}`, false},
+		{"blank-confirmation", `{"msg":" ","data":{}}`, false},
+		{"unknown-fields", `{"msg":"success","data":{"unknownField":1}}`, false},
+		{"zero-total-unknown-fields", `{"msg":"success","data":{"total":0,"unknownField":1}}`, false},
+		{"positive-total-no-list", `{"msg":"success","data":{"total":1}}`, false},
+		{"null-list", `{"msg":"success","data":{"list":null,"total":0}}`, false},
+		{"null-total", `{"msg":"success","data":{"total":null}}`, false},
+		{"array-data", `{"msg":"success","data":[]}`, false},
+		{"string-data", `{"msg":"success","data":"empty"}`, false},
+		{"null-data", `{"msg":"success","data":null}`, false},
+		{"missing-data", `{"msg":"success"}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := mockClient(func(*http.Request) (*http.Response, error) { return mockReply(200, test.body) })
+			files, more, err := c.List(context.Background(), "cache-root", 0)
+			if test.ok {
+				if err != nil || more || files == nil || len(files) != 0 {
+					t.Fatalf("明确成功的空目录被拒绝：%+v %v %v", files, more, err)
+				}
+			} else if err == nil || files != nil || more || requireError(t, err).Missing {
+				t.Fatalf("不完整或未确认的响应被认为空目录：%+v %v %v", files, more, err)
+			}
+		})
+	}
+}
+
+func TestFailureCodesOverrideSuccessMessage(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		code      any
+		errorCode any
+		auth      bool
+		retry     bool
+	}{
+		{"unauthorized", 401, nil, true, true},
+		{"forbidden", 403, nil, true, true},
+		{"server-failure", 500, nil, false, true},
+		{"rate-limit", 429, nil, false, true},
+		{"success-code-auth-error", 200, 401, true, true},
+		{"zero-code-auth-error", 0, 403, true, true},
+		{"success-code-server-error", 200, 500, false, true},
+		{"combined-server-auth-error", 500, 401, true, true},
+		{"invalid-success-code", "unknown", nil, false, false},
+		{"invalid-error-code", 200, "unknown", false, false},
+		{"nonzero-error-code", 200, 200, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := map[string]any{"code": test.code, "msg": "success", "data": map[string]any{}}
+			if test.errorCode != nil {
+				envelope["error_code"] = test.errorCode
+			}
+			body, err := json.Marshal(envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := mockClient(func(*http.Request) (*http.Response, error) { return mockReply(200, string(body)) })
+			files, more, err := c.List(context.Background(), "cache-root", 0)
+			cloudErr := requireError(t, err)
+			if files != nil || more || cloudErr.Missing || cloudErr.Auth != test.auth || cloudErr.Retryable != test.retry {
+				t.Fatalf("失败代码被 success 文本覆盖或错误分类丢失：%+v %v %v", files, more, err)
+			}
+		})
+	}
+}
+
+func TestRetryableFailureCodesDoNotProveFileMissing(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		code      int
+		errorCode int
+		missing   bool
+	}{
+		{"explicit-missing", 404, 0, true},
+		{"rate-limit", 429, 0, false},
+		{"server-failure", 500, 0, false},
+		{"success-code-server-error", 200, 500, false},
+		{"zero-code-rate-limit", 0, 429, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"code": test.code, "error_code": test.errorCode, "msg": "file not found"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := mockClient(func(*http.Request) (*http.Response, error) { return mockReply(200, string(body)) })
+			file, err := c.Info(context.Background(), "target")
+			cloudErr := requireError(t, err)
+			if file.ID != "" || cloudErr.Missing != test.missing || cloudErr.Retryable == test.missing || cloudErr.Auth {
+				t.Fatalf("可重试服务失败被当作文件缺失：%+v %v", file, err)
+			}
+		})
+	}
+}
+
+func TestCheckRefreshesUsingGETAndVerifiesOmittedRootParent(t *testing.T) {
+	accountCalls, refreshCalls, resources, persisted := 0, 0, 0, 0
+	c := newClient(Tokens{Access: "expired-access", Refresh: "saved-refresh"}, func(tokens Tokens) error {
+		persisted++
+		if tokens.Access != "refreshed-access" {
+			t.Fatal("账号核验通过后未保存刷新凭证")
+		}
+		return nil
+	}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/v1/user/me":
+			accountCalls++
+			if r.Method != http.MethodGet || r.Body != nil {
+				t.Fatal("账号核验改用了非 GET 协议")
+			}
+			if r.Header.Get("Authorization") == "Bearer expired-access" {
+				return mockReply(401, `{}`)
+			}
+			if r.Header.Get("Authorization") != "Bearer refreshed-access" {
+				t.Fatal("账号核验未使用候选刷新令牌")
+			}
+			return mockReply(200, `{"sub":"saved-account"}`)
+		case "/v1/auth/token":
+			refreshCalls++
+			if r.Method != http.MethodPost || requestBody(t, r)["refresh_token"] != "saved-refresh" {
+				t.Fatal("刷新请求协议错误")
+			}
+			return mockReply(200, `{"access_token":"refreshed-access"}`)
+		case "/userres/v1/file/get_info_by_file_id":
+			resources++
+			if persisted != 1 || r.Header.Get("Authorization") != "Bearer refreshed-access" || requestBody(t, r)["fileId"] != "cache-root" {
+				t.Fatal("完成账号核验前就访问了缓存目录")
+			}
+			return successReply(fileDataWithoutParent("cache-root", clouddrive.CacheFolderName, true))
+		case fileAPI + "file/get_file_list":
+			resources++
+			if persisted != 1 || r.Header.Get("Authorization") != "Bearer refreshed-access" || requestBody(t, r)["parentId"] != "" {
+				t.Fatal("当前根目录核验使用了错误账号或父目录")
+			}
+			return successReply(map[string]any{"list": []any{fileDataWithoutParent("cache-root", clouddrive.CacheFolderName, true)}, "total": 1})
+		default:
+			t.Fatalf("缓存目录验证请求了错误接口：%v", r.URL)
+			return nil, nil
+		}
+	}), 0)
+	c.SetExpectedAccount("saved-account")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	account, err := c.Check(ctx, "cache-root")
+	if err != nil || account != "saved-account" || accountCalls != 3 || refreshCalls != 1 || resources != 2 || persisted != 1 {
+		t.Fatalf("绑定账号刷新后不能验证缓存根：%s %v account=%d refresh=%d resources=%d persist=%d", account, err, accountCalls, refreshCalls, resources, persisted)
 	}
 }
 
@@ -262,7 +737,7 @@ func TestFindTaskStatusesAndRestoresParentFromResult(t *testing.T) {
 					}
 					return successReply(map[string]any{"list": []any{task}, "total": 1})
 				}
-				if r.URL.Path != fileAPI+"file/get_file_detail" || requestBody(t, r)["fileId"] != "result" {
+				if r.URL.Path != "/userres/v1/file/get_info_by_file_id" || requestBody(t, r)["fileId"] != "result" {
 					t.Fatalf("结果详情请求错误：%v", r.URL)
 				}
 				return successReply(fileData("result", "owned-child", "movie", true))
@@ -385,7 +860,7 @@ func TestConditionalRemovalRechecksRecordAndResultBeforeDeleting(t *testing.T) {
 					}
 					return successReply(map[string]any{"list": []any{task}, "total": 1})
 				}
-				if r.URL.Path == fileAPI+"file/get_file_detail" {
+				if r.URL.Path == "/userres/v1/file/get_info_by_file_id" {
 					if change == "foreign-folder" {
 						return successReply(fileData("old-result", "foreign-folder", "movie", true))
 					}

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,18 +25,40 @@ type namedCloudFixture struct {
 	cloudFixture
 	account, provider string
 	checkErr          error
+	onCheck           func() error
+	cacheInfoErr      error
+	cacheInfo         *cloud115.File
+	listErr           error
 }
 
 func (f *namedCloudFixture) Check(context.Context, string) (string, error) {
+	if f.onCheck != nil {
+		if err := f.onCheck(); err != nil {
+			return "", err
+		}
+	}
 	return f.account, f.checkErr
 }
 
 func (f *namedCloudFixture) Info(ctx context.Context, id string) (cloud115.File, error) {
 	if id == "12" {
 		f.infos++
+		if f.cacheInfoErr != nil {
+			return cloud115.File{}, f.cacheInfoErr
+		}
+		if f.cacheInfo != nil {
+			return *f.cacheInfo, nil
+		}
 		return cloud115.File{ID: "12", ParentID: "0", Name: cloud115.CacheFolderName, Directory: true}, nil
 	}
 	return f.cloudFixture.Info(ctx, id)
+}
+
+func (f *namedCloudFixture) List(ctx context.Context, parent string, offset int) ([]cloud115.File, bool, error) {
+	if f.listErr != nil {
+		return nil, false, f.listErr
+	}
+	return f.cloudFixture.List(ctx, parent, offset)
 }
 
 func (f *namedCloudFixture) URL(ctx context.Context, code, ua string) (string, error) {
@@ -267,6 +290,113 @@ func TestCloudGuangyaConfigurationEncryptionRevisionAndAccountIsolation(t *testi
 	connection, err = h.a.db.CloudGuangyaConnection()
 	if err != nil || connection.AccountID != "shared-account" || connection.Revision != 2 {
 		t.Fatal("拒绝更新后改变了既有光鸭配置", err)
+	}
+}
+
+func TestCloudGuangyaConfigurationErrorStagesRedactAllCandidateTokens(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		for _, scenario := range []struct {
+			name, stage string
+			fail        func(*namedCloudFixture, error)
+		}{
+			{"账号验证", "光鸭账号验证失败：", func(f *namedCloudFixture, err error) { f.checkErr = err }},
+			{"缓存目录发现", "光鸭缓存目录创建或验证失败：", func(f *namedCloudFixture, err error) { f.listErr = err }},
+			{"缓存目录信息", "光鸭缓存目录信息读取失败：", func(f *namedCloudFixture, err error) { f.cacheInfoErr = err }},
+		} {
+			state := "首次配置"
+			if existing {
+				state = "更新配置"
+			}
+			t.Run(state+"/"+scenario.name, func(t *testing.T) {
+				h := newGuangyaServerHarness(t)
+				var before store.CloudGuangyaConnection
+				if existing {
+					h.configure(t)
+					var err error
+					before, err = h.a.db.CloudGuangyaConnection()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				access, refresh := "original-access-fixture", "original-refresh-fixture"
+				first := cloudguangya.Tokens{Access: access + "-first-private-suffix", Refresh: refresh + "-first-private-suffix", DeviceID: strings.Repeat("b", 32)}
+				last := cloudguangya.Tokens{Access: "latest-refreshed-access", Refresh: "latest-refreshed-refresh", DeviceID: strings.Repeat("c", 32)}
+				cause := errors.New("光鸭 HTTP 请求失败（401），具体响应原因保留：" + strings.Join([]string{
+					"Bearer " + access, access, refresh, first.Access, first.Refresh, last.Access, last.Refresh,
+					first.DeviceID, last.DeviceID, "https://private.invalid/cache?token=remote-secret", "http://private.invalid/auth?key=another-secret",
+				}, " "))
+				scenario.fail(h.guangya, cause)
+				h.a.guangyaOpen = func(tokens cloudguangya.Tokens, persist func(cloudguangya.Tokens) error) cloud115.Provider {
+					h.received = tokens
+					h.guangya.onCheck = func() error {
+						if err := persist(first); err != nil {
+							return err
+						}
+						return persist(last)
+					}
+					return h.guangya
+				}
+				_, out := h.call(t, http.MethodPut, "/api/admin/guangya/connection", h.admin, map[string]any{
+					"access_token": " Bearer " + access + " ", "refresh_token": " " + refresh + " ", "device_id": "", "revision": before.Revision,
+				}, http.StatusBadRequest)
+				message, ok := out["error"].(string)
+				if !ok || !strings.HasPrefix(message, scenario.stage) || !strings.Contains(message, "HTTP 请求失败（401）") {
+					t.Fatal("错误未保留阶段和可诊断原因", message)
+				}
+				for _, secret := range []string{access, refresh, first.Access, first.Refresh, last.Access, last.Refresh, first.DeviceID, last.DeviceID, "first-private-suffix", "private.invalid", "remote-secret", "another-secret", "https://", "http://"} {
+					if strings.Contains(message, secret) {
+						t.Fatal("配置失败响应泄露原始或刷新后的秘密")
+					}
+				}
+				if !strings.Contains(message, "[REDACTED]") || !strings.Contains(message, "[URL]") {
+					t.Fatal("未对令牌和远端地址执行脱敏", message)
+				}
+				if len(h.received.DeviceID) != 32 {
+					t.Fatal("首次设备 ID 留空未被规范化")
+				}
+				after, err := h.a.db.CloudGuangyaConnection()
+				if !existing {
+					if !errors.Is(err, sql.ErrNoRows) {
+						t.Fatal("失败的首次验证保存了连接", err)
+					}
+				} else if err != nil || after.AccountID != before.AccountID || after.FolderID != before.FolderID || after.Revision != before.Revision || !bytes.Equal(after.Secrets, before.Secrets) {
+					t.Fatal("失败验证改变了已有连接或候选凭据", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCloudGuangyaConfigurationRejectsMissingAccountAndCacheIdentityMismatch(t *testing.T) {
+	for _, scenario := range []struct {
+		name, reason string
+		change       func(*namedCloudFixture)
+	}{
+		{"账号缺失", "未返回有效账号身份", func(f *namedCloudFixture) { f.account = "" }},
+		{"账号为空白", "未返回有效账号身份", func(f *namedCloudFixture) { f.account = " \t " }},
+		{"目录ID错误", "返回的目录 ID 与缓存目录不一致", func(f *namedCloudFixture) { f.cacheInfo.ID = "other-directory" }},
+		{"路径不是目录", "返回的缓存路径不是文件夹", func(f *namedCloudFixture) { f.cacheInfo.Directory = false }},
+		{"目录不在根下", "缓存目录不位于网盘根目录", func(f *namedCloudFixture) { f.cacheInfo.ParentID = "other-parent" }},
+		{"目录名称错误", "缓存目录名称不匹配", func(f *namedCloudFixture) { f.cacheInfo.Name = "other-cache-name" }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			h := newGuangyaServerHarness(t)
+			h.guangya.cacheInfo = &cloud115.File{ID: "12", ParentID: "0", Name: cloud115.CacheFolderName, Directory: true}
+			scenario.change(h.guangya)
+			_, out := h.call(t, http.MethodPut, "/api/admin/guangya/connection", h.admin, map[string]any{
+				"access_token": "guangya-secret-access", "refresh_token": "guangya-secret-refresh", "device_id": "", "revision": 0,
+			}, http.StatusBadRequest)
+			message, ok := out["error"].(string)
+			if !ok || !strings.Contains(message, scenario.reason) {
+				t.Fatal("拒绝无效身份时未说明对应原因", message)
+			}
+			if strings.Contains(message, "other-directory") || strings.Contains(message, "other-parent") || strings.Contains(message, "other-cache-name") {
+				t.Fatal("目录身份错误响应暴露远端内部字段")
+			}
+			if _, err := h.a.db.CloudGuangyaConnection(); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatal("身份核验失败仍保存了连接", err)
+			}
+		})
 	}
 }
 

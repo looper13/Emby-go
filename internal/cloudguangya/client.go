@@ -360,16 +360,20 @@ func (c *Client) verifyAccountLocked(ctx context.Context) (string, error) {
 
 func responseError(r response) error {
 	message := strings.ToLower(strings.TrimSpace(r.Message))
-	if r.Error == "" && (r.ErrorCode == "" || r.ErrorCode == "0") && (message == "success" || message == "" && (r.Code == "" || r.Code == "0" || r.Code == "200")) {
+	successCode := r.Code == "" || r.Code == "0" || r.Code == "200"
+	successErrorCode := r.ErrorCode == "" || r.ErrorCode == "0"
+	if r.Error == "" && successCode && successErrorCode && (message == "success" || message == "") {
 		return nil
 	}
 	code, _ := r.Code.integer()
-	if code == 0 {
-		code, _ = r.ErrorCode.integer()
+	errorCode, _ := r.ErrorCode.integer()
+	auth := code == 401 || code == 403 || errorCode == 401 || errorCode == 403 || r.Error == "invalid_token" || r.Error == "unauthorized"
+	retry := auth || code == 429 || errorCode == 429 || code >= 500 && code < 600 || errorCode >= 500 && errorCode < 600 || strings.Contains(message, "频繁") || strings.Contains(message, "rate limit")
+	// 失败代码优先于 success 文本；成功主代码不能掩盖实际认证或服务错误。
+	if (code == 0 || code == 200) && errorCode != 0 {
+		code = errorCode
 	}
-	auth := code == 401 || code == 403 || r.Error == "invalid_token" || r.Error == "unauthorized"
-	missing := !auth && (message == "file not found" || message == "file_not_found" || message == "文件不存在" || message == "文件已删除")
-	retry := auth || code == 429 || code >= 500 && code < 600 || strings.Contains(message, "频繁") || strings.Contains(message, "rate limit")
+	missing := !retry && (message == "file not found" || message == "file_not_found" || message == "文件不存在" || message == "文件已删除")
 	return &clouddrive.Error{Message: fmt.Sprintf("光鸭接口返回失败（%d）", code), Auth: auth, Retryable: retry, Missing: missing}
 }
 
@@ -417,7 +421,7 @@ func (c *Client) requestLocked(ctx context.Context, method, endpoint string, bod
 		if err != nil {
 			return err
 		}
-		if !account && envelope.Message == "" && envelope.Code == "" && len(envelope.Data) == 0 {
+		if !account && strings.TrimSpace(envelope.Message) == "" && strings.TrimSpace(string(envelope.Code)) == "" {
 			return &clouddrive.Error{Message: "光鸭响应未确认操作结果，需先核验远端状态", Retryable: true}
 		}
 		if out != nil {
@@ -527,7 +531,7 @@ func (c *Client) infoLocked(ctx context.Context, id string) (clouddrive.File, er
 		return clouddrive.File{ID: "0", Name: "/", Path: "/", Directory: true}, nil
 	}
 	var item fileItem
-	if err := c.requestLocked(ctx, http.MethodPost, apiBase+fileAPI+"file/get_file_detail", map[string]string{"fileId": id}, false, &item); err != nil {
+	if err := c.requestLocked(ctx, http.MethodPost, apiBase+"/userres/v1/file/get_info_by_file_id", map[string]string{"fileId": id}, false, &item); err != nil {
 		return clouddrive.File{}, err
 	}
 	if item.ID == "" {
@@ -536,7 +540,70 @@ func (c *Client) infoLocked(ctx context.Context, id string) (clouddrive.File, er
 	if string(item.ID) != id {
 		return clouddrive.File{}, &clouddrive.Error{Message: "光鸭返回的文件身份不匹配"}
 	}
-	return item.file("")
+	if item.ParentID != nil {
+		return item.file("")
+	}
+	file, err := item.file("0")
+	if err != nil {
+		return clouddrive.File{}, err
+	}
+	// 服务端会省略根资源的空父字段；必须用当前根目录成员身份确认归属。
+	if err := c.verifyRootFileLocked(ctx, file); err != nil {
+		return clouddrive.File{}, err
+	}
+	return file, nil
+}
+
+func (c *Client) verifyRootFileLocked(ctx context.Context, expected clouddrive.File) error {
+	seen := map[string]bool{}
+	matched := false
+	offset := 0
+	var knownTotal *int64
+	for page := 0; page < maxPages; page++ {
+		result, err := c.listLocked(ctx, "0", offset)
+		if err != nil {
+			var remote *clouddrive.Error
+			if errors.As(err, &remote) && remote.Missing {
+				// 根列表失败只说明归属未证实，不能推翻已取得的目标文件身份。
+				next := *remote
+				next.Missing, next.Retryable = false, true
+				return &next
+			}
+			return err
+		}
+		if result.total != nil {
+			if knownTotal != nil && *knownTotal != *result.total {
+				return &clouddrive.Error{Message: "光鸭根目录分页总数发生变化，需重新核验归属", Retryable: true}
+			}
+			knownTotal = result.total
+		}
+		if result.more && len(result.files) != pageSize {
+			return &clouddrive.Error{Message: "光鸭根目录分页不完整，无法核验归属", Retryable: true}
+		}
+		for _, file := range result.files {
+			if seen[file.ID] {
+				return &clouddrive.Error{Message: "光鸭根目录分页返回重复身份，无法核验归属", Retryable: true}
+			}
+			seen[file.ID] = true
+			if file.ID == expected.ID {
+				if file.Name != expected.Name || file.Directory != expected.Directory {
+					return &clouddrive.Error{Message: "光鸭根目录返回不一致的文件身份，无法核验归属", Retryable: true}
+				}
+				matched = true
+			}
+		}
+		offset += len(result.files)
+		if !result.more {
+			if knownTotal != nil && int64(offset) != *knownTotal {
+				return &clouddrive.Error{Message: "光鸭根目录分页提前结束，无法核验归属", Retryable: true}
+			}
+			if matched {
+				return nil
+			}
+			return &clouddrive.Error{Message: "光鸭文件缺少可核验的父目录", Retryable: true}
+		}
+	}
+	return &clouddrive.Error{Message: "光鸭根目录超过分页限制，无法完整核验归属", Retryable: true}
 }
 
 func (c *Client) Info(ctx context.Context, id string) (clouddrive.File, error) {
@@ -555,48 +622,79 @@ func (c *Client) List(ctx context.Context, id string, offset int) ([]clouddrive.
 		return nil, false, err
 	}
 	defer c.unlock()
+	result, err := c.listLocked(ctx, id, offset)
+	return result.files, result.more, err
+}
+
+type filePage struct {
+	files []clouddrive.File
+	more  bool
+	total *int64
+}
+
+func (c *Client) listLocked(ctx context.Context, id string, offset int) (filePage, error) {
 	var result struct {
 		Total *scalar    `json:"total"`
 		List  []fileItem `json:"list"`
 	}
+	var payload json.RawMessage
 	// 公共层按偏移量续页，光鸭按固定页大小翻页，末页可能不足一整页。
 	if err := c.requestLocked(ctx, http.MethodPost, apiBase+fileAPI+"file/get_file_list", map[string]any{
 		"parentId": apiParent(id), "page": offset / pageSize, "pageSize": pageSize, "orderBy": 0, "sortType": 0,
-	}, false, &result); err != nil {
-		return nil, false, err
+	}, false, &payload); err != nil {
+		return filePage{}, err
 	}
-	if result.List == nil || len(result.List) > pageSize {
-		return nil, false, &clouddrive.Error{Message: "光鸭目录分页不完整", Retryable: true}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil || fields == nil || json.Unmarshal(payload, &result) != nil {
+		return filePage{}, &clouddrive.Error{Message: "光鸭目录响应字段不完整", Retryable: true}
+	}
+	if result.List == nil {
+		// 明确成功的空对象和 total=0 可以省略零值字段，未知结构不能当作空目录。
+		_, listPresent := fields["list"]
+		empty := !listPresent && len(fields) == 0
+		if !listPresent && len(fields) == 1 && result.Total != nil {
+			total, err := result.Total.integer()
+			empty = err == nil && total == 0
+		}
+		if !empty {
+			return filePage{}, &clouddrive.Error{Message: "光鸭目录分页不完整", Retryable: true}
+		}
+		result.List = []fileItem{}
+	}
+	if len(result.List) > pageSize {
+		return filePage{}, &clouddrive.Error{Message: "光鸭目录分页不完整", Retryable: true}
 	}
 	skip := offset % pageSize
 	if skip > len(result.List) {
-		return nil, false, &clouddrive.Error{Message: "光鸭目录分页位置未前进", Retryable: true}
+		return filePage{}, &clouddrive.Error{Message: "光鸭目录分页位置未前进", Retryable: true}
 	}
 	files := make([]clouddrive.File, 0, len(result.List)-skip)
 	seen := map[string]bool{}
 	for _, item := range result.List[skip:] {
 		file, err := item.file(id)
 		if err != nil {
-			return nil, false, err
+			return filePage{}, err
 		}
 		if file.ParentID != id || seen[file.ID] {
-			return nil, false, &clouddrive.Error{Message: "光鸭返回错误目录或重复文件身份"}
+			return filePage{}, &clouddrive.Error{Message: "光鸭返回错误目录或重复文件身份"}
 		}
 		seen[file.ID] = true
 		files = append(files, file)
 	}
 	more := len(result.List) == pageSize
+	var knownTotal *int64
 	if result.Total != nil {
 		total, err := result.Total.integer()
 		if err != nil || total < 0 || total < int64(offset+len(files)) {
-			return nil, false, &clouddrive.Error{Message: "光鸭目录总数格式不正确", Retryable: true}
+			return filePage{}, &clouddrive.Error{Message: "光鸭目录总数格式不正确", Retryable: true}
 		}
+		knownTotal = &total
 		more = int64(offset+len(files)) < total
 	}
 	if more && len(files) == 0 {
-		return nil, false, &clouddrive.Error{Message: "光鸭目录分页未前进", Retryable: true}
+		return filePage{}, &clouddrive.Error{Message: "光鸭目录分页未前进", Retryable: true}
 	}
-	return files, more, nil
+	return filePage{files: files, more: more, total: knownTotal}, nil
 }
 
 func (c *Client) Mkdir(ctx context.Context, parent, name string) (string, error) {

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"emby-go/internal/cloud115"
+	"emby-go/internal/clouddrive"
 	"emby-go/internal/cloudguangya"
 	"emby-go/internal/offline"
 	"emby-go/internal/store"
@@ -165,13 +167,26 @@ func (a *App) saveCloudGuangyaConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取或保护光鸭密钥，请检查数据目录权限"})
 		return
 	}
+	// 刷新回调会替换候选凭证，整次验证都保留新旧秘密用于统一脱敏。
+	sensitive := []string{req.Access, req.Refresh, req.DeviceID}
+	rememberTokens := func(candidate cloudguangya.Tokens) {
+		sensitive = append(sensitive, candidate.Access, candidate.Refresh, candidate.DeviceID)
+	}
+	safeReason := func(err error) string {
+		secrets := append([]string(nil), sensitive...)
+		// 先隐藏较长凭证，避免短旧令牌恰好是新令牌前缀时留下新令牌后缀。
+		sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+		return clouddrive.SafeError(err, secrets...).Error()
+	}
 	tokens := cloudguangya.Tokens{Access: strings.TrimSpace(req.Access), Refresh: strings.TrimSpace(req.Refresh), DeviceID: strings.TrimSpace(req.DeviceID)}
+	rememberTokens(tokens)
 	if old.Revision > 0 && (tokens.Access == "" || tokens.Refresh == "" || tokens.DeviceID == "") {
 		var prior cloudguangya.Tokens
 		if err = vault.OpenValue(old.Secrets, &prior); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "既有凭证无法解密，请恢复光鸭密钥或重新填写全部凭证"})
 			return
 		}
+		rememberTokens(prior)
 		if tokens.Access == "" {
 			// 新填刷新令牌时立即验证它，避免继续用旧访问令牌掩盖错误配置。
 			if tokens.Refresh == "" {
@@ -185,12 +200,18 @@ func (a *App) saveCloudGuangyaConfig(c *gin.Context) {
 			tokens.DeviceID = prior.DeviceID
 		}
 	}
+	rememberTokens(tokens)
 	tokens, err = cloudguangya.NormalizeTokens(tokens)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	persist := func(fresh cloudguangya.Tokens) error { tokens = fresh; return nil }
+	rememberTokens(tokens)
+	persist := func(fresh cloudguangya.Tokens) error {
+		rememberTokens(fresh)
+		tokens = fresh
+		return nil
+	}
 	var provider cloud115.Provider
 	if a.guangyaOpen != nil {
 		provider = a.guangyaOpen(tokens, persist)
@@ -200,8 +221,13 @@ func (a *App) saveCloudGuangyaConfig(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
 	account, err := provider.Check(ctx, "")
-	if err != nil || account == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭验证失败，请检查访问令牌、刷新令牌和设备 ID"})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭账号验证失败：" + safeReason(err)})
+		return
+	}
+	account = strings.TrimSpace(account)
+	if account == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭账号验证失败：未返回有效账号身份"})
 		return
 	}
 	if old.Revision > 0 && old.AccountID != account {
@@ -215,12 +241,27 @@ func (a *App) saveCloudGuangyaConfig(c *gin.Context) {
 	}
 	folder, err := cloud115.EnsureCacheFolder(ctx, cache)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭缓存目录创建或验证失败：" + cloudguangya.SafeError(err, tokens).Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭缓存目录创建或验证失败：" + safeReason(err)})
 		return
 	}
 	root, err := provider.Info(ctx, folder)
-	if err != nil || root.ID != folder || !root.Directory || root.ParentID != "0" || root.Name != cloud115.CacheFolderName {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭缓存目录身份核验失败，请重新验证连接"})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭缓存目录信息读取失败：" + safeReason(err)})
+		return
+	}
+	var mismatch string
+	switch {
+	case root.ID != folder:
+		mismatch = "返回的目录 ID 与缓存目录不一致"
+	case !root.Directory:
+		mismatch = "返回的缓存路径不是文件夹"
+	case root.ParentID != "0":
+		mismatch = "缓存目录不位于网盘根目录"
+	case root.Name != cloud115.CacheFolderName:
+		mismatch = "缓存目录名称不匹配"
+	}
+	if mismatch != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "光鸭缓存目录身份核验失败：" + mismatch})
 		return
 	}
 	secrets, err := vault.SealValue(tokens)

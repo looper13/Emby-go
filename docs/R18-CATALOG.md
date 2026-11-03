@@ -164,9 +164,11 @@ Cookie 使用 AES-GCM 加密，密钥位于 SQLite 同目录的 `.115.key`，Uni
 
 接口为 `GET/PUT /api/admin/guangya/connection`；保存字段为 `access_token`、`refresh_token`、`device_id`、`revision`，读取只返回配置状态、账号与缓存目录。光鸭任务入口为 `GET/POST /api/r18/libraries/:lib/videos/:video/offline/guangya`，其下的 `/prepare`、`/selection`、`/tasks/:task/retry` 和 `/tasks/:task/cancel` 与 115 使用同一响应契约；原 115 路径保持兼容。
 
-实现以本地 MIT 项目 `guangyaClient` 的请求协议为主要参考，公开 Go 示例为 [OpenList 光鸭驱动](https://github.com/OpenListTeam/OpenList/tree/main/drivers/guangyapan)。本服务独立实现 HTTP 适配器，没有引入 OpenList 依赖。当前资源和云下载请求使用参考项目的 `/nd.bizuserres.s/v1/` 与 `/nd.bizcloudcollection.s/v1/`，任务记录删除使用 `/cloudcollection/v2/delete_task`；任务记录与结果文件分别处理。光鸭接口没有稳定版本承诺，上游路径或字段变化时会明确失败，不将不完整响应当作任务不存在。
+实现以本地 MIT 项目 `guangyaClient` 的请求协议为主要参考，公开 Go 示例为 [OpenList 光鸭驱动](https://github.com/OpenListTeam/OpenList/tree/main/drivers/guangyapan)。本服务独立实现 HTTP 适配器，没有引入 OpenList 依赖。文件信息使用光鸭网页当前的 `/userres/v1/file/get_info_by_file_id`；其它资源和云下载请求使用参考项目的 `/nd.bizuserres.s/v1/` 与 `/nd.bizcloudcollection.s/v1/`，任务记录删除使用 `/cloudcollection/v2/delete_task`。根目录下的资源信息可能省略空 `parentId`，此时必须即时查询根目录列表，精确核验文件 ID、名称和资源类型，才能确认根目录归属；不能根据目录深度、名称路径或旧记录推断父目录。任务记录与结果文件分别处理。光鸭接口没有稳定版本承诺，上游路径或字段变化时会明确失败，不将不完整响应当作任务不存在。
 
 2026-11-03 接入验证：公共网盘层、115、光鸭、离线队列、Store 和 R18 全包离线回归，以及服务器 R18 / 两盘定向回归、Go vet、Vue 类型检查、477 项前端单测、11 项构建检查和 Vue/embedui 构建通过。桌面 1280×800 与手机 390×844 的两项隔离浏览器测试通过，覆盖光鸭配置保存清空、磁力提交、最大正片选择、302 本地 MP4 样本实际播放、再次预检、切换网盘与返回本地停止旧轮询；未出现错盘请求、外站请求、页面错误或页面横向溢出。网盘 API 仅使用 mock，视频样本与 Redis 均来自临时隔离实例；没有使用真实光鸭账号，未验证真实下载、CDN 直链或自动到期删除，未修改既有服务配置或部署服务。
+
+2026-11-03 连接修复与真实只读复验：旧文件详情接口返回 `data.fileInfo` 包装，且根资源可能省略空父字段，原客户端把它当作平铺文件对象而使缓存目录核验失败。现已改用网页实际使用的资源身份接口，并通过即时完整根目录列表证明缺省父字段的归属；明确成功的空目录响应 `data={}` 或 `data={"total":0}` 可以省略列表，缺少成功确认、冲突失败代码或其它不完整结构仍拒绝。账号验证继续使用当前服务接受的 `GET /v1/user/me`。使用用户提供的过期访问令牌、有效刷新令牌和空设备 ID，真实 Go 客户端的自动刷新、账号查询、根目录查询、既有专属缓存目录核验及空缓存目录查询均通过；刷新令牌未轮换。失败提示保留账号验证、缓存目录发现或信息读取的具体阶段，并对提交、规范化及刷新过程中的全部凭据和 URL 脱敏。429/5xx 等可重试错误与根目录归属查询失败都不能作为目标文件删除的证据。光鸭、公共网盘层、115 和离线队列完整离线回归，服务器 R18 / 两盘定向回归（排除 Live）、Go vet、`go build ./...` 及差异检查均通过。本次未添加磁力、创建或删除网盘文件，未保存明文凭据到仓库，未修改既有服务配置或部署服务；真实下载、CDN 播放与到期清理仍待实际验收。
 
 ## 播放快路径与耗时定位
 
