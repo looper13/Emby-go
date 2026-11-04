@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"emby-go/internal/clouddrive"
 )
@@ -220,6 +221,12 @@ func (c *Client) rawRequestLocked(ctx context.Context, method, endpoint string, 
 	req.Header.Set("Origin", "https://www.guangyapan.com")
 	req.Header.Set("Referer", "https://www.guangyapan.com/")
 	req.Header.Set("User-Agent", userAgent)
+	// 仅下载地址需要关联实际播放器，账号刷新及其它资源请求沿用浏览器身份。
+	if !account && method == http.MethodPost && endpoint == apiBase+fileAPI+"get_res_download_url" {
+		if ua, ok := ctx.Value(downloadUserAgentContextKey{}).(string); ok && ua != "" {
+			req.Header.Set("User-Agent", ua)
+		}
+	}
 	if c.tokens.Access != "" {
 		req.Header.Set("Authorization", "Bearer "+c.tokens.Access)
 	}
@@ -738,9 +745,17 @@ func (c *Client) Mkdir(ctx context.Context, parent, name string) (string, error)
 	return string(result.ID), nil
 }
 
-func (c *Client) URL(ctx context.Context, id, _ string) (string, error) {
+type downloadUserAgentContextKey struct{}
+
+func (c *Client) URL(ctx context.Context, id, ua string) (string, error) {
 	if !validID(id) || id == "0" {
 		return "", &clouddrive.Error{Message: "光鸭下载文件 ID 无效"}
+	}
+	if len(ua) > 1024 || strings.IndexFunc(ua, unicode.IsControl) >= 0 {
+		return "", &clouddrive.Error{Message: "光鸭播放器 User-Agent 无效或超过长度限制"}
+	}
+	if ua != "" {
+		ctx = context.WithValue(ctx, downloadUserAgentContextKey{}, ua)
 	}
 	if err := c.lock(ctx); err != nil {
 		return "", err

@@ -250,8 +250,8 @@ func TestR18NativeSelectedMagnetDownloadsAndPlaysOnlyThatVersion(t *testing.T) {
 		t.Fatal("选择播放版本后返回了其它磁力", playback)
 	}
 	stream := cloudResponseSource(t, playback, "MediaSources", secondID)["DirectStreamUrl"].(string)
-	h.call(t, http.MethodHead, stream, "", nil, http.StatusServiceUnavailable)
-	if p.creates.Load() != 0 || f.lookups.Load() != 0 {
+	h.call(t, http.MethodHead, stream, "", nil, http.StatusOK)
+	if p.creates.Load() != 0 || f.lookups.Load() != 1 {
 		t.Fatal("播放器 HEAD 探测触发了磁力下载")
 	}
 	h.ua = "Hill-Yamby-Native-Actual-UA"
@@ -261,7 +261,7 @@ func TestR18NativeSelectedMagnetDownloadsAndPlaysOnlyThatVersion(t *testing.T) {
 			t.Fatal("原生点播未跳转所选磁力文件", header)
 		}
 	}
-	if p.creates.Load() != 1 || p.legacy.Load() != 0 || h.legacy.urls != 0 || f.lookups.Load() != 1 {
+	if p.creates.Load() != 1 || p.legacy.Load() != 0 || h.legacy.urls != 0 || f.lookups.Load() != 2 {
 		t.Fatal("已缓存磁力再次提交、扫描历史任务或调用了另一网盘")
 	}
 	connection, _ := h.a.offlineConnection("guangya")

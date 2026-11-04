@@ -528,6 +528,15 @@ func (a *App) r18Stream(c *gin.Context) {
 				break
 			}
 		}
+		if requested == "" {
+			for _, source := range sources {
+				id, _ := source["Id"].(string)
+				if strings.HasPrefix(id, "mediasource_") {
+					a.r18DefaultLocalStream(c, v, id)
+					return
+				}
+			}
+		}
 	}
 	provider, valid := cloudSourceProvider(requested)
 	if !valid {

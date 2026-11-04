@@ -285,7 +285,26 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 		return nil, cloud115.File{}, false
 	}
 	if c.Request.Method == http.MethodHead && (!found || binding.Task.Status != "ready" || binding.Task.CacheExpired(time.Now().Unix()) || binding.FileID == "") {
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选光鸭版本尚未就绪，请发起播放后稍候")
+		// 部分播放器先 HEAD，失败便不再 GET。只核验资源，准备仍由真正播放触发。
+		if _, _, ok := a.resolveR18PlaybackMagnet(c, ctx, scope, video, hash, binding.ResourceID); !ok {
+			return nil, cloud115.File{}, false
+		}
+		current, currentFound, currentValid := a.readR18MagnetBinding(c, scope, hash)
+		if !currentValid || currentFound && r18MagnetStoppedTask(c, current.Task) {
+			return nil, cloud115.File{}, false
+		}
+		if currentFound {
+			switch current.Task.Status {
+			case "queued", "submitting", "downloading", "discovering", "waiting_selection", "ready", "expired":
+			default:
+				r18MagnetPlaybackError(c, http.StatusConflict, "MagnetStateChanged", "所选光鸭任务状态不可播放，请刷新后重试")
+				return nil, cloud115.File{}, false
+			}
+		}
+		// 磁力大小不一定等于最终所选视频大小，未知长度不能伪报为零或磁力总大小。
+		c.Header("Cache-Control", "no-store")
+		c.Header("Content-Type", "application/octet-stream")
+		c.Status(http.StatusOK)
 		return nil, cloud115.File{}, false
 	}
 	resourceVerified := false

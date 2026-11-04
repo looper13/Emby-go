@@ -445,10 +445,13 @@ func TestR18MagnetPlaybackHEADDoesNotPrepareMissingOrUnreadyVersions(t *testing.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			infosBefore := f.cloud.infos.Load()
-			assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodHead, r18MagnetSourceID(r18PlaybackHashA)), http.StatusServiceUnavailable)
+			result := f.invoke(ctx, http.MethodHead, r18MagnetSourceID(r18PlaybackHashA))
+			if result.ok || result.recorder.Code != http.StatusOK || result.recorder.Body.Len() != 0 || result.recorder.Header().Get("Content-Length") != "" {
+				t.Fatal("未就绪 HEAD 没有提供无正文、未知长度的成功探测", result.recorder.Code)
+			}
 			bindings, err := f.app.db.OfflineBindings(f.h.library, f.h.video.ID, store.CloudGuangyaAccount("shared-account"))
-			if err != nil || status == "missing" && len(bindings) != 0 || f.cloud.creates.Load() != 0 || f.catalog.calls.Load() != 0 || f.cloud.infos.Load() != infosBefore {
-				t.Fatal("HEAD 预探创建任务、选文件或查询磁力", len(bindings), f.cloud.creates.Load(), f.catalog.calls.Load(), err)
+			if err != nil || status == "missing" && len(bindings) != 0 || f.cloud.creates.Load() != 0 || f.catalog.calls.Load() != 1 || f.cloud.infos.Load() != infosBefore {
+				t.Fatal("HEAD 未只核验当前磁力，或创建任务、选文件及查询网盘", len(bindings), f.cloud.creates.Load(), f.catalog.calls.Load(), err)
 			}
 		})
 	}

@@ -123,9 +123,9 @@ R18 来源现在进入 Emby 媒体库枚举；普通用户仍须授权该库。�
 - 影片 ID 为 `r18-{libraryID}-{复合条目ID}`，条目 ID 包装 `(JavDB movie_id, "javdb")`；从列表取得的 ID 可用于详情及按 ID 查询，不沿用旧 PostgreSQL 影片身份。
 - 配置光鸭后，单片详情、单 ID 查询与 GET/POST `PlaybackInfo` 为每个有效 BTIH 返回稳定的 `guangya-magnet-{40位小写哈希}` 来源。大小写/Base32 或在线/本地资源库重复磁力合并；不同磁力为不同版本，任务重建不改变版本 ID。同一磁力的 115 与光鸭缓存不重复展示，默认使用光鸭；显式选择旧 `115-{任务ID}`、`guangya-{任务ID}` 仍精确使用对应来源。光鸭资源排在本地 STRM 与其它网盘来源之前；所有来源提供非空媒体轨道、直接播放标志、章节数组和本服务签名 HTTP 播放入口，不返回磁力作为视频 URL，也不伪造未知编码参数。
 - 详情及 `PlaybackInfo` 只列版本，实际 GET 播放才创建或复用所选磁力任务。普通授权用户与管理员均可从原生客户端直接点播；创建前重新核验影片、磁力归属、账号和专属缓存配置，并发请求复用同一账号/哈希任务。下载完成后沿用该任务已选文件；尚未选片时仅在当前任务中原子选择最大有效视频，不覆盖人工选择。等待只轮询本地所选任务，不扫描网盘历史记录、不提交其它磁力。未指定来源的网盘流默认选首个光鸭版本。
-- 核验、准备、文件查询和直链解析共享最多 60 秒请求预算。仍未就绪时返回 503、`ErrorCode=MagnetPreparing` 与 `Retry-After: 3`，后台任务继续，客户端可稍后重新播放。`HEAD` 探测不会创建下载或自动选片，未就绪返回 503；已就绪则重新核验并返回 302。已失败、取消、授权失效或缓存清理中的任务明确返回错误，不因反复播放而反复添加。已完成清理的过期任务在磁力仍有效时可以重新下载。
+- 核验、准备、文件查询和直链解析共享最多 60 秒请求预算。GET 播放仍未就绪时返回 503、`ErrorCode=MagnetPreparing` 与 `Retry-After: 3`，后台任务继续，客户端可稍后重新播放。`HEAD` 探测不会创建下载或自动选片：未就绪但当前磁力归属有效时返回无正文的 200，不伪报未知视频长度，允许客户端继续 GET；已就绪则重新核验并返回 302。资源查询结束后再次检查任务状态，已失败、取消、授权失效或缓存清理中的任务明确返回错误，不因反复播放而反复添加。已完成清理的过期任务在磁力仍有效时可以重新下载。
 - 已就绪光鸭绑定即使磁力从上游下架，仍可在有效缓存期内使用；若文件明确丢失，恢复下载前必须再次验证上游资源。临时网络或授权错误不会作为删除证据。下载等待中、文件核验后及 302 前复核用户启用、媒体库授权/修订、光鸭连接与所选文件身份；签名直链仅按实际播放器 User-Agent 即时取得，不写入数据库或状态响应。
-- 本地起播可使用返回的 `DirectStreamUrl`，也可携带对应 `MediaSourceId=mediasource_<影片或分段ID>` 请求 `/Videos/{虚拟R18影片ID}/stream`，支持 GET/HEAD、根路径及 `/emby` 前缀。后者须携带有效登录凭据，入口重新核验 JavDB 库、目录库授权、影片番号归属及当前真实 STRM，再转派到普通目录流，保留版本/分段选择、代理开关、Range 和 HLS。失效或伪造来源返回 404，不改选其它版本；明确选择本地源不提交网盘任务，网盘票据也不能授权本地来源。普通数字/分段流的原有匿名兼容不变，本地进度仍沿用目录库语义。
+- 本地起播可使用返回的 `DirectStreamUrl`，也可携带对应 `MediaSourceId=mediasource_<影片或分段ID>` 请求 `/Videos/{虚拟R18影片ID}/stream`，支持 GET/HEAD、根路径及 `/emby` 前缀。客户端省略或传空 `MediaSourceId` 且没有网盘来源时，使用当前第一个可播本地版本；已有网盘默认顺序保持原策略。后者须携带有效登录凭据，入口重新核验 JavDB 库、目录库授权、影片番号归属及当前真实 STRM，再转派到普通目录流，保留版本/分段选择、代理开关、Range 和 HLS。失效或伪造来源返回 404，不改选其它版本；明确选择本地源不提交网盘任务，网盘票据也不能授权本地来源。普通数字/分段流的原有匿名兼容不变，本地进度仍沿用目录库语义。
 - 没有可用磁力版本或已有来源时保持不可播放的虚拟 Movie：单片详情返回 `IsPlaceHolder=true`、`PlayAccess=None`、空 `MediaSources`/`MediaStreams`，`PlaybackInfo` 返回 `NoCompatibleStream`。光鸭未配置时不会查询磁力播放资源，仍可显式使用已有本地或 115 文件。上游查询失败且无已有来源可用时返回脱敏错误，不伪造播放地址。
 - `/Items/{id}/Images` 提供图片标签；`/Images/Primary`、`Thumb` 及 `Backdrop/{index}` 经同一服务器代理返回，支持 GET/HEAD、ETag/304 和尺寸参数。Primary 在服务器裁成 2:3，横向封套取右侧正面，未指定尺寸时最大 `320×480`；其它图不裁剪。封面原图/派生尺寸使用上述两级缓存，剧照保留轻量内存缓存；转换复用既有像素上限及 CPU 并发限制，不支持解码的格式回退源图。
 - R18 图片须携带有效访问令牌（Header、api_key 等）或登录 Cookie；原有本地媒体的匿名图片兼容不变。所有 R18 图片缓存与 304 前重新检查授权，源站不收到客户端凭据。未建模的 Logo/Banner/Art 返回 404；已存在条目的相关推荐、合集、附加分段、特殊内容及时间轴预览返回空结果。
@@ -260,3 +260,29 @@ R18、Store、Imageutil、Offline 四个包的单测（排除真实 API 验收�
 相关 R18、两盘、公共网盘层、离线队列与存储回归通过；原生、契约、已有本地流和权限定向回归、Go vet、Vue 类型检查、前端全量 501 项单测及追加状态文案回归、Vue 发布构建和 `go build -tags embedui ./...` 均通过。Go 单测统一设置 60 秒上限，较长服务端回归分组执行。并发场景通过普通测试；本机 GCC 不支持 64 位，`-race` 未能编译运行。
 
 本次没有使用真实光鸭账号、提交真实磁力、修改服务配置或部署服务。Hill、Yamby 的实际起播与光鸭 CDN 可用性仍需升级服务后验收；首次较慢下载超过单次 60 秒预算时需稍后重新播放，后台下载会继续。此前记录中的“未就绪磁力由网页准备”描述对应当时实现，由本节的原生按需点播流程更新。
+
+## 2026-11-04 第三方客户端播放兼容修复
+
+针对 Hill、Yamby 仍无法播放的反馈，补齐三个服务端缺口：
+
+- 先 HEAD 后 GET 的播放器此前会在未就绪磁力的 503 响应处退出。HEAD 现在核验当前影片与磁力归属后返回无正文的 200，保留未知视频长度，不创建下载、解析直链或自动选片；GET 继续准备所选版本。HEAD 响应前再次读取任务状态，查询期间转为失败、授权失效或清理中的任务仍返回具体错误。
+- 仅有本地 STRM 版本时，客户端不传或传空 `MediaSourceId`，此前默认网盘分支会跳过可播本地源并返回 404。现在没有网盘来源时转派当前第一个本地版本，复用请求中的影片与来源核验；真实登录、资料库及目录库授权、精确版本选择和路由参数恢复仍生效。
+- 光鸭真实 `Client.URL` 此前丢弃传入的播放器 User-Agent。现在只在取得下载直链的接口使用它，账号核验、刷新及其它资源请求继续使用原有浏览器身份；空值沿用默认，控制字符及超过 1024 字节的值在任何网络请求前拒绝。认证刷新后的下载重试仍保留播放器身份。
+
+新增 13 个顶层回归测试。修复前分别复现首次 HEAD 503、默认本地流 404、取直链时 UA 丢失及 HEAD 核验期间状态变化仍返回 200；修复后通过。隔离 HTTP 回归使用已有有效 MP4 样本，真正跟随所选版本的 302，读取并核对 `206 Partial Content`、`Content-Range`、视频字节和播放器 UA，不只断言跳转地址。
+
+验证命令均从项目根目录执行，Go 单测设置 60 秒上限：
+
+```powershell
+go test ./internal/server -run '^TestR18(Native|MagnetHEADProbe|MagnetPlayback)' -skip 'Live' -count=1 -timeout=60s
+go test ./internal/server -run '^TestR18(DefaultLocalStream|LocalVirtualStream)' -count=1 -timeout=60s
+go test ./internal/server -run '^Test(R18Compat|R18MagnetSource|ContractPlaybackInfo|ExternalPlaybackSource)' -skip 'Live' -count=1 -timeout=60s
+go test ./internal/server -run '^Test(Cloud115|CloudGuangya|GuangyaProviderLoadError|ContractPlaybackInfo|ExternalPlaybackSource)' -count=1 -timeout=60s
+go test ./internal/store -run '^Test(Offline|Cloud115|Guangya|R18|LibraryResolveRedirect)' -skip 'Live' -count=1 -timeout=60s
+go test ./internal/cloudguangya ./internal/clouddrive ./internal/cloud115 ./internal/offline ./internal/r18 -skip 'Live' -count=1 -timeout=60s
+go vet ./internal/server ./internal/cloudguangya
+go build -mod=readonly ./...
+git diff --check
+```
+
+上述回归、静态检查、格式化及构建通过，并生成含既有 Vue 静态资源的 Windows / Linux amd64 `embedui` 修复包，版本标识为 `dev-jav-playback-20261104`。本轮没有修改前端源代码，因此没有重跑前端单测或 Vue 构建；没有运行竞态检测、真实光鸭下载、真实 CDN 或 Hill/Yamby 实机验收。修复包尚未部署，当前运行实例需要更新后验证；首次 GET 仍受最多 60 秒准备预算约束。用户已授权提交推送本次修复。

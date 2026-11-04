@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"emby-go/internal/r18"
 	"github.com/gin-gonic/gin"
 )
 
@@ -70,6 +71,32 @@ func (a *App) r18LocalStream(c *gin.Context) bool {
 		a.r18Failure(c, "本地播放源查询", err)
 		return true
 	}
+	return a.r18StreamLocalMatches(c, requested, matches)
+}
+
+// 默认网盘无可用来源时，复用本次请求已验证的影片和本地匹配，避免重复读取上游。
+func (a *App) r18DefaultLocalStream(c *gin.Context, video r18.Video, sourceID string) bool {
+	if _, authenticated := c.Get("accountUser"); !authenticated {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "本地虚拟条目播放需要登录"})
+		return true
+	}
+	libraryID, videoID, valid := parseR18ItemID(c.Param("id"))
+	if !valid || videoID != video.ID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
+		return true
+	}
+	if _, valid := a.r18CompatLibrary(c, libraryID); !valid {
+		return true
+	}
+	matches, err := a.r18LocalMatches(c, video)
+	if err != nil {
+		a.r18Failure(c, "本地播放源查询", err)
+		return true
+	}
+	return a.r18StreamLocalMatches(c, sourceID, matches)
+}
+
+func (a *App) r18StreamLocalMatches(c *gin.Context, requested string, matches []r18LocalMatch) bool {
 	for _, match := range matches {
 		if requested != "mediasource_"+match.Source.ItemID {
 			continue
