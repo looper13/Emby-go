@@ -465,7 +465,7 @@ func TestCloudGuangyaEmbySourcesTicketsRedirectExpiryAndRevocation(t *testing.T)
 	if len(cloudResponseList(t, combined, "MediaSources")) != 1 {
 		t.Fatal("同一磁力的两盘缓存被重复展示为不同版本")
 	}
-	source := cloudResponseSource(t, combined, "MediaSources", r18MagnetSourceID(guangya.InfoHash))
+	source := cloudResponseSource(t, combined, "MediaSources", r18MagnetSourceID("guangya", guangya.InfoHash))
 	if source["Provider"] != "guangya" || source["Default"] != true {
 		t.Fatal("同一磁力未默认使用光鸭", source)
 	}

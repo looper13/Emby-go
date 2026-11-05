@@ -32,6 +32,7 @@ type Patch struct {
 	ServerName            *string         `json:"server_name" yaml:"server_name"`
 	DisableLibraryMonitor *bool           `json:"disable_library_monitor" yaml:"disable_library_monitor"`
 	LibraryMonitorMode    *string         `json:"library_monitor_mode" yaml:"library_monitor_mode"`
+	R18PreferredCloud     *string         `json:"r18_preferred_cloud" yaml:"r18_preferred_cloud"`
 	DBPath                *string         `json:"db_path" yaml:"db_path"`
 	ActorsDir             *string         `json:"actors_dir" yaml:"actors_dir"`
 	RedisAddr             *string         `json:"redis_addr" yaml:"redis_addr"`
@@ -101,7 +102,7 @@ func (c Config) readDocument() (*yaml.Node, Config, []byte, error) {
 }
 
 func decodeDocument(doc *yaml.Node, path string) (Config, error) {
-	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", path: path}
+	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", R18PreferredCloud: "guangya", path: path}
 	if err := doc.Decode(&cfg); err != nil {
 		return Config{}, errors.New("配置文件字段格式不正确")
 	}
@@ -221,6 +222,9 @@ func (c Config) validateEdit() error {
 	}
 	if c.LibraryMonitorMode != "realtime" && c.LibraryMonitorMode != "polling" {
 		return invalid("监控模式必须为 realtime 或 polling")
+	}
+	if c.R18PreferredCloud != "guangya" && c.R18PreferredCloud != "115" {
+		return invalid("r18_preferred_cloud 必须为 guangya 或 115")
 	}
 	if strings.TrimSpace(c.DBPath) == "" {
 		return invalid("数据库路径不能为空")

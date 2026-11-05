@@ -293,7 +293,7 @@ func TestR18MagnetPlaybackReaderCreatesOnlySelectedHashAndReusesReady(t *testing
 	f.startQueue(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 	if !result.ok || result.provider != f.cloud || result.file.ID != "result-"+r18PlaybackHashA || f.cloud.creates.Load() != 1 || f.cloud.legacy.Load() != 0 {
 		t.Fatal("普通用户未能仅直接准备所选光鸭磁力", result.ok, result.recorder.Body.String(), f.cloud.creates.Load())
 	}
@@ -321,7 +321,7 @@ func TestR18MagnetPlaybackReaderCreatesOnlySelectedHashAndReusesReady(t *testing
 	f.catalog.failure = sql.ErrNoRows
 	f.catalog.mu.Unlock()
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		reused := f.invoke(ctx, method, r18MagnetSourceID(r18PlaybackHashA))
+		reused := f.invoke(ctx, method, r18MagnetSourceID("guangya", r18PlaybackHashA))
 		if !reused.ok || reused.file.ID != result.file.ID || f.cloud.creates.Load() != 1 || f.catalog.calls.Load() != before {
 			t.Fatal("精确就绪缓存因上游下架不能复用或再次下载", method, reused.recorder.Body.String())
 		}
@@ -341,7 +341,7 @@ func TestR18MagnetPlaybackConcurrentRequestsSubmitOneTask(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			<-start
-			results <- f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+			results <- f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 		}()
 	}
 	close(start)
@@ -376,7 +376,7 @@ func TestR18MagnetPlaybackConcurrentSelectionKeepsDeterministicFileAndManualDefa
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			results <- f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+			results <- f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 		}()
 	}
 	workers.Wait()
@@ -420,7 +420,7 @@ func TestR18MagnetPlaybackRespectsManualSelectionAndHarmlessVersionChanges(t *te
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 	if !result.ok || result.file.ID != "small" {
 		t.Fatal("自动播放覆盖了人工选择或拒绝同文件版本递增", result.recorder.Body.String())
 	}
@@ -445,7 +445,7 @@ func TestR18MagnetPlaybackHEADDoesNotPrepareMissingOrUnreadyVersions(t *testing.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			infosBefore := f.cloud.infos.Load()
-			result := f.invoke(ctx, http.MethodHead, r18MagnetSourceID(r18PlaybackHashA))
+			result := f.invoke(ctx, http.MethodHead, r18MagnetSourceID("guangya", r18PlaybackHashA))
 			if result.ok || result.recorder.Code != http.StatusOK || result.recorder.Body.Len() != 0 || result.recorder.Header().Get("Content-Length") != "" {
 				t.Fatal("未就绪 HEAD 没有提供无正文、未知长度的成功探测", result.recorder.Code)
 			}
@@ -462,7 +462,7 @@ func TestR18MagnetPlaybackRejectsResourceIdentityAndOwnershipChanges(t *testing.
 		t.Run(change, func(t *testing.T) {
 			f := newR18MagnetPlaybackFixture(t)
 			resource := f.catalog.resources["btih-"+r18PlaybackHashA]
-			source, status := r18MagnetSourceID(r18PlaybackHashA), http.StatusNotFound
+			source, status := r18MagnetSourceID("guangya", r18PlaybackHashA), http.StatusNotFound
 			switch change {
 			case "hash":
 				resource.Magnet = "magnet:?xt=urn:btih:" + r18PlaybackHashB
@@ -534,7 +534,7 @@ func TestR18MagnetPlaybackFreshInfoFailuresDoNotResubmit(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+			result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 			assertR18MagnetPlaybackFailure(t, result, http.StatusBadGateway)
 			current, err := f.app.db.OfflineTask(task.ID)
 			if err != nil || current.Status != "ready" || current.Version != task.Version || f.cloud.creates.Load() != 0 || f.catalog.calls.Load() != 0 || strings.Contains(result.recorder.Body.String(), "private-secret") {
@@ -555,7 +555,7 @@ func TestR18MagnetPlaybackTimeoutAndCancellationKeepBackgroundTask(t *testing.T)
 				f.cloud.addHook = cancel
 			}
 			f.startQueue(t)
-			result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+			result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 			if stopped == "timeout" {
 				assertR18MagnetPlaybackFailure(t, result, http.StatusServiceUnavailable)
 			} else if result.ok || result.recorder.Body.Len() != 0 || !errors.Is(ctx.Err(), context.Canceled) {
@@ -615,7 +615,7 @@ func TestR18MagnetPlaybackStoppedAndExpiringTasksNeverAutomaticallyRetry(t *test
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			for index := 0; index < 2; index++ {
-				assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA)), want)
+				assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA)), want)
 			}
 			after, err := f.app.db.OfflineTask(task.ID)
 			if err != nil || after.Version != current.Version || f.cloud.creates.Load() != 0 || f.catalog.calls.Load() != 0 {
@@ -631,14 +631,14 @@ func TestR18MagnetPlaybackExpiredTaskRestartsOnlyAfterValidResource(t *testing.T
 	f.catalog.failure = sql.ErrNoRows
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA)), http.StatusNotFound)
+	assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA)), http.StatusNotFound)
 	unchanged, err := f.app.db.OfflineTask(task.ID)
 	if err != nil || unchanged.Status != "expired" || unchanged.Version != task.Version || f.cloud.creates.Load() != 0 {
 		t.Fatal("下架磁力重建了过期任务", unchanged, err)
 	}
 	f.catalog.failure = nil
 	f.startQueue(t)
-	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 	if !result.ok || f.cloud.creates.Load() != 1 {
 		t.Fatal("已清理完成的有效磁力未重新准备", result.recorder.Body.String())
 	}
@@ -692,7 +692,7 @@ func TestR18MagnetPlaybackMissingFileWaitsForCASRecoveryWithoutEarlyResponse(t *
 			}
 		}
 	}()
-	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+	result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 	if err := <-completed; err != nil || !result.ok || result.file.ID != "new-file" || result.recorder.Body.Len() != 0 || f.cloud.creates.Load() != 0 || f.catalog.calls.Load() != 1 {
 		t.Fatal("同次请求未等待所选文件恢复，或提前写出错误", result.ok, result.recorder.Body.String(), err)
 	}
@@ -707,7 +707,7 @@ func TestR18MagnetPlaybackReadyRemovedResourceDoesNotRedownloadMissingFile(t *te
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA)), http.StatusNotFound)
+	assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA)), http.StatusNotFound)
 	current, err := f.app.db.OfflineTask(task.ID)
 	if err != nil || current.Status != "ready" || current.Version != task.Version || f.cloud.creates.Load() != 0 {
 		t.Fatal("下架资源进入了新下载恢复", current, err)
@@ -723,7 +723,7 @@ func TestR18MagnetPlaybackRejectsUnboundTaskFromOldCacheFolder(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA)), http.StatusConflict)
+	assertR18MagnetPlaybackFailure(t, f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA)), http.StatusConflict)
 	bindings, err := f.app.db.OfflineBindings(f.h.library, f.h.video.ID, task.AccountID)
 	current, readErr := f.app.db.OfflineTask(task.ID)
 	if err != nil || readErr != nil || len(bindings) != 0 || current.Version != task.Version || f.cloud.creates.Load() != 0 {
@@ -739,7 +739,7 @@ func TestR18MagnetPlaybackRevokesLibraryAccessWhileWaiting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	result := make(chan r18MagnetPlaybackResult, 1)
-	go func() { result <- f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA)) }()
+	go func() { result <- f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA)) }()
 	<-resourceRead
 	if err := f.app.db.SaveLibraryAccessPolicy(store.LibraryAccessPolicy{}); err != nil {
 		t.Fatal(err)
@@ -812,7 +812,7 @@ func TestR18MagnetPlaybackGuardsConfigurationAndAuthorizationDuringPreparationAn
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID(r18PlaybackHashA))
+				result := f.invoke(ctx, http.MethodGet, r18MagnetSourceID("guangya", r18PlaybackHashA))
 				if phase == "redirect" {
 					if !result.ok {
 						t.Fatal("安全变更前准备失败", result.recorder.Body.String())

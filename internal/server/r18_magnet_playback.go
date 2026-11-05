@@ -23,6 +23,7 @@ type r18MagnetPlaybackScope struct {
 	Library    store.Library
 	Video      string
 	User       int64
+	Provider   string
 	Connection store.Cloud115Connection
 }
 
@@ -40,7 +41,7 @@ func r18MagnetPlaybackError(c *gin.Context, status int, code, message string) {
 	if stage := c.GetString("r18MagnetPlaybackErrorStage"); stage != "" {
 		attrs = append(attrs, "stage", stage)
 	}
-	slog.WarnContext(c.Request.Context(), "光鸭磁力播放失败", attrs...)
+	slog.WarnContext(c.Request.Context(), cloudName(requestCloudProvider(c))+"磁力播放失败", attrs...)
 	c.Header("Cache-Control", "no-store")
 	if status == http.StatusServiceUnavailable {
 		c.Header("Retry-After", "3")
@@ -48,12 +49,19 @@ func r18MagnetPlaybackError(c *gin.Context, status int, code, message string) {
 	c.JSON(status, gin.H{"error": message, "ErrorCode": code})
 }
 
+func r18MagnetCloudErrorCode(provider, suffix string) string {
+	if provider == "guangya" {
+		return "Guangya" + suffix
+	}
+	return "Cloud115" + suffix
+}
+
 func r18MagnetWaitStopped(c *gin.Context, ctx context.Context) bool {
 	if ctx.Err() == nil {
 		return false
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选光鸭版本仍在准备，后台任务会继续，请稍后重试播放")
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选网盘版本仍在准备，后台任务会继续，请稍后重试播放")
 	}
 	return true
 }
@@ -74,13 +82,13 @@ func (a *App) checkR18MagnetScope(c *gin.Context, scope r18MagnetPlaybackScope) 
 		r18MagnetPlaybackError(c, http.StatusConflict, "PlaybackChanged", "资料库配置已变化，请刷新后重新播放")
 		return false
 	}
-	connection, err := a.offlineConnection("guangya")
+	connection, err := a.offlineConnection(scope.Provider)
 	if err != nil || connection.AccountID == "" || connection.FolderID == "" || connection.FolderID == "0" {
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaUnavailable", "光鸭连接不可用，请管理员检查配置")
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, r18MagnetCloudErrorCode(scope.Provider, "Unavailable"), cloudName(scope.Provider)+"连接不可用，请管理员检查配置")
 		return false
 	}
 	if connection.AccountID != scope.Connection.AccountID || connection.FolderID != scope.Connection.FolderID || connection.Revision != scope.Connection.Revision {
-		r18MagnetPlaybackError(c, http.StatusConflict, "GuangyaConnectionChanged", "光鸭账号或缓存配置已变化，请重新播放")
+		r18MagnetPlaybackError(c, http.StatusConflict, r18MagnetCloudErrorCode(scope.Provider, "ConnectionChanged"), cloudName(scope.Provider)+"账号或缓存配置已变化，请重新播放")
 		return false
 	}
 	return true
@@ -111,7 +119,7 @@ func validR18MagnetTask(scope r18MagnetPlaybackScope, task store.OfflineTask, ha
 func (a *App) readR18MagnetBinding(c *gin.Context, scope r18MagnetPlaybackScope, hash string) (store.OfflineBinding, bool, bool) {
 	binding, found, err := a.r18MagnetBinding(scope, hash)
 	if err != nil {
-		r18MagnetPlaybackError(c, http.StatusInternalServerError, "MagnetStateUnavailable", "读取所选光鸭版本失败")
+		r18MagnetPlaybackError(c, http.StatusInternalServerError, "MagnetStateUnavailable", "读取所选网盘版本失败")
 		return binding, false, false
 	}
 	if found && !validR18MagnetTask(scope, binding.Task, hash) {
@@ -208,16 +216,16 @@ func sameR18MagnetTaskLifecycle(before, current store.OfflineTask) bool {
 
 func r18MagnetStoppedTask(c *gin.Context, task store.OfflineTask) bool {
 	if task.Status != "expired" && task.CacheExpired(time.Now().Unix()) {
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetCacheExpired", "所选光鸭缓存已到期，后台正在清理，请稍后重新播放")
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetCacheExpired", "所选网盘缓存已到期，后台正在清理，请稍后重新播放")
 		return true
 	}
 	switch task.Status {
 	case "needs_auth":
 		c.Set("r18MagnetPlaybackErrorStage", task.Stage)
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaAuthorizationRequired", "所选光鸭任务因授权问题暂停，请管理员检查光鸭连接后在网页重试该任务")
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, r18MagnetCloudErrorCode(requestCloudProvider(c), "AuthorizationRequired"), "所选网盘任务因授权问题暂停，请管理员检查网盘连接后在网页重试该任务")
 		return true
 	case "failed", "timed_out", "cancelled":
-		r18MagnetPlaybackError(c, http.StatusConflict, "MagnetTaskStopped", "所选光鸭任务已失败、超时或取消，请在网页检查该任务或选择其它磁力")
+		r18MagnetPlaybackError(c, http.StatusConflict, "MagnetTaskStopped", "所选网盘任务已失败、超时或取消，请在网页检查该任务或选择其它磁力")
 		return true
 	}
 	return false
@@ -252,12 +260,13 @@ func (a *App) validateR18MagnetPlayback(c *gin.Context) bool {
 
 // prepareR18MagnetFile 只准备实际所选的磁力；后台队列独立于播放器请求生命周期。
 func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video r18.Video, source string) (cloud115.Provider, cloud115.File, bool) {
-	hash, valid := parseR18MagnetSourceID(source)
+	provider, hash, valid := parseR18MagnetSourceID(source)
 	itemLibrary, itemVideo, validItem := parseR18ItemID(c.Param("id"))
 	if !valid || !validItem || itemLibrary != library.ID || itemVideo != video.ID {
 		r18MagnetPlaybackError(c, http.StatusNotFound, "MagnetResourceUnavailable", "所选磁力版本不存在或不属于当前影片")
 		return nil, cloud115.File{}, false
 	}
+	c.Set("offlineProvider", provider)
 	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 		c.Header("Allow", "GET, HEAD")
 		r18MagnetPlaybackError(c, http.StatusMethodNotAllowed, "PlaybackMethodUnsupported", "请通过 GET 播放所选磁力版本")
@@ -268,12 +277,12 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 	if r18MagnetWaitStopped(c, ctx) {
 		return nil, cloud115.File{}, false
 	}
-	connection, err := a.offlineConnection("guangya")
-	if err != nil || connection.AccountID == store.CloudGuangyaAccount("") || connection.FolderID == "" || connection.FolderID == "0" {
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaUnavailable", "请管理员先配置光鸭连接")
+	connection, err := a.offlineConnection(provider)
+	if err != nil || connection.AccountID == "" || connection.AccountID == store.CloudGuangyaAccount("") || connection.FolderID == "" || connection.FolderID == "0" {
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, r18MagnetCloudErrorCode(provider, "Unavailable"), "请管理员先配置"+cloudName(provider)+"连接")
 		return nil, cloud115.File{}, false
 	}
-	scope := r18MagnetPlaybackScope{Library: library, Video: video.ID, User: a.db.UserID(), Connection: connection}
+	scope := r18MagnetPlaybackScope{Library: library, Video: video.ID, User: a.db.UserID(), Provider: provider, Connection: connection}
 	if !a.checkR18MagnetScope(c, scope) {
 		return nil, cloud115.File{}, false
 	}
@@ -297,7 +306,7 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 			switch current.Task.Status {
 			case "queued", "submitting", "downloading", "discovering", "waiting_selection", "ready", "expired":
 			default:
-				r18MagnetPlaybackError(c, http.StatusConflict, "MagnetStateChanged", "所选光鸭任务状态不可播放，请刷新后重试")
+				r18MagnetPlaybackError(c, http.StatusConflict, "MagnetStateChanged", "所选网盘任务状态不可播放，请刷新后重试")
 				return nil, cloud115.File{}, false
 			}
 		}
@@ -334,21 +343,21 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 			}
 		}
 	}
-	p, account, err := a.providerFor("guangya")
+	p, account, err := a.providerFor(provider)
 	if err != nil || p == nil || account != connection.AccountID {
-		message := "光鸭凭证不可用，请管理员检查配置"
+		message := cloudName(provider) + "凭证不可用，请管理员检查配置"
 		var loadError *guangyaProviderLoadError
 		if errors.As(err, &loadError) {
 			c.Set("r18MagnetPlaybackErrorStage", loadError.stage)
 			message = loadError.Error()
 		}
-		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "GuangyaUnavailable", message)
+		r18MagnetPlaybackError(c, http.StatusServiceUnavailable, r18MagnetCloudErrorCode(provider, "Unavailable"), message)
 		return nil, cloud115.File{}, false
 	}
 	if !a.checkR18MagnetScope(c, scope) {
 		return nil, cloud115.File{}, false
 	}
-	queue := a.offlineQueue("guangya")
+	queue := a.offlineQueue(provider)
 	taskID, createdAt, expiresAt := binding.Task.ID, binding.Task.CreatedAt, binding.Task.ExpiresAt
 	woken := false
 	ticker := time.NewTicker(r18MagnetPollInterval)
@@ -369,7 +378,7 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 			expiresAt = binding.Task.ExpiresAt
 		}
 		if binding.Task.CacheExpired(time.Now().Unix()) {
-			r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetCacheExpired", "所选光鸭缓存已到期，后台正在清理，请稍后重新播放")
+			r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetCacheExpired", "所选网盘缓存已到期，后台正在清理，请稍后重新播放")
 			return nil, cloud115.File{}, false
 		}
 		if r18MagnetStoppedTask(c, binding.Task) {
@@ -395,7 +404,7 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 			}
 			if binding.Task.Status == "waiting_selection" || binding.FileID == "" {
 				if c.Request.Method == http.MethodHead {
-					r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选光鸭版本尚未完成文件选择，请发起播放")
+					r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选网盘版本尚未完成文件选择，请发起播放")
 					return nil, cloud115.File{}, false
 				}
 				if binding.FileID != "" {
@@ -434,7 +443,7 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 					// 仅明确的文件删除进入恢复；临时网络错误不能触发再次下载。
 					task := current.Task
 					task.Status, task.Resume, task.Stage = "discovering", "", "file"
-					task.Error = "所选光鸭文件已删除，正在确认并恢复播放文件"
+					task.Error = "所选网盘文件已删除，正在确认并恢复播放文件"
 					task.Retryable, task.RecoveryFileID, task.NextPoll = true, chosen.ID, 0
 					task.Files = []cloud115.File{}
 					if err = a.db.UpdateOfflineTask(task, task.Version); err != nil && !errors.Is(err, store.ErrConflict) {
@@ -450,11 +459,11 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 				if c.Request.Method == http.MethodHead && errors.As(infoErr, &cloudErr) && cloudErr.Missing && !cloudErr.Auth {
 					status = http.StatusServiceUnavailable
 				}
-				r18MagnetPlaybackError(c, status, "GuangyaFileUnavailable", "光鸭播放文件核验失败，请稍后重试或请管理员检查连接")
+				r18MagnetPlaybackError(c, status, r18MagnetCloudErrorCode(provider, "FileUnavailable"), cloudName(provider)+"播放文件核验失败，请稍后重试或请管理员检查连接")
 				return nil, cloud115.File{}, false
 			}
 			if fresh.ID != chosen.ID || fresh.Directory || !cloud115.VideoFile(fresh) || fresh.Name != chosen.Name || fresh.Size != chosen.Size || chosen.SHA1 != "" && fresh.SHA1 != chosen.SHA1 || chosen.ParentID != "" && fresh.ParentID != chosen.ParentID {
-				r18MagnetPlaybackError(c, http.StatusBadGateway, "GuangyaFileIdentityChanged", "光鸭视频身份、名称或保存目录已变化，未播放该文件")
+				r18MagnetPlaybackError(c, http.StatusBadGateway, r18MagnetCloudErrorCode(provider, "FileIdentityChanged"), cloudName(provider)+"视频身份、名称或保存目录已变化，未播放该文件")
 				return nil, cloud115.File{}, false
 			}
 			c.Set(r18MagnetPlaybackProofKey, r18MagnetPlaybackProof{Scope: scope, Task: current.Task, File: chosen, FileID: current.FileID, Hash: hash})
@@ -464,14 +473,14 @@ func (a *App) prepareR18MagnetFile(c *gin.Context, library store.Library, video 
 			return p, fresh, true
 		case "queued", "submitting", "downloading", "discovering":
 			if c.Request.Method == http.MethodHead {
-				r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选光鸭版本正在准备，请稍后播放")
+				r18MagnetPlaybackError(c, http.StatusServiceUnavailable, "MagnetPreparing", "所选网盘版本正在准备，请稍后播放")
 				return nil, cloud115.File{}, false
 			}
 		case "needs_auth", "failed", "timed_out", "cancelled":
 			r18MagnetStoppedTask(c, binding.Task)
 			return nil, cloud115.File{}, false
 		default:
-			r18MagnetPlaybackError(c, http.StatusConflict, "MagnetStateChanged", "所选光鸭任务状态不可播放，请刷新后重试")
+			r18MagnetPlaybackError(c, http.StatusConflict, "MagnetStateChanged", "所选网盘任务状态不可播放，请刷新后重试")
 			return nil, cloud115.File{}, false
 		}
 		select {

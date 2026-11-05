@@ -33,7 +33,8 @@ func publicConfig(cfg config.Config) gin.H {
 	return gin.H{
 		"port": cfg.Port, "debug": cfg.Debug, "server_name": cfg.ServerName,
 		"disable_library_monitor": cfg.DisableLibraryMonitor, "library_monitor_mode": cfg.MonitorMode(),
-		"db_path": cfg.DBPath, "actors_dir": cfg.ActorsDir,
+		"r18_preferred_cloud": cfg.PreferredR18Cloud(),
+		"db_path":             cfg.DBPath, "actors_dir": cfg.ActorsDir,
 		"redis_addr": cfg.RedisAddr, "redis_db": cfg.RedisDB, "redis_password_configured": cfg.RedisPassword != "",
 		"alist_url": cfg.AListURL, "alist_token_configured": cfg.AListToken != "",
 		"ffprobe_path": cfg.FFProbePath, "probe_timeout_seconds": int(cfg.ProbeTimeout().Seconds()),
@@ -124,6 +125,7 @@ func (a *App) adminSaveConfig(c *gin.Context) {
 	a.cfg.ServerName = saved.ServerName
 	a.cfg.ServerDomains = append([]config.ServerDomain{}, saved.ServerDomains...)
 	a.cfg.DisableLibraryMonitor, a.cfg.LibraryMonitorMode = saved.DisableLibraryMonitor, saved.MonitorMode()
+	a.cfg.R18PreferredCloud = saved.PreferredR18Cloud()
 	a.cfg.FFProbePath, a.cfg.ProbeTimeoutSec, a.cfg.ProbeConcurrency = saved.FFProbePath, saved.ProbeTimeoutSec, saved.ProbeConcurrency
 	a.cfg.FFmpegEnabled, a.cfg.FFmpegPath, a.cfg.PlaybackConcurrency = saved.FFmpegEnabled, saved.FFmpegPath, saved.PlaybackConcurrency
 	a.cfg.PlaybackCacheMB = saved.PlaybackCacheMB

@@ -9,6 +9,7 @@ export interface InstanceConfig {
   alist_url: string; alist_token_configured: boolean;
   ffprobe_path: string; probe_timeout_seconds: number; probe_concurrency: number;
   ffmpeg_enabled: boolean; ffmpeg_path: string; playback_concurrency: number; playback_cache_mb: number;
+  r18_preferred_cloud: 'guangya' | '115';
   server_domains: { name: string; url: string }[];
 }
 export type ConfigPatch = Partial<Omit<InstanceConfig, 'redis_password_configured' | 'alist_token_configured'>> & {
@@ -26,6 +27,7 @@ export const configLabels: Record<string, string> = {
   probe_timeout_seconds: '探测超时', probe_concurrency: '探测并发', server_domains: '备用域名',
   ffmpeg_enabled: 'FFmpeg 播放处理', ffmpeg_path: 'FFmpeg 路径', playback_concurrency: '播放处理并发',
   playback_cache_mb: '播放缓存上限',
+  r18_preferred_cloud: '在线数据库优先下载网盘',
   alist_url: 'AList 地址', alist_token: 'AList Token', clear_alist_token: '清除 AList Token',
 };
 export const restartKeys = ['port', 'debug', 'db_path', 'actors_dir', 'redis_addr', 'redis_db', 'redis_password'];
@@ -34,6 +36,8 @@ function parseConfig(value: unknown): InstanceConfig {
   const v = record(value);
   const mode = string(v.library_monitor_mode);
   if (mode !== 'realtime' && mode !== 'polling') return invalid();
+  const preferredCloud = v.r18_preferred_cloud == null ? 'guangya' : string(v.r18_preferred_cloud);
+  if (preferredCloud !== 'guangya' && preferredCloud !== '115') return invalid();
   return {
     port: count(v.port), debug: boolean(v.debug), server_name: string(v.server_name),
     disable_library_monitor: boolean(v.disable_library_monitor), library_monitor_mode: mode,
@@ -44,6 +48,7 @@ function parseConfig(value: unknown): InstanceConfig {
     ffmpeg_enabled: v.ffmpeg_enabled == null ? false : boolean(v.ffmpeg_enabled), ffmpeg_path: v.ffmpeg_path == null ? '' : string(v.ffmpeg_path),
     playback_concurrency: v.playback_concurrency == null ? 2 : count(v.playback_concurrency),
     playback_cache_mb: v.playback_cache_mb == null ? 2048 : count(v.playback_cache_mb),
+    r18_preferred_cloud: preferredCloud,
     server_domains: Array.isArray(v.server_domains) ? v.server_domains.map(item => {
       const d = record(item); return { name: string(d.name), url: string(d.url) };
     }) : invalid(),

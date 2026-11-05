@@ -94,26 +94,34 @@ func newR18MagnetTestApp(t *testing.T, source r18Source, configured bool) (*App,
 
 func TestR18MagnetSourceIDCanonicalIdentity(t *testing.T) {
 	hash := strings.Repeat("ab", 20)
-	for _, input := range []string{hash, strings.ToUpper(hash), " " + hash + " "} {
-		id := r18MagnetSourceID(input)
-		parsed, ok := parseR18MagnetSourceID(id)
-		if id != "guangya-magnet-"+hash || !ok || parsed != hash {
-			t.Fatal("合法 BTIH 没有生成稳定的光鸭版本身份", input, id)
+	for _, provider := range []string{"guangya", "115"} {
+		for _, input := range []string{hash, strings.ToUpper(hash), " " + hash + " "} {
+			id := r18MagnetSourceID(provider, input)
+			parsedProvider, parsed, ok := parseR18MagnetSourceID(id)
+			if id != provider+"-magnet-"+hash || !ok || parsed != hash || parsedProvider != provider {
+				t.Fatal("合法 BTIH 没有生成绑定网盘的稳定版本身份", input, id)
+			}
+		}
+	}
+	for _, provider := range []string{"", "123", "GUANGYA", "115-magnet"} {
+		if r18MagnetSourceID(provider, hash) != "" {
+			t.Fatal("未知网盘生成了磁力播放来源", provider)
 		}
 	}
 	for _, input := range []string{"", strings.Repeat("a", 39), strings.Repeat("a", 41), strings.Repeat("g", 40), strings.Repeat("Ａ", 40), "btih-" + hash} {
-		if r18MagnetSourceID(input) != "" {
+		if r18MagnetSourceID("guangya", input) != "" {
 			t.Fatal("非法哈希生成了可点播版本", input)
 		}
 	}
 	for _, source := range []string{
-		"", "115-magnet-" + hash, "guangya-" + hash, "guangya-magnet-" + strings.ToUpper(hash),
+		"", "123-magnet-" + hash, "guangya-" + hash, "guangya-magnet-" + strings.ToUpper(hash),
+		"115-magnet-" + strings.ToUpper(hash), "115-magnet-task-uuid",
 		"guangya-magnet-" + strings.Repeat("a", 39), "guangya-magnet-" + strings.Repeat("a", 41),
 		"guangya-magnet-" + strings.Repeat("g", 40), "guangya-magnet-" + hash + "?extra=true",
 		" guangya-magnet-" + hash, "guangya-magnet-" + hash + " ", "guangya-magnet-task-uuid",
 	} {
-		if parsed, ok := parseR18MagnetSourceID(source); ok || parsed != "" {
-			t.Fatal("非规范来源 ID 被当成光鸭磁力版本", source)
+		if provider, parsed, ok := parseR18MagnetSourceID(source); ok || parsed != "" || provider != "" {
+			t.Fatal("非规范来源 ID 被当成网盘磁力版本", source)
 		}
 	}
 }
@@ -272,17 +280,21 @@ func TestR18MagnetSourcesRejectUnsupportedAndMismatchedResources(t *testing.T) {
 	}
 }
 
-func TestR18MagnetSourcesRequireGuangyaConfiguration(t *testing.T) {
+func TestR18MagnetSourcesRequireConfiguredCloudAndFallbackTo115(t *testing.T) {
 	source := &r18CompleteMagnetTestSource{resources: []r18.Resource{{ID: "btih-" + strings.Repeat("a", 40), Magnet: "magnet:?xt=urn:btih:" + strings.Repeat("a", 40)}}}
 	a, library, video := newR18MagnetTestApp(t, source, false)
-	if err := a.db.SaveCloud115Connection(store.Cloud115Connection{AccountID: "fixture-115", FolderID: "fixture-folder", Secrets: []byte("fixture-encrypted")}, 0); err != nil {
-		t.Fatal(err)
-	}
 	opens := 0
 	a.r18Open = func(r18.Config) (r18Source, error) { opens++; return source, nil }
 	sources, err := a.r18MagnetSources(r18MagnetTestContext(), library, video)
 	if err != nil || sources == nil || len(sources) != 0 || source.complete != 0 || len(source.offsets) != 0 || opens != 0 {
-		t.Fatal("未配置光鸭时读取了上游或借用 115 列出版本", opens, err)
+		t.Fatal("未配置任何网盘时读取了上游磁力", opens, err)
+	}
+	if err := a.db.SaveCloud115Connection(store.Cloud115Connection{AccountID: "fixture-115", FolderID: "fixture-folder", Secrets: []byte("fixture-encrypted")}, 0); err != nil {
+		t.Fatal(err)
+	}
+	sources, err = a.r18MagnetSources(r18MagnetTestContext(), library, video)
+	if err != nil || len(sources) != 1 || sources[0]["Provider"] != "115" || source.complete != 1 || opens != 1 {
+		t.Fatal("首选光鸭未配置时没有使用已配置的 115", opens, err)
 	}
 }
 

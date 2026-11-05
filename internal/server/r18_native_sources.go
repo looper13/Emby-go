@@ -21,32 +21,32 @@ func (a *App) r18NativeSources(c *gin.Context, l store.Library, v r18.Video, mag
 	}
 	local := a.r18LocalMediaSources(c, matches)
 	ready := a.r18ReadySources(c, l, v.ID)
+	preferred, providerErr := a.preferredR18Cloud()
+	if providerErr != nil && len(local) == 0 && len(ready) == 0 {
+		return nil, providerErr
+	}
+	if preferred == "" {
+		preferred = a.configSnapshot().PreferredR18Cloud()
+	}
 	resources := []gin.H{}
-	if magnets {
-		resources, err = a.r18MagnetSources(c, l, v)
+	if magnets && providerErr == nil {
+		resources, err = a.r18MagnetSourcesForProvider(c, l, v, preferred)
 		if err != nil && len(local) == 0 && len(ready) == 0 {
 			return nil, err
 		}
 	}
-	guangya := []gin.H{}
-	legacy := []gin.H{}
+	preferredReady := []gin.H{}
+	otherReady := []gin.H{}
 	readyByHash := map[string]gin.H{}
 	for _, source := range ready {
-		if source["Provider"] != "guangya" {
-			legacy = append(legacy, source)
+		a.stableR18ReadySource(l, v.ID, source)
+		if source["Provider"] != preferred {
+			otherReady = append(otherReady, source)
 			continue
 		}
 		hash, _ := source["InfoHash"].(string)
-		id := r18MagnetSourceID(hash)
-		if id != "" {
-			// 任务重建后仍保持同一版本；已就绪文件提供真实容器、大小和时长。
-			source["Id"] = id
-			source["ResourceId"] = "btih-" + strings.ToLower(hash)
-			source["Path"] = a.cloudStreamURL(l, v.ID, id)
-			source["DirectStreamUrl"] = source["Path"]
-			readyByHash[strings.ToLower(hash)] = source
-		}
-		guangya = append(guangya, source)
+		readyByHash[strings.ToLower(hash)] = source
+		preferredReady = append(preferredReady, source)
 	}
 	sources := []gin.H{}
 	seenIDs, seenHashes := map[string]bool{}, map[string]bool{}
@@ -75,8 +75,8 @@ func (a *App) r18NativeSources(c *gin.Context, l store.Library, v r18.Video, mag
 		}
 		appendSource(source)
 	}
-	// 默认光鸭，同一磁力的其它网盘绑定不重复显示为新版本。
-	for _, group := range [][]gin.H{guangya, local, legacy} {
+	// 首选盘版本优先，同一磁力的其它网盘绑定不重复显示为新版本。
+	for _, group := range [][]gin.H{preferredReady, local, otherReady} {
 		for _, source := range group {
 			appendSource(source)
 		}
@@ -84,19 +84,34 @@ func (a *App) r18NativeSources(c *gin.Context, l store.Library, v r18.Video, mag
 	return sources, nil
 }
 
+func (a *App) stableR18ReadySource(l store.Library, video string, source gin.H) {
+	provider, _ := source["Provider"].(string)
+	hash, _ := source["InfoHash"].(string)
+	if id := r18MagnetSourceID(provider, hash); id != "" {
+		// 任务重建后仍保持同一版本；已就绪文件提供真实容器、大小和时长。
+		source["Id"] = id
+		source["ResourceId"] = "btih-" + strings.ToLower(hash)
+		source["Path"] = a.cloudStreamURL(l, video, id)
+		source["DirectStreamUrl"] = source["Path"]
+	}
+}
+
 func (a *App) r18NativePlaybackSources(c *gin.Context, l store.Library, v r18.Video, requested string) ([]gin.H, error) {
 	if requested == "" {
 		return a.r18NativeSources(c, l, v, true)
 	}
-	stored, err := a.r18NativeSources(c, l, v, false)
-	if err != nil {
-		return nil, err
-	}
-	for _, source := range stored {
-		if source["Id"] == requested {
-			source["Default"] = true
-			return []gin.H{source}, nil
+	if strings.HasPrefix(requested, "mediasource_") {
+		matches, err := a.r18LocalMatches(c, v)
+		if err != nil {
+			return nil, err
 		}
+		for _, source := range a.r18LocalMediaSources(c, matches) {
+			if source["Id"] == requested {
+				source["Default"] = true
+				return []gin.H{source}, nil
+			}
+		}
+		return []gin.H{}, nil
 	}
 	// 网页已签发的任务 UUID 来源仍须精确可选，不能被版本去重或其它网盘替代。
 	for _, source := range a.r18ReadySources(c, l, v.ID) {
@@ -104,9 +119,15 @@ func (a *App) r18NativePlaybackSources(c *gin.Context, l store.Library, v r18.Vi
 			source["Default"] = true
 			return []gin.H{source}, nil
 		}
+		a.stableR18ReadySource(l, v.ID, source)
+		if source["Id"] == requested {
+			source["Default"] = true
+			return []gin.H{source}, nil
+		}
 	}
-	if _, valid := parseR18MagnetSourceID(requested); valid {
-		sources, err := a.r18NativeSources(c, l, v, true)
+	if provider, _, valid := parseR18MagnetSourceID(requested); valid {
+		// 显式版本始终按其网盘核验，偏好变化不能把已选版本悄然换盘。
+		sources, err := a.r18MagnetSourcesForProvider(c, l, v, provider)
 		if err != nil {
 			return nil, err
 		}

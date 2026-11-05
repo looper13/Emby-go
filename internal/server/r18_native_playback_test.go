@@ -183,7 +183,7 @@ func TestR18NativePlaybackInfoOffersDistinctGuangyaMagnetsWithoutDownload(t *tes
 	h.configure(t)
 	user, reader := h.reader(t, "native-version-reader")
 	item := r18ItemID(h.library.ID, h.video.ID)
-	first, second := r18MagnetSourceID(strings.Repeat("a", 40)), r18MagnetSourceID(strings.Repeat("b", 40))
+	first, second := r18MagnetSourceID("guangya", strings.Repeat("a", 40)), r18MagnetSourceID("guangya", strings.Repeat("b", 40))
 	for _, prefix := range []string{"", "/emby"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			path := prefix + "/Users/" + strconv.FormatInt(user.ID, 10) + "/Items/" + item + "/PlaybackInfo"
@@ -243,7 +243,7 @@ func TestR18NativeSelectedMagnetDownloadsAndPlaysOnlyThatVersion(t *testing.T) {
 	_, reader := h.reader(t, "native-play-reader")
 	item := r18ItemID(h.library.ID, h.video.ID)
 	firstHash, secondHash := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	secondID := r18MagnetSourceID(secondHash)
+	secondID := r18MagnetSourceID("guangya", secondHash)
 	_, playback := h.call(t, http.MethodPost, "/emby/Items/"+item+"/PlaybackInfo", reader,
 		map[string]any{"MediaSourceId": secondID}, http.StatusOK)
 	if len(cloudResponseList(t, playback, "MediaSources")) != 1 {
@@ -345,7 +345,7 @@ func TestR18NativeMissingLinkRechecksAndRetriesOnlySelectedVersion(t *testing.T)
 	_, reader := h.reader(t, "native-link-retry-reader")
 	hash := strings.Repeat("b", 40)
 	item := r18ItemID(h.library.ID, h.video.ID)
-	path := "/Videos/" + item + "/stream?MediaSourceId=" + r18MagnetSourceID(hash)
+	path := "/Videos/" + item + "/stream?MediaSourceId=" + r18MagnetSourceID("guangya", hash)
 	header, _ := h.call(t, http.MethodGet, path, reader, nil, http.StatusFound)
 	if header.Get("Location") != "https://guangya.example/"+hash+".mp4?sign=private" || p.urlAttempts.Load() != 2 || p.creates.Load() != 1 || f.lookups.Load() != 1 {
 		t.Fatal("直链明确缺失后没有复查重试，或重复提交了下载", header)
@@ -360,7 +360,7 @@ func TestR18NativeChunkedPlaybackSelectionAndConflicts(t *testing.T) {
 	f := newR18NativeHTTPSource(h)
 	h.configure(t)
 	item := r18ItemID(h.library.ID, h.video.ID)
-	first, second := r18MagnetSourceID(strings.Repeat("a", 40)), r18MagnetSourceID(strings.Repeat("b", 40))
+	first, second := r18MagnetSourceID("guangya", strings.Repeat("a", 40)), r18MagnetSourceID("guangya", strings.Repeat("b", 40))
 	for _, test := range []struct {
 		name, query, body string
 		status            int

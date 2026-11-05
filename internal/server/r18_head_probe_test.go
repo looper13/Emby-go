@@ -75,7 +75,7 @@ func TestR18NativeHEADFirstClientFollowsRedirectAndReadsVideo(t *testing.T) {
 	})
 	t.Cleanup(h.a.guangyaOffline.Close)
 	_, reader := h.reader(t, "head-first-reader")
-	item, sourceID := r18ItemID(h.library.ID, h.video.ID), r18MagnetSourceID(hash)
+	item, sourceID := r18ItemID(h.library.ID, h.video.ID), r18MagnetSourceID("guangya", hash)
 	_, playback := h.call(t, http.MethodPost, "/emby/Items/"+item+"/PlaybackInfo", reader, map[string]any{"MediaSourceId": sourceID}, http.StatusOK)
 	stream := cloudResponseSource(t, playback, "MediaSources", sourceID)["DirectStreamUrl"].(string)
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -139,7 +139,7 @@ func TestR18MagnetHEADProbeRejectsUnavailableResourcesWithoutDownload(t *testing
 				resource.Magnet = "magnet:?xt=urn:btih:" + r18PlaybackHashB
 				f.catalog.resources[resource.ID] = resource
 			}
-			result := f.invoke(context.Background(), http.MethodHead, r18MagnetSourceID(r18PlaybackHashA))
+			result := f.invoke(context.Background(), http.MethodHead, r18MagnetSourceID("guangya", r18PlaybackHashA))
 			if result.ok || result.recorder.Code != http.StatusNotFound || f.cloud.creates.Load() != 0 || f.cloud.urlCalls.Load() != 0 {
 				t.Fatalf("HEAD 未拒绝当前无效磁力，或触发下载：状态=%d", result.recorder.Code)
 			}
@@ -161,7 +161,7 @@ func TestR18MagnetHEADProbeRechecksStoppedTasksAfterResourceLookup(t *testing.T)
 				}
 				updateErr = f.app.db.UpdateOfflineTask(task, task.Version)
 			}
-			result := f.invoke(context.Background(), http.MethodHead, r18MagnetSourceID(r18PlaybackHashA))
+			result := f.invoke(context.Background(), http.MethodHead, r18MagnetSourceID("guangya", r18PlaybackHashA))
 			want := http.StatusServiceUnavailable
 			if state == "failed" {
 				want = http.StatusConflict

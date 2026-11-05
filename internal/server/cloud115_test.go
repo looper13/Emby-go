@@ -164,8 +164,12 @@ func TestCloud115ConfigurationBindingsTicketsAndRedirect(t *testing.T) {
 		t.Fatal("preflight network failure triggered redownload", unchanged)
 	}
 	p.infoErr = nil
-	_, out = call("GET", "/Items/"+item+"/PlaybackInfo", "cloud-reader-token", nil, 200)
+	// 网页签发的任务来源仍可显式选择，保持旧任务入口的过期与恢复语义。
+	_, out = call("GET", "/Items/"+item+"/PlaybackInfo?MediaSourceId="+readySource["Id"].(string), "cloud-reader-token", nil, 200)
 	source := out["MediaSources"].([]any)[0].(map[string]any)
+	if source["Id"] != readySource["Id"] {
+		t.Fatal("显式任务来源被默认磁力版本替换", source)
+	}
 	ticketURL := source["DirectStreamUrl"].(string)
 	call("GET", "/Videos/"+item+"/stream", "", nil, 401)
 	h, _ := call("GET", ticketURL, "", nil, 302)

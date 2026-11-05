@@ -14,31 +14,46 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const r18MagnetSourcePrefix = "guangya-magnet-"
-
-// 磁力版本使用规范哈希作为身份，离线任务重试、过期和重建都不改变版本 ID。
-func r18MagnetSourceID(hash string) string {
-	source := r18MagnetSourcePrefix + strings.ToLower(strings.TrimSpace(hash))
-	if _, ok := parseR18MagnetSourceID(source); !ok {
+// 磁力版本绑定网盘和规范哈希，修改默认网盘不改变已签发来源的下载归属。
+func r18MagnetSourceID(provider, hash string) string {
+	source := provider + "-magnet-" + strings.ToLower(strings.TrimSpace(hash))
+	if _, _, ok := parseR18MagnetSourceID(source); !ok {
 		return ""
 	}
 	return source
 }
 
-func parseR18MagnetSourceID(source string) (string, bool) {
-	if !strings.HasPrefix(source, r18MagnetSourcePrefix) {
-		return "", false
+func parseR18MagnetSourceID(source string) (string, string, bool) {
+	provider, hash, found := strings.Cut(source, "-magnet-")
+	if !found || provider != "guangya" && provider != "115" {
+		return "", "", false
 	}
-	hash := strings.TrimPrefix(source, r18MagnetSourcePrefix)
 	if len(hash) != 40 {
-		return "", false
+		return "", "", false
 	}
 	for _, char := range hash {
 		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return "", false
+			return "", "", false
 		}
 	}
-	return hash, true
+	return provider, hash, true
+}
+
+// 只在首选网盘尚未配置时回退；读取配置失败不能触发换盘下载。
+func (a *App) preferredR18Cloud() (string, error) {
+	preferred := a.configSnapshot().PreferredR18Cloud()
+	other := "115"
+	if preferred == other {
+		other = "guangya"
+	}
+	for _, provider := range []string{preferred, other} {
+		if _, err := a.offlineConnection(provider); err == nil {
+			return provider, nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+	}
+	return "", nil
 }
 
 // 完整读取是可选能力，旧测试替身和其他来源仍可使用原有分页接口。
@@ -75,8 +90,19 @@ func readR18MagnetResources(ctx context.Context, client r18Source, video r18.Vid
 }
 
 func (a *App) r18MagnetSources(c *gin.Context, l store.Library, v r18.Video) ([]gin.H, error) {
+	provider, err := a.preferredR18Cloud()
+	if err != nil || provider == "" {
+		return []gin.H{}, err
+	}
+	return a.r18MagnetSourcesForProvider(c, l, v, provider)
+}
+
+func (a *App) r18MagnetSourcesForProvider(c *gin.Context, l store.Library, v r18.Video, provider string) ([]gin.H, error) {
 	sources := []gin.H{}
-	if _, err := a.db.CloudGuangyaConnection(); err != nil {
+	if provider != "guangya" && provider != "115" {
+		return sources, nil
+	}
+	if _, err := a.offlineConnection(provider); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return sources, nil
 		}
@@ -101,13 +127,13 @@ func (a *App) r18MagnetSources(c *gin.Context, l store.Library, v r18.Video) ([]
 		if resource.Number != "" && normalizedNumber(resource.Number) != normalizedNumber(v.Number) {
 			continue
 		}
-		// 展示资源允许 BTv2，光鸭离线播放只接受无冲突、归属一致的 BTIH。
+		// 展示资源允许 BTv2，网盘离线播放只接受无冲突、归属一致的 BTIH。
 		magnet := r18.SafeMagnet(resource.Magnet)
 		_, hash, err := clouddrive.NormalizeMagnet(magnet)
 		if err != nil || resource.ID != "btih-"+hash || seen[hash] {
 			continue
 		}
-		id := r18MagnetSourceID(hash)
+		id := r18MagnetSourceID(provider, hash)
 		if id == "" {
 			continue
 		}
@@ -122,7 +148,7 @@ func (a *App) r18MagnetSources(c *gin.Context, l store.Library, v r18.Video) ([]
 		stream := a.cloudStreamURL(l, v.ID, id)
 		source := gin.H{
 			"Id":                         id,
-			"Name":                       "光鸭 · " + name + " · " + hash[:8],
+			"Name":                       cloudName(provider) + " · " + name + " · " + hash[:8],
 			"Type":                       "Default",
 			"ItemId":                     r18ItemID(l.ID, v.ID),
 			"Protocol":                   "Http",
@@ -150,7 +176,7 @@ func (a *App) r18MagnetSources(c *gin.Context, l store.Library, v r18.Video) ([]
 			"Default":                    len(sources) == 0,
 			"InfoHash":                   hash,
 			"ResourceId":                 resource.ID,
-			"Provider":                   "guangya",
+			"Provider":                   provider,
 		}
 		if resource.SizeBytes > 0 {
 			source["Size"] = resource.SizeBytes

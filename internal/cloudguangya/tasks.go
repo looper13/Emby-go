@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"emby-go/internal/clouddrive"
@@ -277,6 +278,15 @@ func (c *Client) AddTask(ctx context.Context, raw, folder string) (taskID string
 	magnet, hash, err := clouddrive.NormalizeMagnet(raw)
 	if err != nil {
 		return "", &clouddrive.Error{Message: err.Error()}
+	}
+	// 光鸭按字面匹配 BTIH 前缀，转义冒号会返回 350（URL 链接错误）。
+	// 哈希沿用公共校验结果，其它参数仍按查询串编码，避免名称或 tracker 注入参数。
+	parsed, _ := url.Parse(magnet)
+	query := parsed.Query()
+	query.Del("xt")
+	magnet = "magnet:?xt=urn:btih:" + hash
+	if extra := query.Encode(); extra != "" {
+		magnet += "&" + extra
 	}
 	if !validID(folder) || folder == "0" {
 		return "", &clouddrive.Error{Message: "光鸭云下载必须使用独立任务目录"}

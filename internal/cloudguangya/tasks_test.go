@@ -2,8 +2,11 @@ package cloudguangya
 
 import (
 	"context"
+	"encoding/base32"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,23 +19,19 @@ func taskQueryBody(taskID string) map[string]any {
 }
 
 func TestAddTaskReturnsCreatedIDWithoutInspectingHistory(t *testing.T) {
-	magnet, _, err := clouddrive.NormalizeMagnet(testMagnet)
-	if err != nil {
-		t.Fatal(err)
-	}
 	resolves, creates, polls := 0, 0, 0
 	c := mockClient(func(r *http.Request) (*http.Response, error) {
 		body := requestBody(t, r)
 		switch r.URL.Path {
 		case taskAPI + "resolve_res":
 			resolves++
-			if body["url"] != magnet {
+			if body["url"] != testMagnet {
 				t.Fatalf("解析了错误磁力：%v", body)
 			}
 			return successReply(map[string]any{"btResInfo": map[string]any{"infoHash": testHash}})
 		case taskAPI + "create_task":
 			creates++
-			if !reflect.DeepEqual(body, map[string]any{"url": magnet, "parentId": "owned-child"}) {
+			if !reflect.DeepEqual(body, map[string]any{"url": testMagnet, "parentId": "owned-child"}) {
 				t.Fatalf("创建了错误资源或目录：%v", body)
 			}
 			return successReply(map[string]any{"taskId": "created-task", "url": testMagnet})
@@ -54,6 +53,72 @@ func TestAddTaskReturnsCreatedIDWithoutInspectingHistory(t *testing.T) {
 	remote, err := c.Find(context.Background(), testHash)
 	if err != nil || remote == nil || remote.RemoteID != id || remote.FolderID != "owned-child" || polls != 1 {
 		t.Fatalf("已知提交未按任务 ID 轮询或丢失目录：%+v %v 查询=%d", remote, err, polls)
+	}
+}
+
+func TestAddTaskKeepsLiteralBTIHPrefixAndEncodedOptionalParameters(t *testing.T) {
+	hashBytes, err := hex.DecodeString(testHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base32Hash := base32.StdEncoding.EncodeToString(hashBytes)
+	const optionalQuery = "&dn=%E5%BD%B1%E7%89%87+A%2BB%26C%3D1%23%E7%89%87%E6%AE%B5%25&tr=https%3A%2F%2Ftracker.example%2Fannounce%3Fname%3DA%2BB%26key%3D1%252B2&tr=udp%3A%2F%2Ftracker.example%3A80%2Fannounce"
+	for _, tc := range []struct {
+		name, input, suffix string
+	}{
+		{"原始十六进制", testMagnet, ""},
+		{"百分号编码前缀", "magnet:?xt=urn%3Abtih%3A" + testHash, ""},
+		{"大写前缀与哈希", "magnet:?xt=URN:BTIH:" + strings.ToUpper(testHash), ""},
+		{"大写Base32", "magnet:?xt=urn:btih:" + base32Hash, ""},
+		{"小写Base32", "magnet:?xt=urn:btih:" + strings.ToLower(base32Hash), ""},
+		{"名称和多个tracker保留编码", "magnet:?dn=影片 A%2BB%26C%3D1%23片段%25&xt=urn%3Abtih%3A" + testHash + "&tr=https%3A%2F%2Ftracker.example%2Fannounce%3Fname%3DA%2BB%26key%3D1%252B2&tr=udp%3A%2F%2Ftracker.example%3A80%2Fannounce", optionalQuery},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolves, creates := 0, 0
+			c := mockClient(func(r *http.Request) (*http.Response, error) {
+				body := requestBody(t, r)
+				magnet, ok := body["url"].(string)
+				if !ok {
+					t.Fatal("请求缺少磁力字符串")
+				}
+				// 模拟光鸭实测行为：BTIH 前缀里的冒号被编码时，接口拒绝解析。
+				if strings.Contains(strings.ToLower(magnet), "xt=urn%3abtih%3a") {
+					return mockReply(http.StatusOK, `{"code":350,"msg":"URL链接错误"}`)
+				}
+				if magnet != testMagnet+tc.suffix {
+					t.Fatalf("接口 %s 的磁力前缀、哈希或可选参数编码错误：%s", r.URL.Path, magnet)
+				}
+				parsed, err := url.Parse(magnet)
+				if err != nil || parsed.Query().Get("xt") != "urn:btih:"+testHash {
+					t.Fatalf("接口 %s 的磁力身份不正确：%s %v", r.URL.Path, magnet, err)
+				}
+				if tc.suffix != "" {
+					query := parsed.Query()
+					trackers := []string{"https://tracker.example/announce?name=A+B&key=1%2B2", "udp://tracker.example:80/announce"}
+					if query.Get("dn") != "影片 A+B&C=1#片段%" || !reflect.DeepEqual(query["tr"], trackers) {
+						t.Fatalf("接口 %s 改写了名称或 tracker 参数：%v", r.URL.Path, query)
+					}
+				}
+				switch r.URL.Path {
+				case taskAPI + "resolve_res":
+					resolves++
+					return successReply(map[string]any{"btResInfo": map[string]any{"infoHash": testHash}})
+				case taskAPI + "create_task":
+					creates++
+					if body["parentId"] != "owned-child" {
+						t.Fatalf("创建请求改写了目标目录：%v", body)
+					}
+					return successReply(map[string]any{"taskId": "created-task"})
+				default:
+					t.Fatalf("请求了额外接口：%s", r.URL.Path)
+					return nil, nil
+				}
+			})
+			id, err := c.AddTask(context.Background(), tc.input, "owned-child")
+			if err != nil || id != "created-task" || resolves != 1 || creates != 1 {
+				t.Fatalf("磁力未成功解析并创建一次：任务=%s 错误=%v 解析=%d 创建=%d", id, err, resolves, creates)
+			}
+		})
 	}
 }
 

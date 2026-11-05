@@ -139,6 +139,42 @@ func TestSystemConfigAListTokenIsPrivatePersistentAndLive(t *testing.T) {
 	}
 }
 
+func TestSystemConfigR18PreferredCloudDefaultPersistenceAndHotUpdate(t *testing.T) {
+	app, ts, token := newConfigTestApp(t)
+	state := configRequest(t, ts, token, "GET", "", http.StatusOK)
+	if state.Config["r18_preferred_cloud"] != "guangya" || state.Effective["r18_preferred_cloud"] != "guangya" || app.configSnapshot().PreferredR18Cloud() != "guangya" {
+		t.Fatal("未配置时的公开配置或运行配置没有默认使用光鸭")
+	}
+	for _, provider := range []string{"115", "guangya"} {
+		state = configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"r18_preferred_cloud": provider}), http.StatusOK)
+		if state.Config["r18_preferred_cloud"] != provider || state.Effective["r18_preferred_cloud"] != provider || app.configSnapshot().PreferredR18Cloud() != provider || len(state.RestartFields) != 0 {
+			t.Fatalf("优先网盘未立即生效：保存=%v 运行=%v 待重启=%v", state.Config["r18_preferred_cloud"], state.Effective["r18_preferred_cloud"], state.RestartFields)
+		}
+		loaded, err := config.Load(app.configSnapshot().ConfigPath())
+		if err != nil || loaded.R18PreferredCloud != provider {
+			t.Fatalf("优先网盘未持久化：%q %v", loaded.R18PreferredCloud, err)
+		}
+		state = configRequest(t, ts, token, "GET", "", http.StatusOK)
+		if state.Config["r18_preferred_cloud"] != provider || state.Effective["r18_preferred_cloud"] != provider {
+			t.Fatal("重新读取配置后丢失优先网盘")
+		}
+	}
+	before, err := os.ReadFile(app.configSnapshot().ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []any{"", "other", "Guangya", " 115 ", 115} {
+		configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"r18_preferred_cloud": invalid}), http.StatusBadRequest)
+		if app.configSnapshot().PreferredR18Cloud() != "guangya" {
+			t.Fatal("非法网盘修改了运行配置")
+		}
+		after, err := os.ReadFile(app.configSnapshot().ConfigPath())
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("非法网盘修改了配置文件：%v", err)
+		}
+	}
+}
+
 func TestSystemConfigRejectsUnauthenticatedInvalidConflictAndWriteFailure(t *testing.T) {
 	app, ts, token := newConfigTestApp(t)
 	configRequest(t, ts, "", "GET", "", 401)
@@ -146,17 +182,17 @@ func TestSystemConfigRejectsUnauthenticatedInvalidConflictAndWriteFailure(t *tes
 	state := configRequest(t, ts, token, "GET", "", 200)
 	configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"port": 99999, "server_name": "must-not-apply"}), 400)
 	configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"server_id": "forbidden"}), 400)
-	configRequest(t, ts, token, "PUT", configBody("stale", map[string]any{"server_name": "must-not-apply"}), 409)
+	configRequest(t, ts, token, "PUT", configBody("stale", map[string]any{"server_name": "must-not-apply", "r18_preferred_cloud": "115"}), 409)
 	configRequest(t, ts, token, "PUT", `{} {}`, 400)
-	if app.currentServerName() != "Emby-go" {
+	if app.currentServerName() != "Emby-go" || app.configSnapshot().PreferredR18Cloud() != "guangya" {
 		t.Fatal("failed request modified runtime")
 	}
 	// Losing the writable source must not turn the request into a runtime-only update.
 	if err := os.Remove(app.configSnapshot().ConfigPath()); err != nil {
 		t.Fatal(err)
 	}
-	configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"server_name": "must-not-apply"}), 500)
-	if app.currentServerName() != "Emby-go" {
+	configRequest(t, ts, token, "PUT", configBody(state.Revision, map[string]any{"server_name": "must-not-apply", "r18_preferred_cloud": "115"}), 500)
+	if app.currentServerName() != "Emby-go" || app.configSnapshot().PreferredR18Cloud() != "guangya" {
 		t.Fatal("failed persistence modified runtime")
 	}
 }

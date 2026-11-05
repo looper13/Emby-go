@@ -5,7 +5,7 @@
 #   ./metatube -c x.yaml  # 或指定其它配置文件
 # 注意：直接以本文件运行会把自动生成的 server_id 回写到本文件，请勿直接运行本示例。
 # 初始化后可在“设置 → 实例配置”编辑并保存；需要配置文件及父目录写权限。
-# 服务名、域名、监控与探测参数无需重启；端口、debug、存储及 Redis 重启生效。
+# 服务名、域名、监控、探测及磁力网盘优先级无需重启；端口、debug、存储及 Redis 重启生效。
 
 # 监听端口
 port: 18080
@@ -52,6 +52,10 @@ alist_token: ""
 #   - name: "公网"
 #     url: "https://emby.example.com/emby"
 server_domains: []
+
+# 原生客户端播放在线数据库（JavDB/R18）磁力时，优先使用的添加网盘。
+# 可选 guangya（光鸭）或 "115"；未配置时默认 guangya，保存后立即生效。
+r18_preferred_cloud: guangya
 
 # ---- 媒体信息探测（与扫库相互独立）----
 # 媒体墙「探测媒体信息」按钮 / POST /api/admin/probe/media 调用系统 ffprobe 读取

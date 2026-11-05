@@ -100,7 +100,7 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video, prepared 
 		"ImageTags": gin.H{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3.0,
 		"UserData":    gin.H{"Key": id, "IsFavorite": false, "Played": false, "PlayCount": 0, "PlaybackPositionTicks": 0},
 		"ProviderIds": gin.H{"JavDB": v.ContentID, "DVD": v.Number},
-		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。配置光鸭后可直接选择磁力版本播放。",
+		"Overview":    v.Number + " · " + l.Name + "\nJavDB 在线资料条目。配置网盘后可直接选择磁力版本播放。",
 		"People":      []gin.H{}, "Genres": []string{}, "Tags": []string{}, "Studios": []gin.H{},
 	}
 	if len(v.Tags) > 0 {
@@ -140,18 +140,18 @@ func (a *App) r18ItemDTO(c *gin.Context, l store.Library, v r18.Video, prepared 
 		item["MediaSources"] = sources
 		item["LocationType"] = "Remote"
 		item["MediaStreams"] = sources[0]["MediaStreams"]
-		if sources[0]["Provider"] == "guangya" {
-			item["Overview"] = v.Number + " · " + l.Name + "\n默认使用光鸭播放；不同磁力对应不同版本，首次播放会自动准备所选版本。"
+		if provider, _ := sources[0]["Provider"].(string); provider == "guangya" || provider == "115" {
+			item["Overview"] = v.Number + " · " + l.Name + "\n默认使用" + cloudName(provider) + "播放；不同磁力对应不同版本，首次播放会自动准备所选版本。"
 		} else if sources[0]["SourceType"] == "strm" {
 			item["Overview"] = v.Number + " · " + l.Name + "\n本地 STRM 已存在，可直接沿用目录媒体库播放。"
 		} else {
 			item["Overview"] = v.Number + " · " + l.Name + "\n网盘播放源已就绪，可直接选择版本播放。"
 		}
 	} else if len(prepared) == 0 && v.MagnetsCount > 0 {
-		if _, err := a.db.CloudGuangyaConnection(); err == nil {
+		if provider, err := a.preferredR18Cloud(); err == nil && provider != "" {
 			// 列表按上游磁力标记开放点播，真实版本由单片详情或 PlaybackInfo 加载。
 			item["IsPlaceHolder"], item["PlayAccess"], item["LocationType"] = false, "Full", "Remote"
-			item["Overview"] = v.Number + " · " + l.Name + "\n光鸭磁力版本可按需播放，首次播放会自动准备所选版本。"
+			item["Overview"] = v.Number + " · " + l.Name + "\n" + cloudName(provider) + "磁力版本可按需播放，首次播放会自动准备所选版本。"
 		}
 	}
 	return item
@@ -562,7 +562,7 @@ func (a *App) r18CompatPlayback(c *gin.Context) {
 			return
 		}
 		if len(sources) == 0 {
-			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有所选播放版本，请确认光鸭配置、影片磁力或已有播放源"})
+			c.JSON(200, gin.H{"MediaSources": sources, "ErrorCode": "NoCompatibleStream", "Message": "当前影片没有所选播放版本，请确认网盘配置、影片磁力或已有播放源"})
 			return
 		}
 		c.JSON(200, gin.H{"MediaSources": sources, "PlaySessionId": randomSessionID()})

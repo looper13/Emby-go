@@ -35,6 +35,9 @@ type Config struct {
 	AListToken       string         `yaml:"alist_token"`
 	ServerDomains    []ServerDomain `yaml:"server_domains"`
 
+	// 原生客户端添加在线数据库磁力时优先使用的网盘。
+	R18PreferredCloud string `yaml:"r18_preferred_cloud" json:"r18_preferred_cloud"`
+
 	// 媒体信息探测（独立于扫库）：调用系统 ffprobe 读取真实技术参数并写回 NFO。
 	FFProbePath         string `yaml:"ffprobe_path"`          // ffprobe 可执行文件路径；留空则从 PATH 查找
 	ProbeTimeoutSec     int    `yaml:"probe_timeout_seconds"` // 单条探测超时（秒），默认 90
@@ -89,6 +92,14 @@ func (cfg Config) MonitorMode() string {
 	return cfg.LibraryMonitorMode
 }
 
+// PreferredR18Cloud 返回原生客户端添加在线数据库磁力时优先使用的网盘。
+func (c Config) PreferredR18Cloud() string {
+	if c.R18PreferredCloud == "" {
+		return "guangya"
+	}
+	return c.R18PreferredCloud
+}
+
 // Redis 为必选缓存后端：服务启动时即连接并 Ping，连不上直接拒绝启动。
 func Load(path string) (Config, error) {
 	if path != "" {
@@ -98,7 +109,7 @@ func Load(path string) (Config, error) {
 		}
 		path = absolute
 	}
-	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", path: path}
+	cfg := Config{Port: 18080, DBPath: "emby-go.db", ServerName: "Emby-go", LibraryMonitorMode: "realtime", R18PreferredCloud: "guangya", path: path}
 	if path == "" {
 		return cfg, cfg.ResolveStorage()
 	}
@@ -118,6 +129,9 @@ func Load(path string) (Config, error) {
 	cfg.LibraryMonitorMode = cfg.MonitorMode()
 	if cfg.LibraryMonitorMode != "realtime" && cfg.LibraryMonitorMode != "polling" {
 		return cfg, fmt.Errorf("library_monitor_mode 必须为 realtime 或 polling，当前为 %q", cfg.LibraryMonitorMode)
+	}
+	if cfg.R18PreferredCloud != "guangya" && cfg.R18PreferredCloud != "115" {
+		return cfg, fmt.Errorf("r18_preferred_cloud 必须为 guangya 或 115")
 	}
 	cfg.path = path
 	return cfg, cfg.ResolveStorage()

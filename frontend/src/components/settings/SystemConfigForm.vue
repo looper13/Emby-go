@@ -95,6 +95,20 @@ function submit() { if (dirty.value && !props.saving && props.state.writable) em
       </section>
 
       <section class="panel">
+        <div class="panel-head"><h3>在线数据库点播</h3><span class="config-tag live">保存后即时生效</span></div>
+        <div class="field-grid">
+          <div class="field full">
+            <label for="cfg-r18-preferred-cloud">在线数据库优先下载网盘</label>
+            <select id="cfg-r18-preferred-cloud" v-model="draft.r18_preferred_cloud" aria-describedby="cfg-r18-preferred-cloud-help">
+              <option value="guangya">光鸭网盘（默认）</option>
+              <option value="115">115 网盘</option>
+            </select>
+            <small id="cfg-r18-preferred-cloud-help" class="hint">Emby、Hill、Yamby 等客户端点播 JavDB / R18 在线数据库磁力时，优先使用所选网盘添加。优先网盘未配置时，使用另一已配置网盘；下载失败不会自动跨盘重复添加。明确选择的已有来源仍使用该来源所属网盘。</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="panel-head"><h3>字幕与音轨</h3><span class="config-tag live">无需重启</span></div>
         <p class="hint">本地外挂字幕无需 FFmpeg。启用后可提取内封文本字幕，并在网页播放时重封装其他音轨；重封装的视频经过本服务，占用带宽与临时磁盘，视频编码保持原样。</p>
         <div class="field-grid">

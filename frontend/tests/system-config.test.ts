@@ -21,6 +21,58 @@ describe('instance configuration', () => {
     expect(() => parseConfigState({ ...configFixture(), restart_fields: 'port' })).toThrow();
     expect(() => parseConfigState({ ...configFixture(), config: { ...configFixture().config, library_monitor_mode: 'typo' } })).toThrow();
   });
+  it('在线数据库默认使用光鸭，并校验已保存和已生效的网盘选项', () => {
+    const state = configFixture();
+    expect(parseConfigState(state).config.r18_preferred_cloud).toBe('guangya');
+    state.config.r18_preferred_cloud = '115';
+    state.effective.r18_preferred_cloud = '115';
+    expect(parseConfigState(state).effective.r18_preferred_cloud).toBe('115');
+    const omitted = { ...state, config: { ...state.config, r18_preferred_cloud: undefined }, effective: { ...state.effective, r18_preferred_cloud: undefined } };
+    expect(parseConfigState(omitted).config.r18_preferred_cloud).toBe('guangya');
+    expect(parseConfigState(omitted).effective.r18_preferred_cloud).toBe('guangya');
+    for (const field of ['config', 'effective'] as const) {
+      for (const value of ['unknown', '', 115]) {
+        expect(() => parseConfigState({ ...state, [field]: { ...state[field], r18_preferred_cloud: value } })).toThrow();
+      }
+    }
+  });
+  it('优先网盘仅在明确保存时提交，并能恢复已保存设置', async () => {
+    const w = form();
+    const select = w.get<HTMLSelectElement>('#cfg-r18-preferred-cloud');
+    expect(select.element.value).toBe('guangya');
+    expect(select.findAll('option').map(option => option.attributes('value'))).toEqual(['guangya', '115']);
+    expect(w.get('#cfg-r18-preferred-cloud-help').text()).toContain('Emby、Hill、Yamby');
+    expect(w.get('#cfg-r18-preferred-cloud-help').text()).toContain('优先网盘未配置时，使用另一已配置网盘');
+    expect(w.get('#cfg-r18-preferred-cloud-help').text()).toContain('下载失败不会自动跨盘重复添加');
+    await select.setValue('115');
+    expect(w.emitted('save')).toBeUndefined();
+    expect(w.get('#cfg-dirty').text()).toContain('未保存');
+    await w.get('#cfg-restore').trigger('click');
+    expect(select.element.value).toBe('guangya');
+    expect(w.get('#cfg-save').attributes('disabled')).toBeDefined();
+    await select.setValue('115');
+    await w.get('form').trigger('submit');
+    expect(w.emitted('save')?.[0]).toEqual([{ r18_preferred_cloud: '115' }]);
+    expect(w.text()).not.toContain('本次修改中的');
+  });
+  it('保存优先网盘后提示即时生效，并将返回值作为新的草稿基准', async () => {
+    const next = configFixture();
+    next.config.r18_preferred_cloud = '115';
+    next.effective.r18_preferred_cloud = '115';
+    next.revision = 'rev-2';
+    const save = vi.spyOn(systemConfigApi, 'save').mockResolvedValue(next);
+    const w = page(); await flushPromises();
+    await w.get('#cfg-r18-preferred-cloud').setValue('115');
+    expect(save).not.toHaveBeenCalled();
+    await w.get('form').trigger('submit'); await flushPromises();
+    expect(save).toHaveBeenCalledExactlyOnceWith('rev-1', { r18_preferred_cloud: '115' });
+    expect(w.get<HTMLSelectElement>('#cfg-r18-preferred-cloud').element.value).toBe('115');
+    expect(w.get('#cfg-dirty').text()).toContain('与已保存配置一致');
+    expect(w.text()).toContain('已应用：在线数据库优先下载网盘。无需重启。');
+    await w.get('#cfg-r18-preferred-cloud').setValue('guangya');
+    await w.get('#cfg-restore').trigger('click');
+    expect(w.get<HTMLSelectElement>('#cfg-r18-preferred-cloud').element.value).toBe('115');
+  });
   it('saves only explicit changes and restores the saved baseline without auto-saving', async () => {
     const w = form();
     expect(w.get<HTMLInputElement>('#cfg-password').element.value).toBe('');

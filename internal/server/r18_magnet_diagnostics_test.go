@@ -71,7 +71,7 @@ func TestR18NativeMagnet503LogsSafeReasonAndStage(t *testing.T) {
 			prior := slog.Default()
 			slog.SetDefault(slog.New(&captureHandler{mu: &mu, lines: &lines}))
 			t.Cleanup(func() { slog.SetDefault(prior) })
-			source := r18MagnetSourceID(r18PlaybackHashA)
+			source := r18MagnetSourceID("guangya", r18PlaybackHashA)
 			path := "/emby/Videos/" + r18ItemID(f.h.library.ID, f.h.video.ID) + "/stream?MediaSourceId=" + source + "&Static=true&playback_token=private-playback-ticket"
 			headers, out := f.h.call(t, http.MethodGet, path, f.h.admin, nil, http.StatusServiceUnavailable)
 			if out["ErrorCode"] != tc.code || headers.Get("Retry-After") != "3" {

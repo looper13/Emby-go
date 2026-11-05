@@ -19,7 +19,7 @@ func TestR18DefaultLocalStreamAliasesAndEmptySelection(t *testing.T) {
 			for _, method := range []string{http.MethodGet, http.MethodHead} {
 				for _, query := range []string{"?Static=true", "?MediaSourceId=&Static=true", "?mediasourceid=&Static=true"} {
 					t.Run(method+prefix+path+query, func(t *testing.T) {
-						before := f.fake.reads
+						before := f.fake.getCalls.Load()
 						resp, body := r18LocalVirtualRequest(t, f, method, prefix+path+query, http.Header{"X-Emby-Token": {f.token}})
 						if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "https://media.fixture.invalid/default.mp4" {
 							t.Fatalf("默认本地版本没有起播：状态=%d，地址=%q，响应=%s", resp.StatusCode, resp.Header.Get("Location"), body)
@@ -27,8 +27,9 @@ func TestR18DefaultLocalStreamAliasesAndEmptySelection(t *testing.T) {
 						if method == http.MethodHead && len(body) != 0 {
 							t.Fatal("默认本地 HEAD 返回了正文")
 						}
-						if f.fake.reads-before > 1 {
-							t.Fatal("默认本地转派重复读取了影片上游", f.fake.reads-before)
+						// 配置网盘后可能查询磁力列表，但转派不能重复读取影片详情。
+						if f.fake.getCalls.Load()-before > 1 {
+							t.Fatal("默认本地转派重复读取了影片上游", f.fake.getCalls.Load()-before)
 						}
 					})
 				}

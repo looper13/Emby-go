@@ -548,7 +548,7 @@ func (a *App) r18Stream(c *gin.Context) {
 	}
 	var p cloud115.Provider
 	var fresh cloud115.File
-	if _, magnet := parseR18MagnetSourceID(requested); magnet {
+	if _, _, magnet := parseR18MagnetSourceID(requested); magnet {
 		p, fresh, ok = a.prepareR18MagnetFile(c, l, v, requested)
 	} else {
 		p, fresh, ok = a.cloudPlaybackFile(c, l, video, requested, false)
@@ -562,7 +562,7 @@ func (a *App) r18Stream(c *gin.Context) {
 		if err == nil {
 			break
 		}
-		_, magnet := parseR18MagnetSourceID(requested)
+		_, _, magnet := parseR18MagnetSourceID(requested)
 		if magnet && r18MagnetWaitStopped(c, ctx) {
 			return
 		}

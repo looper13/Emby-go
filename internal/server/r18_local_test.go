@@ -28,9 +28,11 @@ import (
 type r18LocalTestSource struct {
 	*fakeR18
 	getError error
+	getCalls atomic.Int64
 }
 
 func (f *r18LocalTestSource) Get(ctx context.Context, id string) (r18.Video, error) {
+	f.getCalls.Add(1)
 	if f.getError != nil {
 		f.reads++
 		return r18.Video{}, f.getError
