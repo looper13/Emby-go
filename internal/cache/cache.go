@@ -46,36 +46,39 @@ func NewMemoryLimited(max, maxEntryBytes int) *Memory {
 }
 func (m *Memory) Get(key string) ([]byte, bool) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	e, ok := m.items[key]
 	if !ok {
+		m.mu.Unlock()
 		return nil, false
 	}
 	v := e.Value.(entry)
 	if !v.expires.IsZero() && time.Now().After(v.expires) {
 		delete(m.items, key)
 		m.order.Remove(e)
+		m.mu.Unlock()
 		return nil, false
 	}
 	m.order.MoveToFront(e)
+	m.mu.Unlock()
+	// Set publishes a private copy and only replaces whole entries. The captured
+	// bytes remain immutable after unlock, so large responses need no locked copy.
 	return append([]byte(nil), v.value...), true
 }
 func (m *Memory) Set(key string, value []byte, ttl time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Avoid copying oversized entries; the byte limit is fixed at construction.
 	if m.maxEntryBytes > 0 && len(value) > m.maxEntryBytes {
-		if e, ok := m.items[key]; ok {
-			delete(m.items, key)
-			m.order.Remove(e)
-		}
+		m.Delete(key)
 		return
 	}
+	cp := append([]byte(nil), value...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if e, ok := m.items[key]; ok {
-		e.Value = entry{key: key, value: append([]byte(nil), value...), expires: expiry(ttl)}
+		e.Value = entry{key: key, value: cp, expires: expiry(ttl)}
 		m.order.MoveToFront(e)
 		return
 	}
-	e := m.order.PushFront(entry{key: key, value: append([]byte(nil), value...), expires: expiry(ttl)})
+	e := m.order.PushFront(entry{key: key, value: cp, expires: expiry(ttl)})
 	m.items[key] = e
 	if len(m.items) > m.max {
 		old := m.order.Back()

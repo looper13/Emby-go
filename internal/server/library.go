@@ -223,6 +223,7 @@ func (a *App) posterTag(path string) string {
 		a.tagMu.Lock()
 		if a.diskVersionLocked(cachePathKey(path)) == version {
 			a.tags[path] = tagEntry{tag: "0", ts: now, neg: true, version: version}
+			a.pruneTagsLocked(now)
 		}
 		a.tagMu.Unlock()
 		return "0"
@@ -233,9 +234,39 @@ func (a *App) posterTag(path string) string {
 	a.tagMu.Lock()
 	if a.diskVersionLocked(cachePathKey(path)) == version {
 		a.tags[path] = tagEntry{tag: tag, ts: now, version: version}
+		a.pruneTagsLocked(now)
 	}
 	a.tagMu.Unlock()
 	return tag
+}
+
+const (
+	tagCacheLimit = 8192
+	tagCacheSlack = tagCacheLimit / 4
+)
+
+// pruneTagsLocked bounds historical paths without scanning the map on each
+// insert. Eviction only causes another stat; disk versions remain authoritative.
+// The caller holds tagMu. Hits never enter this sweep.
+func (a *App) pruneTagsLocked(now time.Time) {
+	if len(a.tags) <= tagCacheLimit+tagCacheSlack {
+		return
+	}
+	for path, entry := range a.tags {
+		ttl := 5 * time.Minute
+		if entry.neg {
+			ttl = 30 * time.Second
+		}
+		if now.Sub(entry.ts) >= ttl {
+			delete(a.tags, path)
+		}
+	}
+	for path := range a.tags {
+		if len(a.tags) <= tagCacheLimit {
+			break
+		}
+		delete(a.tags, path)
+	}
 }
 
 // invalidateImageTag 立即失效指定图片路径的 tag 缓存。

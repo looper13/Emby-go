@@ -306,7 +306,7 @@ func read(path string, stats *ReadStats) (MovieMeta, error) {
 		started = time.Now()
 		stats.Reads++
 	}
-	b, err := os.ReadFile(path)
+	b, err := ReadFile(path)
 	if stats != nil {
 		stats.Read = time.Since(started)
 		stats.Bytes = int64(len(b))
@@ -375,7 +375,7 @@ func SaveFileInfo(path string, meta FileInfoMeta, details *StreamDetails) error 
 	if details == nil {
 		return errors.New("nfo: 流信息为空")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := ReadFile(path)
 	if err != nil {
 		return err
 	}

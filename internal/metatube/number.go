@@ -49,6 +49,7 @@ var (
 	reSuffix        = regexp.MustCompile(`(?i)([-_](c|uc|ch|cd\d{1,2})|hhb\d*|ch|A|B|C|D)\s*$`)
 	reMovieID       = regexp.MustCompile(`^\d*([A-Z][A-Z0-9]*)-(\d+)$`)
 	reCompactID     = regexp.MustCompile(`^(\d*[A-Z]{2,})(\d+)$`)
+	reFC2Alias      = regexp.MustCompile(`^FC2(?:-?PPV)?-?([0-9]+)$`)
 )
 
 // NormalizeMovieID applies the standard PREFIX-NUMBER rule; unknown formats
@@ -125,8 +126,13 @@ func SameNumber(a, b string) bool {
 
 func comparisonNumber(s string) string {
 	s = Normalize(stripProviderSuffix(Normalize(s)))
+	// FC2 filename extraction drops PPV while providers may keep it. Match only
+	// a complete numeric alias; unknown suffixes and PPV leading zeros stay strict.
+	if match := reFC2Alias.FindStringSubmatch(s); match != nil {
+		return "FC2-" + match[1]
+	}
 	// Only letter-only compact prefixes have an unambiguous numeric boundary.
-	// Keep forms such as H4610 and FC2PPV1234567 unguessed.
+	// Keep single-letter forms such as H4610 unguessed.
 	if match := reCompactID.FindStringSubmatch(s); match != nil {
 		return NormalizeMovieID(match[1] + "-" + match[2])
 	}

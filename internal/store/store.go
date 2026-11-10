@@ -462,6 +462,12 @@ func (s *Store) Libraries() ([]Library, error) {
 
 func jsonText(v any) string { b, _ := json.Marshal(v); return string(b) }
 func parseStrings(v string) []string {
+	if v == "" {
+		return nil
+	}
+	if v == "[]" {
+		return []string{}
+	}
 	var out []string
 	_ = json.Unmarshal([]byte(v), &out)
 	return out
@@ -960,7 +966,9 @@ func movieScan(row *sql.Rows) (Movie, error) {
 	return m, err
 }
 
-const movieCols = "id,library_id,source_path,file_mtime,source_protocol,source_container,number,status,nfo_path,output_dir,title,original_title,plot,year,premiered,rating,director,series,maker,label,COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),genres,tags,studios,poster_path,backdrop_path,landscape_path,runtime_seconds,COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]'),COALESCE(trailer_url,''),COALESCE(cover_url,''),television"
+// Nullable metadata defaults only at the read boundary. Filtering, ordering,
+// stored values and conversion errors for invalid non-null values stay intact.
+const movieCols = "id,library_id,source_path,COALESCE(file_mtime,''),COALESCE(source_protocol,''),COALESCE(source_container,''),COALESCE(number,''),status,COALESCE(nfo_path,''),COALESCE(output_dir,''),COALESCE(title,''),COALESCE(original_title,''),COALESCE(plot,''),COALESCE(year,0),COALESCE(premiered,''),COALESCE(rating,0),COALESCE(director,''),COALESCE(series,''),COALESCE(maker,''),COALESCE(label,''),COALESCE(collection,''),COALESCE(official_rating,''),COALESCE(sortname,''),COALESCE(taglines,''),COALESCE(provider_id,''),COALESCE(genres,''),COALESCE(tags,''),COALESCE(studios,''),COALESCE(poster_path,''),COALESCE(backdrop_path,''),COALESCE(landscape_path,''),COALESCE(runtime_seconds,0),COALESCE(additional_parts,'[]'),COALESCE(created_at,''),COALESCE(updated_at,''),COALESCE(last_scrape_at,''),COALESCE(last_scrape_error,''),COALESCE(backdrop_paths,'[]'),COALESCE(trailer_url,''),COALESCE(cover_url,''),television"
 
 func (s *Store) Movie(id int64) (Movie, error) {
 	row, err := s.db.Query("SELECT "+movieCols+" FROM movies WHERE id=?", id)
@@ -1032,7 +1040,7 @@ func (s *Store) SearchAdmin(q AdminQuery) ([]Movie, int, error) {
 // 需要逐个探测、各自留下 mediainfo.json，故调用方要能枚举出全部分段文件。
 // status 为空表示不限状态；limit<=0 表示不限条数。
 func (s *Store) MoviesForProbe(libraryID int64, status string, limit int) ([]Movie, error) {
-	query := "SELECT id,library_id,nfo_path,source_path,title,COALESCE(additional_parts,'[]') FROM movies WHERE COALESCE(nfo_path,'')<>''"
+	query := "SELECT id,library_id,nfo_path,source_path,COALESCE(title,''),COALESCE(additional_parts,'[]') FROM movies WHERE COALESCE(nfo_path,'')<>''"
 	args := []any{}
 	if libraryID > 0 {
 		query += " AND library_id=?"
@@ -1882,7 +1890,7 @@ func (s *Store) LibraryCollectionStats(libraryID int64, minMovies int) (map[stri
 		return nil, err
 	}
 	// 流派存在每行的 JSON 列里，单独取两列后在内存聚合去重。
-	rows2, err := s.db.Query(`SELECT collection, genres FROM ` + movies + `
+	rows2, err := s.db.Query(`SELECT collection, COALESCE(genres,'') FROM ` + movies + `
 		WHERE status IN ('success','manual') AND COALESCE(collection,'')<>''`)
 	if err != nil {
 		return nil, err
@@ -1927,7 +1935,7 @@ func (s *Store) CollectionSummary(collection string) (count int, genres []string
 		WHERE collection=? AND status IN ('success','manual')`, collection).Scan(&count); err != nil {
 		return 0, nil, err
 	}
-	rows, err := s.db.Query(`SELECT genres FROM `+s.userMoviesSQL()+`
+	rows, err := s.db.Query(`SELECT COALESCE(genres,'') FROM `+s.userMoviesSQL()+`
 		WHERE collection=? AND status IN ('success','manual')`, collection)
 	if err != nil {
 		return count, nil, err

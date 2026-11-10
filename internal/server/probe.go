@@ -135,6 +135,14 @@ func (a *App) prepareProbe(req probeRequest) (probePlan, error) {
 	if a.probing() {
 		return probePlan{}, errProbeBusy
 	}
+	movies, err := a.db.MoviesForProbe(req.LibraryID, req.Status, req.Limit)
+	if err != nil {
+		return probePlan{}, err
+	}
+	targets := probeTargets(movies)
+	if len(targets) == 0 {
+		return probePlan{movies: len(movies), onlyMissing: onlyMissing}, nil
+	}
 	// ffprobe 在任务启动前就解析并自检：缺 ffprobe 或它无法执行时直接给明确错误，
 	// 而不是让成千上万条目逐个失败一遍（那既浪费时间又难归因）。
 	ffprobe, err := probe.LookPath(a.configSnapshot().FFProbePath)
@@ -145,12 +153,6 @@ func (a *App) prepareProbe(req probeRequest) (probePlan, error) {
 		slog.Error("探测任务未启动：ffprobe 自检失败", "ffprobe", ffprobe, "error", err)
 		return probePlan{}, err
 	}
-	movies, err := a.db.MoviesForProbe(req.LibraryID, req.Status, req.Limit)
-	if err != nil {
-		return probePlan{}, err
-	}
-	// 展开成文件级任务：分集影片的每个分段 .strm 都要各自探测。
-	targets := probeTargets(movies)
 	return probePlan{ffprobe: ffprobe, targets: targets, movies: len(movies), onlyMissing: onlyMissing}, nil
 }
 
@@ -496,6 +498,9 @@ func (a *App) probeOne(ctx context.Context, ffprobe string, target probeTarget, 
 
 	result, err := probe.Run(ctx, ffprobe, url, a.configSnapshot().ProbeTimeout())
 	if err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			return
+		}
 		a.probeFailure(movie, target.label()+"："+err.Error())
 		return
 	}

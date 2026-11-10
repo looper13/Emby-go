@@ -76,7 +76,7 @@ func UpdateScraped(path string, f ScrapeFields) error {
 	// 与 SetActorThumb / SaveFileInfo 共用同一把路径锁：整段读-改-写期间独占，
 	// 新建分支走 saveAtomicLocked（本函数已持锁，不能再进 SaveAtomic）。
 	defer lockNFOPath(path)()
-	raw, err := os.ReadFile(path)
+	raw, err := ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return saveAtomicLocked(path, metaFromScrape(f))
 	}
@@ -497,7 +497,7 @@ func setActorThumb(path, name, thumb string, onlyEmpty bool) (bool, error) {
 	if name == "" || thumb == "" {
 		return false, nil
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -627,7 +627,7 @@ func ScrapedTagValue(text, tag string) string {
 // TagPreview 返回 NFO 原文里若干单值标签的当前值（缺失为空串），
 // 供单条手动刮削的「与现有值 diff」展示。
 func TagPreview(path string, tags []string) (map[string]string, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
 	}
@@ -644,7 +644,7 @@ func TagPreview(path string, tags []string) (map[string]string, error) {
 
 // ListPreview 返回多个列表标签的当前值与演员名清单，供预览 diff。
 func ListPreview(path string) (map[string][]string, []Actor, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string][]string{}, nil, nil
 	}

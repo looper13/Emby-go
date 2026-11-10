@@ -1,5 +1,7 @@
 # 上游提交审核与选择性同步（2026-10-22）
 
+后续增量审核见 [2026-11-10 选择性同步记录](UPSTREAM-REVIEW-2026-11-10.md)。本文保留 2026-10-22 的历史范围和验证结论。
+
 ## 范围与方法
 
 - 上游：[holll/Emby-go](https://github.com/holll/Emby-go)，固定到 [8cdcc1b](https://github.com/holll/Emby-go/commit/8cdcc1bbebd9ab89be306b7d2b55ecfe7b682406)。

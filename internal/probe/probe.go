@@ -189,6 +189,9 @@ func Verify(ctx context.Context, ffprobePath string) error {
 	cmd := exec.CommandContext(ctx, ffprobePath, "-version")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("ffprobe 自检中止: %w", ctxErr)
+		}
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			message = err.Error()
@@ -219,8 +222,11 @@ func Run(ctx context.Context, ffprobePath, target string, timeout time.Duration)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
-		return Result{}, fmt.Errorf("探测超时（%s）", timeout)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			return Result{}, fmt.Errorf("探测超时（%s）: %w", timeout, ctxErr)
+		}
+		return Result{}, fmt.Errorf("探测被取消: %w", ctxErr)
 	}
 	if err != nil {
 		// 区分「ffprobe 根本没跑起来」与「跑起来了但报错」：两者的排查方向完全不同

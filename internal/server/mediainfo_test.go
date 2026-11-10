@@ -323,10 +323,21 @@ func TestSaveMediaInfoAtomic(t *testing.T) {
 	if info.Video == nil || info.Video.Width != 1920 || info.DurationSeconds != 12 {
 		t.Errorf("重新解析结果不符: %+v", info)
 	}
-	// 写入的应是缩进后的可读 JSON
+	// 写入的应是紧凑单行 JSON，仅保留文件末尾换行。
 	content, _ := os.ReadFile(path)
-	if !strings.Contains(string(content), "\n  \"probe_version\"") {
-		t.Errorf("应输出缩进 JSON:\n%s", content)
+	if len(content) < 2 || content[len(content)-1] != '\n' || strings.Contains(string(content[:len(content)-1]), "\n") {
+		t.Errorf("应输出紧凑 JSON:\n%s", content)
+	}
+	// 老版本的缩进缓存仍能读取，不要求重新联网探测。
+	legacy, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loadMediaInfo(strm, "http://x/f.mp4"); !ok {
+		t.Fatal("旧缩进缓存应保持兼容")
 	}
 }
 

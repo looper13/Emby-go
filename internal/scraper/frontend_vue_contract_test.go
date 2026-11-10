@@ -8,7 +8,7 @@ import (
 
 // Vue consumes the same input corpus; these outputs come from the actual Go implementation.
 func TestVueMigrationNumberContract(t *testing.T) {
-	data, err := os.ReadFile("../../vue-migration/fixtures/ct/ct-01-number.json")
+	data, err := os.ReadFile("../../frontend/tests/fixtures/ct/ct-01-number.json")
 	if err != nil {
 		t.Fatal(err)
 	}
