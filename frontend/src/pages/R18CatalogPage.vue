@@ -40,11 +40,12 @@ const oldResults = computed(() => !!page.value && pageQueryKey.value !== queryKe
 const queryHint = computed(() => searching.value ? '关键词搜索按 JavDB 相关性排列，搜索时不使用分类标签、排序方向或年份筛选。'
   : draft.mode === 'top250' ? 'TOP250 使用 JavDB 官方榜单顺序；250 是榜单上限，不表示本次已获取全部影片。年份榜与影片类型互斥。'
     : chart.value ? '使用 JavDB 官方榜单顺序，不以评分排序或本服务播放次数代替上游榜单。'
-      : draft.mode === 'categories' ? '选择题材、基础条件与发行信息后集中查询，最多选 5 个题材标签。'
+      : draft.mode === 'categories' ? '选择题材、基础条件与发行信息后自动查询，最多选 5 个题材标签。'
         : '默认按发行日期从新到旧；发行与更新浏览使用快速入口，其余排序或年份走高级查询。');
 let librariesLoaded = false;
 const categories = shallowRef<R18TagCategory[]>([]), tagsLoading = ref(false), tagsError = ref(''), tagSearch = ref(''), selectionError = ref('');
 const openedGroups = ref(new Set<string>()), groupLimits = reactive<Record<string, number>>({});
+const categoryCollapsed = ref(false);
 let tagsKey = '';
 const groupNames: Record<string, string> = { subject: '题材', role: '角色', cloth: '服装', body: '身体', behavior: '行为', play_method: '玩法', category: '类别', other: '其他', tag: '标签', place: '场景' };
 const groups = computed(() => categories.value.filter(group => !r18SpecialGroups.includes(group.id) && (draft.type === 'all' || group.type === draft.type)).map(group => ({ ...group,
@@ -68,7 +69,7 @@ function toggleGroup(key: string, event: Event) {
 function clearTags() {
   tagScope.cancel(); categories.value = []; tagsKey = ''; tagsLoading.value = false; tagsError.value = '';
 }
-function clearCategory() { draft.tag_ids = []; draft.main_filter = []; draft.year = ''; draft.month = ''; draft.duration = ''; selectionError.value = ''; }
+function clearCategory() { draft.tag_ids = []; draft.main_filter = []; draft.year = ''; draft.month = ''; draft.duration = ''; selectionError.value = ''; submit(); }
 function changeMode(mode: R18BrowseMode) {
   Object.assign(draft, readR18CatalogQuery({ library_id: libraryId.value, mode, page_size: draft.page_size }));
   tagSearch.value = ''; selectionError.value = ''; submit();
@@ -81,9 +82,9 @@ function changeType() {
 function changeYear() {
   if (draft.mode === 'top250' && String(draft.year).trim()) draft.type = 'all';
   if (draft.mode === 'latest' && String(draft.year).trim() && draft.sort === 'update') draft.sort = 'release';
-  if (draft.mode !== 'categories') submit();
+  submit();
 }
-function changeFilter() { if (draft.mode !== 'categories') submit(); }
+function changeFilter() { submit(); }
 function toggleTag(id: string, event: Event) {
   const input = event.target as HTMLInputElement;
   selectionError.value = '';
@@ -91,6 +92,12 @@ function toggleTag(id: string, event: Event) {
     if (draft.tag_ids.length >= 5) { input.checked = false; selectionError.value = '最多选 5 个题材标签'; return; }
     draft.tag_ids = [...draft.tag_ids, id];
   } else draft.tag_ids = draft.tag_ids.filter(tag => tag !== id);
+  submit();
+}
+function removeTag(id: string) {
+  draft.tag_ids = draft.tag_ids.filter(tag => tag !== id);
+  selectionError.value = '';
+  submit();
 }
 function submit(id = libraryId.value) {
   try {
@@ -204,28 +211,50 @@ watch(() => auth.token, () => {
       <div v-if="!chart" class="field"><label for="r18-filter">资源筛选</label><select id="r18-filter" v-model="draft.filter" @change="changeFilter"><option value="all">全部影片</option><option value="magnets">有磁力</option><option value="subtitle">有字幕</option><option value="can_play">JavDB 上游可播放</option></select></div>
       <div v-if="!chart" class="field"><label for="r18-sort">排序方式</label><select id="r18-sort" v-model="draft.sort" :disabled="searching" aria-describedby="r18-query-hint" @change="changeFilter"><option v-for="choice in sorts" :key="choice.value" :value="choice.value" :disabled="choice.value === 'update' && !!String(draft.year).trim()">{{ choice.label }}</option></select></div>
       <div v-if="!chart" class="field"><label for="r18-order">排序方向</label><select id="r18-order" v-model="draft.order" :disabled="searching" @change="changeFilter"><option value="desc">从高到低 / 最新在前</option><option value="asc">从低到高 / 最早在前</option></select></div>
-      <div v-if="!chart || draft.mode === 'top250'" class="field"><label for="r18-year">{{ draft.mode === 'top250' ? '年份榜' : '发行年份' }}</label><select v-if="draft.mode === 'categories'" id="r18-year" v-model="draft.year" :disabled="searching"><option value="">不限年份</option><option v-if="draft.year && !years.some(tag => tag.id === draft.year)" :value="draft.year">{{ draft.year }}</option><option v-for="tag in years" :key="tag.id" :value="tag.id">{{ tag.name }}</option></select><input v-else id="r18-year" v-model="draft.year" type="number" min="1" max="9999" placeholder="不限年份" :disabled="searching" @change="changeYear"></div>
+      <div v-if="!chart || draft.mode === 'top250'" class="field"><label for="r18-year">{{ draft.mode === 'top250' ? '年份榜' : '发行年份' }}</label><select v-if="draft.mode === 'categories'" id="r18-year" v-model="draft.year" :disabled="searching" @change="changeYear"><option value="">不限年份</option><option v-if="draft.year && !years.some(tag => tag.id === draft.year)" :value="draft.year">{{ draft.year }}</option><option v-for="tag in years" :key="tag.id" :value="tag.id">{{ tag.name }}</option></select><input v-else id="r18-year" v-model="draft.year" type="number" min="1" max="9999" placeholder="不限年份" :disabled="searching" @change="changeYear"></div>
       <div v-if="chart && draft.mode !== 'top250'" class="field"><label for="r18-period">榜单周期</label><select id="r18-period" v-model="draft.period" :disabled="searching" @change="submit()"><option v-for="choice in periodNames" :key="choice.value" :value="choice.value">{{ choice.label }}</option></select></div>
       <label v-if="draft.mode === 'top250'" class="r18-ignore-watched"><input id="r18-ignore-watched" type="checkbox" :checked="draft.ignore_watched === 'true'" :disabled="searching" @change="draft.ignore_watched = ($event.target as HTMLInputElement).checked ? 'true' : 'false'; submit()">排除 AVdb 的 JavDB 账户已看</label>
       <button class="btn btn-accent" type="submit"><Search :size="15" aria-hidden="true" /> 查询</button>
-      <section v-if="draft.mode === 'categories' && !searching" class="r18-category-panel" aria-label="JavDB 分类条件">
-        <header class="r18-category-header"><div><h3>分类条件</h3><p class="hint">{{ draft.tag_ids.length }} / 5 个题材标签 · 可另选基础条件、年份、月份与时长。选择后点击查询统一应用。</p></div><button type="button" class="btn btn-sm" @click="clearCategory">清除分类</button></header>
+      <section v-if="draft.mode === 'categories' && !searching" class="r18-category-panel" :class="{ 'is-collapsed': categoryCollapsed }" aria-label="JavDB 分类条件">
+        <header class="r18-category-header">
+          <div class="r18-category-title">
+            <h3>分类条件</h3>
+            <p class="hint">{{ draft.tag_ids.length }} / 5 个题材标签 · 选择后自动查询</p>
+          </div>
+          <div class="r18-category-actions">
+            <button type="button" class="btn btn-sm" @click="clearCategory">清除分类</button>
+            <button type="button" class="btn btn-sm" :aria-expanded="!categoryCollapsed" @click="categoryCollapsed = !categoryCollapsed">{{ categoryCollapsed ? '展开分类' : '收起分类' }}</button>
+          </div>
+        </header>
         <ReadState :loading="tagsLoading" :empty="!categories.length" :error="tagsError" @retry="loadTags(true)" />
-        <div v-if="categories.length" class="r18-category-basics">
-          <fieldset v-if="basics.length" class="r18-basic-options"><legend>基础条件</legend><label v-for="tag in basics" :key="tag.id"><input :id="`r18-main-${tag.id}`" v-model="draft.main_filter" type="checkbox" :value="tag.id">{{ tag.name }}</label></fieldset>
-          <div class="field"><label for="r18-month">发行月份</label><select id="r18-month" v-model="draft.month"><option value="">不限月份</option><option v-for="tag in months" :key="tag.id" :value="tag.id">{{ tag.name }}</option></select></div>
-          <div class="field"><label for="r18-duration">影片时长</label><select id="r18-duration" v-model="draft.duration"><option value="">不限时长</option><option v-for="tag in durations" :key="tag.id" :value="tag.id">{{ tag.name }}</option></select></div>
-          <div class="field r18-tag-search"><label for="r18-category-search">搜索题材标签</label><input id="r18-category-search" v-model="tagSearch" type="search" placeholder="输入标签名称，不发送影片查询" maxlength="120"></div>
+        <div v-if="selectedTags.length" class="r18-selected-tags" aria-label="已选题材标签">
+          <button v-for="tag in selectedTags" :key="tag.id" type="button" class="filter-chip" @click="removeTag(tag.id)">{{ tag.name }} <span class="mono">{{ tag.id }}</span><span aria-hidden="true">×</span></button>
         </div>
-        <div v-if="selectedTags.length" class="r18-selected-tags" aria-label="已选题材标签"><button v-for="tag in selectedTags" :key="tag.id" type="button" class="filter-chip" @click="draft.tag_ids = draft.tag_ids.filter(id => id !== tag.id); selectionError = ''">{{ tag.name }} <span class="mono">{{ tag.id }}</span><span aria-hidden="true">×</span></button></div>
         <p v-if="selectionError" id="r18-category-warning" class="auth-error" role="alert">{{ selectionError }}</p>
-        <div class="r18-tag-groups">
-          <details v-for="group in groups" :key="group.key" class="r18-tag-group" :data-r18-group="group.key" :open="groupOpen(group.key)" @toggle="toggleGroup(group.key, $event)">
-            <summary>{{ groupNames[group.id] || group.name }} <span>{{ typeNames[group.type] }} · {{ group.tags.length }} 项</span></summary>
-            <div v-if="groupOpen(group.key)" class="r18-tag-options"><label v-for="tag in group.tags.slice(0, groupLimits[group.key] || 40)" :key="`${tag.type}:${tag.id}`"><input :id="`r18-tag-${tag.type}-${tag.id}`" type="checkbox" :checked="draft.tag_ids.includes(`${tag.type}:${tag.id}`)" @change="toggleTag(`${tag.type}:${tag.id}`, $event)">{{ tag.name }}</label><button v-if="group.tags.length > (groupLimits[group.key] || 40)" type="button" class="btn btn-sm" @click="groupLimits[group.key] = (groupLimits[group.key] || 40) + 40">显示更多标签</button></div>
-          </details>
+        <div v-show="!categoryCollapsed" class="r18-category-body">
+          <div v-if="categories.length" class="r18-category-basics">
+            <fieldset v-if="basics.length" class="r18-basic-options">
+              <legend>基础条件</legend>
+              <label v-for="tag in basics" :key="tag.id" :class="{ 'is-selected': draft.main_filter.includes(tag.id) }"><input :id="`r18-main-${tag.id}`" v-model="draft.main_filter" type="checkbox" :value="tag.id" @change="submit()">{{ tag.name }}</label>
+            </fieldset>
+            <div class="field"><label for="r18-month">发行月份</label><select id="r18-month" v-model="draft.month" @change="submit()"><option value="">不限月份</option><option v-for="tag in months" :key="tag.id" :value="tag.id">{{ tag.name }}</option></select></div>
+            <div class="field"><label for="r18-duration">影片时长</label><select id="r18-duration" v-model="draft.duration" @change="submit()"><option value="">不限时长</option><option v-for="tag in durations" :key="tag.id" :value="tag.id">{{ tag.name }}</option></select></div>
+            <div class="field r18-tag-search"><label for="r18-category-search">搜索题材标签</label><input id="r18-category-search" v-model="tagSearch" type="search" placeholder="输入标签名称，不发送影片查询" maxlength="120"></div>
+          </div>
+          <div class="r18-tag-groups">
+            <details v-for="group in groups" :key="group.key" class="r18-tag-group" :data-r18-group="group.key" :open="groupOpen(group.key)" @toggle="toggleGroup(group.key, $event)">
+              <summary>{{ groupNames[group.id] || group.name }} <span>{{ typeNames[group.type] }} · {{ group.tags.length }} 项</span></summary>
+              <div v-if="groupOpen(group.key)" class="r18-tag-options">
+                <label v-for="tag in group.tags.slice(0, groupLimits[group.key] || 40)" :key="`${tag.type}:${tag.id}`" :class="{ 'is-selected': draft.tag_ids.includes(`${tag.type}:${tag.id}`) }">
+                  <input :id="`r18-tag-${tag.type}-${tag.id}`" type="checkbox" :checked="draft.tag_ids.includes(`${tag.type}:${tag.id}`)" @change="toggleTag(`${tag.type}:${tag.id}`, $event)">
+                  {{ tag.name }}
+                </label>
+                <button v-if="group.tags.length > (groupLimits[group.key] || 40)" type="button" class="btn btn-sm" @click="groupLimits[group.key] = (groupLimits[group.key] || 40) + 40">显示更多标签</button>
+              </div>
+            </details>
+          </div>
+          <p v-if="categories.length && !groups.length" class="hint">没有匹配的题材标签，请调整类型或标签搜索。</p>
         </div>
-        <p v-if="categories.length && !groups.length" class="hint">没有匹配的题材标签，请调整类型或标签搜索。</p>
       </section>
     </form>
     <p v-if="libraries.length" id="r18-query-hint" class="hint r18-query-hint">{{ queryHint }} 在线分页获取，不导入整库，也不伪造全库总数。上游可播放不代表本服务已有网盘播放源。<span v-if="draft.mode === 'top250'"> 排除已看针对 AVdb 的 JavDB 账户，与本 Emby 用户已看无关。</span></p>
@@ -263,13 +292,39 @@ watch(() => auth.token, () => {
 .r18-filters .field, .r18-filters input, .r18-filters select { min-width:0; }
 .r18-filters input, .r18-filters select { width:100%; }
 .r18-ignore-watched { display:flex; gap:8px; align-items:flex-start; font-size:12px; line-height:1.6; }.r18-ignore-watched input { width:auto; flex:none; margin-top:4px; }
-.r18-category-panel { grid-column:1/-1; min-width:0; padding:16px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel-2); }
-.r18-category-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }.r18-category-header h3 { margin:0 0 6px; font-size:14px; }.r18-category-header .hint { margin:0 0 14px; }.r18-category-header .btn { flex:none; }
-.r18-category-basics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:end; }.r18-basic-options { grid-column:1/-1; border:0; padding:0; margin:0 0 6px; min-width:0; display:flex; flex-wrap:wrap; gap:8px 16px; }.r18-basic-options legend { font-size:12px; color:var(--muted); padding:0 0 8px; }
-.r18-basic-options label, .r18-tag-options label { display:flex; align-items:flex-start; gap:7px; min-width:0; font-size:12px; line-height:1.6; overflow-wrap:anywhere; }.r18-basic-options input, .r18-tag-options input { width:auto; flex:none; margin-top:4px; }
-.r18-tag-search { grid-column:1/-1; }.r18-selected-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:14px; }.r18-selected-tags .filter-chip { min-width:0; max-width:100%; white-space:normal; overflow-wrap:anywhere; }.r18-selected-tags .mono { color:var(--muted); font-size:10px; }
-.r18-tag-groups { display:grid; gap:8px; margin-top:14px; }.r18-tag-group { min-width:0; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); }.r18-tag-group summary { padding:10px 12px; cursor:pointer; font-size:12px; font-weight:600; overflow-wrap:anywhere; }.r18-tag-group summary span { color:var(--muted); font-size:11px; font-weight:400; margin-left:8px; }
-.r18-tag-options { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,150px),1fr)); gap:10px 16px; padding:4px 12px 14px; }.r18-tag-options .btn { justify-self:start; }
+.r18-category-panel { grid-column:1/-1; min-width:0; padding:10px 14px; border:1px solid var(--line); border-radius:var(--radius-sm, 6px); background:var(--panel-2); transition:padding 0.2s ease; }
+.r18-category-panel.is-collapsed { padding:8px 14px; }
+.r18-category-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.r18-category-title { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.r18-category-title h3 { margin:0; font-size:13px; font-weight:600; }
+.r18-category-title .hint { margin:0; font-size:11px; color:var(--muted); }
+.r18-category-actions { display:flex; align-items:center; gap:8px; flex:none; }
+.r18-category-actions .btn { height:26px; padding:0 8px; font-size:11px; }
+.r18-category-body { margin-top:8px; }
+.r18-category-basics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px 12px; align-items:end; margin-top:4px; }
+.r18-basic-options { grid-column:1/-1; border:0; padding:0; margin:0 0 2px; min-width:0; display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center; }
+.r18-basic-options legend { font-size:11px; color:var(--muted); font-weight:600; padding:0 4px 0 0; }
+.r18-basic-options label { display:flex; align-items:center; gap:5px; min-width:0; font-size:11px; line-height:1.3; cursor:pointer; padding:2px 6px; border-radius:4px; background:var(--panel); border:1px solid transparent; transition:all 0.15s ease; }
+.r18-basic-options label:hover { border-color:var(--line); }
+.r18-basic-options label.is-selected { background:var(--accent-soft); color:var(--accent); font-weight:500; border-color:var(--accent); }
+.r18-basic-options input { width:12px; height:12px; flex:none; margin:0; cursor:pointer; }
+.r18-category-basics .field label { font-size:11px; margin-bottom:2px; display:block; }
+.r18-category-basics select, .r18-category-basics input { height:28px; min-height:28px; font-size:11px; padding:2px 8px; }
+.r18-tag-search { grid-column:auto; }
+.r18-selected-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+.r18-selected-tags .filter-chip { min-width:0; max-width:100%; white-space:normal; overflow-wrap:anywhere; padding:2px 8px; font-size:11px; height:24px; }
+.r18-selected-tags .mono { color:var(--muted); font-size:9px; }
+.r18-tag-groups { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:6px; margin-top:8px; }
+.r18-tag-group { min-width:0; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); }
+.r18-tag-group[open] { grid-column:1/-1; }
+.r18-tag-group summary { padding:6px 10px; cursor:pointer; font-size:11px; font-weight:600; overflow-wrap:anywhere; user-select:none; }
+.r18-tag-group summary span { color:var(--muted); font-size:10px; font-weight:400; margin-left:4px; }
+.r18-tag-options { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,115px),1fr)); gap:4px 8px; padding:6px 10px 8px; max-height:170px; overflow-y:auto; border-top:1px solid var(--line); }
+.r18-tag-options label { display:flex; align-items:center; gap:5px; min-width:0; font-size:11px; line-height:1.3; overflow-wrap:anywhere; padding:3px 6px; border-radius:4px; cursor:pointer; background:var(--panel-2); border:1px solid transparent; transition:all 0.15s ease; }
+.r18-tag-options label:hover { background:var(--accent-soft); color:var(--accent); }
+.r18-tag-options label.is-selected { background:var(--accent-soft); color:var(--accent); font-weight:600; border-color:var(--accent); }
+.r18-tag-options input { width:12px; height:12px; flex:none; margin:0; cursor:pointer; }
+.r18-tag-options .btn { grid-column:1/-1; justify-self:start; font-size:11px; padding:2px 8px; height:24px; margin-top:2px; }
 .r18-stale-results { color:var(--warn); font-size:12px; padding:10px 12px; border:1px solid var(--line); border-radius:var(--radius-sm); margin:16px 0 0; }
 .r18-query-hint { margin:12px 0 0; }
 .r18-list-meta { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; font-size:12px; color:var(--muted); margin:18px 0; }
@@ -288,6 +343,17 @@ watch(() => auth.token, () => {
 .r18-card-copy > .r18-card-local { display:inline-block; padding:1px 5px; margin-top:6px; border:1px solid var(--line); border-radius:4px; color:var(--accent); }
 .r18-pagination { display:flex; justify-content:center; gap:14px; align-items:center; margin-top:28px; flex-wrap:wrap; }
 .r18-page-number { color:var(--muted); font-size:12px; white-space:nowrap; }.r18-page-jump { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px; }.r18-page-jump input { width:80px; min-width:0; }
-@media(max-width:1100px) { .r18-filters { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media(max-width:600px) { .r18-header { gap:10px; }.r18-header h2 { font-size:22px; }.r18-pagination { justify-content:flex-start; }.r18-page-jump { width:100%; }.r18-category-panel { padding:12px; }.r18-category-header { flex-wrap:wrap; }.r18-category-header > div { min-width:0; flex:1 1 180px; } }
+@media(max-width:1100px) {
+  .r18-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .r18-category-basics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .r18-tag-search { grid-column:1/-1; }
+}
+@media(max-width:600px) {
+  .r18-header { gap:10px; }.r18-header h2 { font-size:22px; }.r18-pagination { justify-content:flex-start; }.r18-page-jump { width:100%; }
+  .r18-category-panel { padding:8px 10px; }
+  .r18-category-header { flex-wrap:wrap; }
+  .r18-category-header > div { min-width:0; flex:1 1 180px; }
+  .r18-category-basics { grid-template-columns:1fr; }
+  .r18-tag-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
 </style>

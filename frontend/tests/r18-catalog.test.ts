@@ -133,7 +133,7 @@ describe('JavDB 模式与集中分类查询', () => {
     expect(wrapper.get('#r18-mode-top250').attributes('aria-pressed')).toBe('true');
     expect(wrapper.find('#r18-sort').exists()).toBe(false); expect(wrapper.text()).toContain('250 是榜单上限');
   }, 60000);
-  it('分类分组默认折叠，两题材、基础和发行条件集中提交，不逐项请求', async () => {
+  it('分类分组默认折叠，题材、基础和发行条件点击自动查询', async () => {
     setRoute({ library_id: '2', mode: 'categories' }); const { wrapper } = render(); await flushPromises();
     expect(r18Api.tags).toHaveBeenCalledExactlyOnceWith('2', 'all', expect.any(AbortSignal), false);
     expect(wrapper.findAll('.r18-tag-options input')).toHaveLength(0);
@@ -141,8 +141,7 @@ describe('JavDB 模式与集中分类查询', () => {
     await expand(wrapper); await wrapper.get('#r18-tag-0-1').setValue(true); await wrapper.get('#r18-tag-0-2').setValue(true);
     await wrapper.get('#r18-main-p').setValue(true); await wrapper.get('#r18-main-m').setValue(true);
     await wrapper.get('#r18-year').setValue('2024'); await wrapper.get('#r18-month').setValue('6'); await wrapper.get('#r18-duration').setValue('90-120');
-    expect(r18Api.videos).toHaveBeenCalledTimes(1);
-    await wrapper.get('.r18-filters').trigger('submit'); await flushPromises();
+    await flushPromises();
     expect(requestQuery()).toEqual({ mode: 'categories', type: 'all', filter: 'magnets', page: '1', page_size: '24', sort: 'release', order: 'desc', year: '2024', month: '6', duration: '90-120', tag_ids: '0:1,0:2', main_filter: 'm,p' });
     expect(r18Api.tags).toHaveBeenCalledTimes(1); expect(r18Api.libraries).toHaveBeenCalledTimes(1);
     await wrapper.findAll('button').find(button => button.text().includes('下一页'))!.trigger('click'); await flushPromises();
@@ -163,7 +162,10 @@ describe('JavDB 模式与集中分类查询', () => {
     expect((wrapper.get('#r18-year').element as HTMLSelectElement).value).toBe('');
     expect(wrapper.find('[data-r18-group="0-subject"]').exists()).toBe(false);
     expect(wrapper.find('[data-r18-group="1-subject"]').exists()).toBe(true);
-    expect(r18Api.videos).toHaveBeenCalledTimes(1);
+    expect(requestQuery()).toMatchObject({ mode: 'categories', type: '1' });
+    expect(requestQuery()).not.toHaveProperty('tag_ids');
+    expect(requestQuery()).not.toHaveProperty('main_filter');
+    expect(requestQuery()).not.toHaveProperty('year');
   }, 60000);
   it('特殊组按类型过滤，FC2/动漫不显示其他类型的基础或年份选项', async () => {
     setRoute({ library_id: '2', mode: 'categories', type: '3' }); const { wrapper } = render(); await flushPromises();

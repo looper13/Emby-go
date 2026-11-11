@@ -640,7 +640,7 @@ test('JavDB 分类标签与基础条件集中提交，最多五项并恢复详�
   await expect(page.locator('#r18-tag-0-23')).toBeVisible();
   await expect(page.locator('#r18-tag-0-1')).toHaveCount(0);
   await page.locator('#r18-category-search').fill('');
-  expect(mock.queries).toHaveLength(reads);
+  expect(mock.queries.length).toBeGreaterThan(reads);
   expect(mock.tagQueries).toHaveLength(1);
   await page.locator('.r18-filters').getByRole('button', { name: '查询', exact: true }).click();
   query = { ...query, year: '2024', month: '12', duration: '45-90', tag_ids: '0:1,0:23', main_filter: 'm,p' };
