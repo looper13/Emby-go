@@ -303,7 +303,13 @@ func (a *App) dropNFOCache(nfoPath string) {
 func (a *App) libraryCoverPath(l store.Library) string {
 	key := "libcover:" + a.cacheScope(l.ID)
 	data, err := a.cache.Load(a.rootCtx, key, 5*time.Minute, func() ([]byte, error) {
-		path := imageutil.FindPoster(l.Path)
+		path := ""
+		for _, root := range l.DirectoryPaths() {
+			path = imageutil.FindPoster(root)
+			if path != "" {
+				break
+			}
+		}
 		if path == "" {
 			var err error
 			path, err = a.db.RepresentativeArt(l.ID)

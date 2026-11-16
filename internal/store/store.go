@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -50,15 +49,17 @@ type storeState struct {
 }
 
 type Library struct {
-	ID               int64  `json:"Id"`
-	Name             string `json:"Name"`
-	Path             string `json:"Path"`
-	Type             string `json:"Type"`
-	Enabled          bool   `json:"Enabled"`
-	ProxyEnabled     bool   `json:"ProxyEnabled"`
-	ResolveRedirects bool   `json:"ResolveRedirects"`
-	SourceType       string `json:"SourceType"`
-	Revision         int64  `json:"Revision"`
+	ID               int64             `json:"Id"`
+	Name             string            `json:"Name"`
+	Path             string            `json:"Path"`
+	Paths            []string          `json:"Paths"`
+	Type             string            `json:"Type"`
+	Enabled          bool              `json:"Enabled"`
+	ProxyEnabled     bool              `json:"ProxyEnabled"`
+	ResolveRedirects bool              `json:"ResolveRedirects"`
+	ProxyHeaders     map[string]string `json:"ProxyHeaders"`
+	SourceType       string            `json:"SourceType"`
+	Revision         int64             `json:"Revision"`
 }
 
 type Movie struct {
@@ -157,6 +158,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateR18Libraries(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateLibraryPaths(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -405,50 +410,15 @@ func (s *Store) HasAPIKey(key string) (bool, error) {
 }
 
 func (s *Store) AddLibrary(name, path string, contentType ...string) (Library, error) {
-	proxyEnabled := false
-	if err := s.db.QueryRow("SELECT COALESCE(proxy_enabled,0) FROM libraries WHERE path=?", strings.TrimSpace(path)).Scan(&proxyEnabled); err != nil && err != sql.ErrNoRows {
-		return Library{}, err
-	}
-	return s.AddLibraryWithProxy(name, path, proxyEnabled, contentType...)
+	return s.registerLibrary(name, path, nil, nil, contentType...)
 }
 
 func (s *Store) AddLibraryWithProxy(name, path string, proxyEnabled bool, contentType ...string) (Library, error) {
-	var resolveRedirects bool
-	if err := s.db.QueryRow("SELECT resolve_redirects FROM libraries WHERE path=?", strings.TrimSpace(path)).Scan(&resolveRedirects); err != nil && err != sql.ErrNoRows {
-		return Library{}, err
-	}
-	return s.AddLibraryWithPlaybackSettings(name, path, proxyEnabled, resolveRedirects, contentType...)
+	return s.registerLibrary(name, path, &proxyEnabled, nil, contentType...)
 }
 
 func (s *Store) AddLibraryWithPlaybackSettings(name, path string, proxyEnabled, resolveRedirects bool, contentType ...string) (Library, error) {
-	name, path = strings.TrimSpace(name), strings.TrimSpace(path)
-	if name == "" || path == "" {
-		return Library{}, errors.New("媒体库名称和路径不能为空")
-	}
-	typ := LibraryMovies
-	if len(contentType) > 0 {
-		typ = contentType[0]
-		if typ != LibraryMovies && typ != LibraryTVShows && typ != LibraryMixed {
-			return Library{}, errors.New("媒体库类型必须是影片、电视节目或混合内容")
-		}
-		var existingType string
-		err := s.db.QueryRow("SELECT type FROM libraries WHERE path=?", path).Scan(&existingType)
-		if err != nil && err != sql.ErrNoRows {
-			return Library{}, err
-		}
-		if err == nil && typ != existingType {
-			return Library{}, errors.New("该路径已属于其他类型的媒体库，请使用独立目录")
-		}
-	}
-	var id int64
-	err := s.db.QueryRow("INSERT INTO libraries(name,path,type,proxy_enabled,resolve_redirects) VALUES(?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET name=excluded.name,proxy_enabled=excluded.proxy_enabled,resolve_redirects=excluded.resolve_redirects,revision=libraries.revision+1 RETURNING id", name, path, typ, proxyEnabled, resolveRedirects).Scan(&id)
-	if err != nil {
-		return Library{}, err
-	}
-	if err := s.BumpVersion(id); err != nil {
-		return Library{}, err
-	}
-	return s.Library(id)
+	return s.registerLibrary(name, path, &proxyEnabled, &resolveRedirects, contentType...)
 }
 
 // Library 按 id 返回单个启用的媒体库。

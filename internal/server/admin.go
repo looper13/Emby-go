@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,7 @@ func (a *App) adminDeleteLibrary(c *gin.Context) {
 	}
 	_ = a.db.BumpVersion(id)
 	a.invalidateR18Client(id)
+	a.invalidateLibraryPlayback(id)
 
 	slog.Info("删除媒体库", "library_id", id)
 	c.Status(http.StatusNoContent)
@@ -79,18 +81,31 @@ func (a *App) adminAddLibrary(c *gin.Context) {
 	var req struct {
 		Name             string
 		Path             string
+		Paths            []string
 		Type             string
 		ProxyEnabled     bool
 		ResolveRedirects bool
+		ProxyHeaders     map[string]string
 	}
-	if c.ShouldBindJSON(&req) != nil || req.Name == "" || req.Path == "" {
-		c.JSON(400, gin.H{"error": "name and path required"})
+	if c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.Name) == "" {
+		c.JSON(400, gin.H{"error": "请填写媒体库名称和至少一个目录路径"})
 		return
+	}
+	paths := req.Paths
+	if paths == nil && strings.TrimSpace(req.Path) != "" {
+		paths = []string{req.Path}
 	}
 	if req.Type == "" {
 		req.Type = store.LibraryMovies
 	}
-	v, e := a.db.AddLibraryWithPlaybackSettings(req.Name, req.Path, req.ProxyEnabled, req.ResolveRedirects, req.Type)
+	var v store.Library
+	var e error
+	if req.Paths == nil && req.ProxyHeaders == nil {
+		// 旧单路径调用保留重新登记行为；新表单统一使用目录列表。
+		v, e = a.db.AddLibraryWithPlaybackSettings(req.Name, req.Path, req.ProxyEnabled, req.ResolveRedirects, req.Type)
+	} else {
+		v, e = a.db.AddDirectoryLibrary(req.Name, paths, req.Type, req.ProxyEnabled, req.ResolveRedirects, req.ProxyHeaders)
+	}
 	if e != nil {
 		c.JSON(400, gin.H{"error": e.Error()})
 		return
@@ -108,12 +123,16 @@ func (a *App) adminUpdateLibrary(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ProxyEnabled     *bool `json:"ProxyEnabled"`
-		ResolveRedirects *bool `json:"ResolveRedirects"`
-		Revision         int64 `json:"Revision"`
+		Name             *string            `json:"Name"`
+		Paths            *[]string          `json:"Paths"`
+		ProxyEnabled     *bool              `json:"ProxyEnabled"`
+		ResolveRedirects *bool              `json:"ResolveRedirects"`
+		ProxyHeaders     *map[string]string `json:"ProxyHeaders"`
+		Revision         int64              `json:"Revision"`
 	}
-	if c.ShouldBindJSON(&req) != nil || req.ProxyEnabled == nil || req.Revision <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ProxyEnabled and Revision are required"})
+	if c.ShouldBindJSON(&req) != nil || req.Revision <= 0 ||
+		(req.Name == nil && req.Paths == nil && req.ProxyEnabled == nil && req.ResolveRedirects == nil && req.ProxyHeaders == nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请提供 Revision 和需要修改的媒体库设置"})
 		return
 	}
 	library, readErr := a.db.Library(id)
@@ -125,12 +144,48 @@ func (a *App) adminUpdateLibrary(c *gin.Context) {
 		}
 		return
 	}
+	if !library.IsDirectory() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": store.ErrLibraryCapability.Error()})
+		return
+	}
+	if library.Revision != req.Revision {
+		c.JSON(http.StatusConflict, gin.H{"error": "媒体库已被修改，请刷新后重试"})
+		return
+	}
+	name, paths := library.Name, library.DirectoryPaths()
+	if req.Name != nil {
+		name = *req.Name
+	}
+	if req.Paths != nil {
+		paths = *req.Paths
+	}
+	proxyEnabled := library.ProxyEnabled
+	if req.ProxyEnabled != nil {
+		proxyEnabled = *req.ProxyEnabled
+	}
 	resolveRedirects := library.ResolveRedirects
 	if req.ResolveRedirects != nil {
 		resolveRedirects = *req.ResolveRedirects
 	}
-	v, err := a.db.UpdateLibraryPlaybackSettings(id, *req.ProxyEnabled, resolveRedirects, req.Revision)
+	headers := library.ProxyHeaders
+	if req.ProxyHeaders != nil {
+		headers = *req.ProxyHeaders
+	}
+	pathsChanged := !slices.Equal(library.DirectoryPaths(), paths)
+	wasMonitored := false
+	if pathsChanged {
+		// 目录调整会清理移除范围的索引，必须与扫描及 NFO 编辑互斥。
+		if !a.claimNFORequest(c, "edit") {
+			return
+		}
+		defer a.releaseNFO("edit")
+		wasMonitored = a.stopLibraryMonitor(id)
+	}
+	v, err := a.db.UpdateDirectoryLibrary(id, name, paths, proxyEnabled, resolveRedirects, headers, req.Revision)
 	if err != nil {
+		if wasMonitored {
+			_ = a.watchLibrary(library)
+		}
 		if errors.Is(err, store.ErrConflict) {
 			c.JSON(http.StatusConflict, gin.H{"error": "媒体库已被修改，请刷新后重试"})
 			return
@@ -139,9 +194,17 @@ func (a *App) adminUpdateLibrary(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if pathsChanged {
+		roots := append(library.DirectoryPaths(), v.DirectoryPaths()...)
+		a.invalidateDiskPaths(roots, true)
+		a.db.InvalidateLibraryMovies(id)
+		_ = a.watchLibrary(v)
+	}
+	a.finishLibraryCacheRefresh(id)
+	a.invalidateLibraryPlayback(id)
 	c.JSON(http.StatusOK, v)
 }
 
@@ -323,14 +386,14 @@ func (a *App) scanLibrariesWithMode(ctx context.Context, libraryID int64, full b
 			break
 		}
 		a.setScanLibrary(index+1, library)
-		slog.Info("正在扫描媒体库", "library_id", library.ID, "name", library.Name, "path", library.Path)
+		slog.Info("正在扫描媒体库", "library_id", library.ID, "name", library.Name, "paths", library.DirectoryPaths())
 		scan := scanner.ScanWithProgress
 		if full {
 			scan = scanner.RebuildWithProgress
 		}
 		current, err := scan(ctx, a.db, library, a.updateScanProgress)
 		if current.Added+current.Updated+current.Deleted > 0 || err != nil {
-			a.invalidateDiskPaths([]string{library.Path}, true)
+			a.invalidateDiskPaths(library.DirectoryPaths(), true)
 			a.db.InvalidateLibraryMovies(library.ID)
 			a.finishLibraryCacheRefresh(library.ID)
 		}

@@ -21,8 +21,12 @@ export interface LoginDto {
 }
 
 export type LibraryContentType = 'movies' | 'tvshows' | 'mixed';
-export interface LibraryDto { Id: number; Name: string; Path: string; SourceType?: 'nfo_directory' | 'avdb_javdb'; Enabled?: boolean; ProxyEnabled?: boolean; ResolveRedirects?: boolean; Revision?: number; Type?: LibraryContentType | '' }
+export interface LibraryDto { Id: number; Name: string; Path: string; Paths?: string[]; ProxyHeaders?: Record<string, string>; SourceType?: 'nfo_directory' | 'avdb_javdb'; Enabled?: boolean; ProxyEnabled?: boolean; ResolveRedirects?: boolean; Revision?: number; Type?: LibraryContentType | '' }
 export interface LibrariesDto { items: LibraryDto[] | null; total: number }
+
+export function libraryDirectoryPaths(library: LibraryDto): string[] {
+  return library.Paths?.length ? [...library.Paths] : library.Path ? [library.Path] : [];
+}
 export interface StatusDto { success: number; manual: number; pending: number; incompatible: number }
 
 export interface MovieDto {
@@ -170,6 +174,14 @@ export function parseLibraries(value: unknown): LibrariesDto {
     if (!isRecord(item) || !isCount(item.Id) || item.Id === 0
       || typeof item.Name !== 'string' || typeof item.Path !== 'string') return invalidDto();
     const library: LibraryDto = { Id: item.Id, Name: item.Name, Path: item.Path };
+    if (item.Paths !== undefined && item.Paths !== null) {
+      if (!Array.isArray(item.Paths) || item.Paths.some((path: unknown) => typeof path !== 'string' || !path.trim())) return invalidDto();
+      library.Paths = [...item.Paths] as string[];
+    }
+    if (item.ProxyHeaders !== undefined && item.ProxyHeaders !== null) {
+      if (!isRecord(item.ProxyHeaders) || Object.values(item.ProxyHeaders).some(value => typeof value !== 'string')) return invalidDto();
+      library.ProxyHeaders = Object.fromEntries(Object.entries(item.ProxyHeaders)) as Record<string, string>;
+    }
     if (item.SourceType !== undefined) { if (item.SourceType !== 'nfo_directory' && item.SourceType !== 'avdb_javdb') return invalidDto(); library.SourceType = item.SourceType; }
     if (item.Enabled !== undefined) { if (typeof item.Enabled !== 'boolean') return invalidDto(); library.Enabled = item.Enabled; }
     if (item.ProxyEnabled !== undefined) { if (typeof item.ProxyEnabled !== 'boolean') return invalidDto(); library.ProxyEnabled = item.ProxyEnabled; }

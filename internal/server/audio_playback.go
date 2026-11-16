@@ -26,6 +26,8 @@ import (
 
 type audioSession struct {
 	userID        int64
+	libraryID     int64
+	movieID       int64
 	item, dir     string
 	clientSession string
 	cancel        context.CancelFunc
@@ -122,7 +124,18 @@ func (a *App) extractSubtitle(c *gin.Context, source string, index int, format s
 	stop := context.AfterFunc(a.rootCtx, cancel)
 	defer stop()
 	mux := map[string]string{"vtt": "webvtt", "srt": "srt", "ass": "ass", "ssa": "ass"}[format]
-	cmd := exec.CommandContext(ctx, program, "-nostdin", "-v", "error", "-protocol_whitelist", "http,https,tcp,tls,crypto,httpproxy", "-i", source,
+	movie, _, id, valid := a.resolvePlaybackTarget(c.Param("id"))
+	if !valid || !movie.IsVisible() {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	input, cleanup, err := a.proxyMediaInput(ctx, movie, id, source)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	defer cleanup()
+	cmd := exec.CommandContext(ctx, program, "-nostdin", "-v", "error", "-protocol_whitelist", "http,https,tcp,tls,crypto,httpproxy", "-i", input,
 		"-map", fmt.Sprintf("0:%d", index), "-f", mux, "pipe:1")
 	output := &limitedBuffer{max: subtitle.MaxFileSize}
 	cmd.Stdout, cmd.Stderr = output, io.Discard
@@ -225,13 +238,21 @@ func (a *App) startAudioPlayback(c *gin.Context) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(a.rootCtx, 4*time.Hour)
+	input, cleanupInput, err := a.proxyMediaInput(ctx, movie, id, raw)
+	if err != nil {
+		cancel()
+		os.RemoveAll(dir)
+		release()
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
 	sessionID := randomSessionID()
-	session := &audioSession{userID: a.db.UserID(), item: id, dir: dir, cancel: cancel, done: make(chan struct{})}
+	session := &audioSession{userID: a.db.UserID(), libraryID: movie.LibraryID, movieID: movie.ID, item: id, dir: dir, cancel: cancel, done: make(chan struct{})}
 	session.clientSession = request.PlaySessionId
 	session.touched.Store(time.Now().UnixNano())
 	seekTime := strconv.FormatFloat(float64(request.StartTimeTicks)/1e7, 'f', 3, 64)
 	args := []string{"-nostdin", "-v", "error", "-y", "-ss", seekTime,
-		"-readrate", "1", "-protocol_whitelist", "http,https,tcp,tls,crypto,httpproxy", "-i", raw}
+		"-readrate", "1", "-protocol_whitelist", "http,https,tcp,tls,crypto,httpproxy", "-i", input}
 	audioMap := fmt.Sprintf("0:%d", containerIndex)
 	if externalPath != "" {
 		format := map[string]string{".mka": "matroska", ".flac": "flac", ".aac": "aac", ".ac3": "ac3", ".eac3": "eac3", ".dts": "dts", ".m4a": "mov", ".mp3": "mp3", ".ogg": "ogg", ".opus": "ogg", ".wav": "wav"}[strings.ToLower(filepath.Ext(externalPath))]
@@ -254,6 +275,7 @@ func (a *App) startAudioPlayback(c *gin.Context) {
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Start(); err != nil {
 		cancel()
+		cleanupInput()
 		os.RemoveAll(dir)
 		release()
 		c.JSON(502, gin.H{"error": "无法启动 FFmpeg"})
@@ -271,6 +293,7 @@ func (a *App) startAudioPlayback(c *gin.Context) {
 		defer func() {
 			defer a.mediaSessionsWG.Done()
 			cancel()
+			cleanupInput()
 			a.mediaMu.Lock()
 			delete(a.mediaSessions, sessionID)
 			a.mediaMu.Unlock()
@@ -432,7 +455,9 @@ func (a *App) hlsResource(c *gin.Context) {
 		return
 	}
 	a = &App{appState: a.appState, db: a.db.ForUser(user.ID)}
-	if !a.canAccessItem(session.item) {
+	// 必须验证具体影片，删除的影片 ID 不能被通用身份逻辑解释成媒体库 ID。
+	movie, _, _, valid := a.resolvePlaybackTarget(session.item)
+	if !valid || !movie.IsVisible() || movie.ID != session.movieID || movie.LibraryID != session.libraryID {
 		c.Status(404)
 		return
 	}

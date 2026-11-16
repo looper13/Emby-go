@@ -47,7 +47,7 @@ func newScanPerformance(lib store.Library, directory string, recursive, full boo
 	p := &scanPerformance{
 		logger: slog.Default().With("scan_id", scanSequence.Add(1), "library_id", lib.ID,
 			"directory", directory, "recursive", recursive, "full", full),
-		started: now, lastReport: now, wholeLibrary: recursive && filepath.Clean(directory) == filepath.Clean(lib.Path),
+		started: now, lastReport: now, wholeLibrary: recursive && filepath.Clean(directory) == filepath.Clean(lib.RootForPath(directory)),
 	}
 	level := slog.LevelDebug
 	if p.wholeLibrary {

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { RefreshCw, Trash2, Folder, Film, Tv, Layers, Shuffle, LayoutGrid, List } from '@lucide/vue';
-import { adminApi } from '../api/admin';
+import { RefreshCw, Trash2, Folder, Film, Tv, Layers, Shuffle, LayoutGrid, List, Pencil } from '@lucide/vue';
+import { adminApi, type DirectoryLibraryPayload } from '../api/admin';
+import { ApiError } from '../api/client';
 import { catalogApi } from '../api/catalog';
 import { useAdminRead } from '../composables/useAdminRead';
 import { useTasksStore } from '../stores/tasks';
@@ -12,7 +13,7 @@ import R18LibraryForm from '../components/libraries/R18LibraryForm.vue';
 import DuplicateMoviesPanel from '../components/libraries/DuplicateMoviesPanel.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import ReadState from '../components/common/ReadState.vue';
-import type { LibraryContentType, LibraryDto } from '../api/contracts';
+import { libraryDirectoryPaths, type LibraryDto } from '../api/contracts';
 
 function contentLabel(lib: LibraryDto) {
   if (lib.SourceType === 'avdb_javdb') return 'JavDB 在线资料库';
@@ -31,9 +32,53 @@ const updatingProxy = ref(new Set<number>());
 const playingLibraryId = ref<number | null>(null);
 const editingR18 = ref<number>();
 const r18FormKey = ref(0);
+const editingLibrary = ref<LibraryDto>();
+const savingLibrary = ref(false);
+const editError = ref('');
 function browseLink(lib: LibraryDto) { return { path: lib.SourceType === 'avdb_javdb' ? '/r18' : '/items', query: { library_id: lib.Id } }; }
-function sourceLabel(lib: LibraryDto) { return lib.SourceType === 'avdb_javdb' ? 'AVdb-Only API / JavDB' : lib.Path; }
+function sourcePaths(lib: LibraryDto) { return lib.SourceType === 'avdb_javdb' ? ['AVdb-Only API / JavDB'] : libraryDirectoryPaths(lib); }
 async function r18Saved(lib: LibraryDto) { toasts.show(`已保存媒体库「${lib.Name}」`); editingR18.value = undefined; r18FormKey.value += 1; if (active()) await load(); }
+
+function edit(lib: LibraryDto) {
+  if (savingLibrary.value || updatingProxy.value.has(lib.Id)) return;
+  editingLibrary.value = { ...lib, Paths: libraryDirectoryPaths(lib), ProxyHeaders: { ...lib.ProxyHeaders } };
+  editError.value = '';
+}
+function normalizePath(path: string): string {
+  const value = path.trim().replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  return /^[a-z]:(?:\/|$)/i.test(value) || value.startsWith('//') ? value.toLowerCase() : value;
+}
+function removesDirectory(previous: string[], next: string[]): boolean {
+  const roots = next.map(normalizePath);
+  return previous.map(normalizePath).some(path => !roots.some(root => path === root || path.startsWith(root === '/' ? root : `${root}/`)));
+}
+async function saveLibrary(payload: DirectoryLibraryPayload) {
+  const previous = editingLibrary.value;
+  if (!previous || savingLibrary.value || previous.Revision === undefined) return;
+  if (removesDirectory(libraryDirectoryPaths(previous), payload.Paths)
+    && !window.confirm('移除目录会清除不再属于此媒体库的影片索引及其播放进度/收藏。不会删除磁盘文件，确认保存？')) return;
+  savingLibrary.value = true;
+  updatingProxy.value.add(previous.Id);
+  editError.value = '';
+  try {
+    const library = await adminApi.updateLibrary(previous.Id, { Name: payload.Name, Paths: payload.Paths,
+      ProxyEnabled: payload.ProxyEnabled, ResolveRedirects: payload.ResolveRedirects, ProxyHeaders: payload.ProxyHeaders, Revision: previous.Revision });
+    toasts.show(`已保存媒体库「${library.Name}」`);
+    if (active()) { editingLibrary.value = undefined; await load(); }
+  } catch (cause) {
+    editError.value = cause instanceof Error ? cause.message : '保存媒体库失败';
+    toasts.show(editError.value, 'error');
+    if (cause instanceof ApiError && cause.status === 409 && active()) {
+      await load();
+      const current = data.value?.items?.find(library => library.Id === previous.Id);
+      if (current) {
+        // 保留表单草稿，使用刷新后的版本供用户核对并再次保存。
+        editingLibrary.value = { ...current };
+        editError.value += '。已刷新媒体库，请核对当前草稿后再次保存。';
+      }
+    }
+  } finally { savingLibrary.value = false; updatingProxy.value.delete(previous.Id); }
+}
 
 const VIEW_STORAGE_KEY = 'emby_library_view_mode';
 function readInitialView(): 'grid' | 'table' {
@@ -82,14 +127,8 @@ watch(() => tasks.revision, () => {
   void load();
 });
 
-async function create(payload: {
-  Name: string;
-  Path: string;
-  Type: LibraryContentType;
-  ProxyEnabled: boolean;
-  ResolveRedirects: boolean;
-}) {
-  if (submitting.value || !payload.Name.trim() || !payload.Path.trim()) return;
+async function create(payload: DirectoryLibraryPayload) {
+  if (submitting.value || !payload.Name.trim() || !payload.Paths.length || payload.Paths.some(path => !path.trim())) return;
   submitting.value = true;
   try {
     const lib = await adminApi.createLibrary(payload);
@@ -141,7 +180,7 @@ async function remove(id: number) {
   try {
     await adminApi.deleteLibrary(id);
     toasts.show('媒体库已删除');
-    if (active()) await load();
+    if (active()) { if (editingLibrary.value?.Id === id) editingLibrary.value = undefined; await load(); }
   } catch (cause) {
     toasts.show(cause instanceof Error ? cause.message : '删除失败', 'error');
   } finally {
@@ -209,16 +248,16 @@ async function remove(id: number) {
         </div>
 
         <div class="lib-card-body">
-          <div class="lib-card-path" :title="sourceLabel(lib)">
-            <span class="lib-path-label">{{ lib.SourceType === 'avdb_javdb' ? '来源' : '路径' }}</span>
-            <span class="mono lib-path-text">{{ sourceLabel(lib) }}</span>
+          <div v-for="(path, index) in sourcePaths(lib)" :key="path" class="lib-card-path" :title="path">
+            <span class="lib-path-label">{{ lib.SourceType === 'avdb_javdb' ? '来源' : sourcePaths(lib).length > 1 ? `路径 ${index + 1}` : '路径' }}</span>
+            <span class="mono lib-path-text">{{ path }}</span>
           </div>
           <div v-if="lib.SourceType !== 'avdb_javdb'" class="proxy-toggles-wrap">
             <label class="proxy-toggle">
               <input
                 type="checkbox"
                 :checked="lib.ProxyEnabled === true"
-                :disabled="updatingProxy.has(lib.Id)"
+                :disabled="updatingProxy.has(lib.Id) || editingLibrary?.Id === lib.Id"
                 :aria-label="`${lib.Name} 播放代理`"
                 @change="toggleProxy(lib, $event)"
               >
@@ -228,7 +267,7 @@ async function remove(id: number) {
               <input
                 type="checkbox"
                 :checked="lib.ResolveRedirects === true"
-                :disabled="updatingProxy.has(lib.Id)"
+                :disabled="updatingProxy.has(lib.Id) || editingLibrary?.Id === lib.Id"
                 :aria-label="`${lib.Name} 解析直链`"
                 @change="toggleProxy(lib, $event, 'ResolveRedirects')"
               >
@@ -274,11 +313,12 @@ async function remove(id: number) {
             <span>查重</span>
           </button>
           <button v-if="lib.SourceType === 'avdb_javdb'" class="btn btn-sm" @click="editingR18 = lib.Id">连接配置</button>
+          <button v-else class="btn btn-sm" :data-lib-edit="lib.Id" :disabled="savingLibrary || updatingProxy.has(lib.Id) || lib.Revision === undefined" @click="edit(lib)"><Pencil :size="13" aria-hidden="true" /><span>编辑</span></button>
           <button
             class="icon-btn danger"
             :data-lib-delete="lib.Id"
             title="删除媒体库索引（不删文件）"
-            :disabled="deleting.has(lib.Id)"
+            :disabled="deleting.has(lib.Id) || updatingProxy.has(lib.Id)"
             @click="remove(lib.Id)"
           >
             <Trash2 :size="14" aria-hidden="true" />
@@ -316,7 +356,7 @@ async function remove(id: number) {
               </span>
             </td>
             <td class="mono">
-              <span class="lib-path" :title="sourceLabel(lib)">{{ sourceLabel(lib) }}</span>
+              <span v-for="path in sourcePaths(lib)" :key="path" class="lib-path" :title="path">{{ path }}</span>
             </td>
             <td>
               <div v-if="lib.SourceType !== 'avdb_javdb'" class="proxy-toggles-wrap">
@@ -324,7 +364,7 @@ async function remove(id: number) {
                   <input
                     type="checkbox"
                     :checked="lib.ProxyEnabled === true"
-                    :disabled="updatingProxy.has(lib.Id)"
+                    :disabled="updatingProxy.has(lib.Id) || editingLibrary?.Id === lib.Id"
                     :aria-label="`${lib.Name} 播放代理`"
                     @change="toggleProxy(lib, $event)"
                   >
@@ -334,7 +374,7 @@ async function remove(id: number) {
                   <input
                     type="checkbox"
                     :checked="lib.ResolveRedirects === true"
-                    :disabled="updatingProxy.has(lib.Id)"
+                    :disabled="updatingProxy.has(lib.Id) || editingLibrary?.Id === lib.Id"
                     :aria-label="`${lib.Name} 解析直链`"
                     @change="toggleProxy(lib, $event, 'ResolveRedirects')"
                   >
@@ -383,11 +423,12 @@ async function remove(id: number) {
                   <span>查重</span>
                 </button>
                 <button v-if="lib.SourceType === 'avdb_javdb'" class="btn btn-sm" @click="editingR18 = lib.Id">连接配置</button>
+                <button v-else class="btn btn-sm" :data-lib-edit="lib.Id" :disabled="savingLibrary || updatingProxy.has(lib.Id) || lib.Revision === undefined" @click="edit(lib)"><Pencil :size="13" aria-hidden="true" /><span>编辑</span></button>
                 <button
                   class="icon-btn danger"
                   :data-lib-delete="lib.Id"
                   title="删除媒体库索引（不删文件）"
-                  :disabled="deleting.has(lib.Id)"
+                  :disabled="deleting.has(lib.Id) || updatingProxy.has(lib.Id)"
                   @click="remove(lib.Id)"
                 >
                   <Trash2 :size="14" aria-hidden="true" />
@@ -398,17 +439,23 @@ async function remove(id: number) {
         </tbody>
       </table>
     </div>
-    <EmptyState v-else-if="data" title="还没有媒体库" hint="先在下方登记一个存放 .strm 的目录。" />
+    <EmptyState v-else-if="data" title="还没有媒体库" hint="先在下方登记存放 .strm 的目录。" />
   </section>
 
   <DuplicateMoviesPanel ref="duplicates" :libraries="(data?.items || []).filter(lib => lib.SourceType !== 'avdb_javdb')" />
 
   <section v-if="editingR18" class="panel"><div class="panel-head"><h2>JavDB 连接配置</h2></div><R18LibraryForm :key="editingR18" :library-id="editingR18" @saved="r18Saved" @cancel="editingR18 = undefined" /></section>
 
+  <section v-if="editingLibrary" class="panel library-edit-panel">
+    <div class="panel-head"><h2>编辑媒体库 · {{ editingLibrary.Name }}</h2></div>
+    <p v-if="editError" class="auth-error" role="alert">{{ editError }}</p>
+    <LibraryForm :key="editingLibrary.Id" :library="editingLibrary" :submitting="savingLibrary" @submit="saveLibrary" @cancel="editingLibrary = undefined" />
+  </section>
+
   <section class="panel library-add-panel">
     <div class="panel-head">
       <h2>添加媒体库</h2>
-      <span class="hint" style="margin:0">登记本地或挂载的 .strm 视频目录</span>
+      <span class="hint" style="margin:0">可登记多个本地或挂载的 .strm 视频目录</span>
     </div>
     <LibraryForm :key="formKey" :submitting="submitting" @submit="create" />
   </section>
@@ -609,6 +656,11 @@ async function remove(id: number) {
   margin-top: 10px;
 }
 
+.library-table .lib-path {
+  display: block;
+  margin-block: 4px;
+}
+
 .lib-title-cell {
   display: flex;
   align-items: center;
@@ -707,7 +759,8 @@ async function remove(id: number) {
 }
 
 @media (max-width: 600px) {
-  .library-manage-panel > .panel-head {
+  .library-manage-panel > .panel-head,
+  .library-add-panel > .panel-head {
     flex-direction: column;
     align-items: flex-start;
   }

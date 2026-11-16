@@ -130,7 +130,11 @@ func (a *App) prepareR18LocalSources(c *gin.Context, videos []r18.Video) error {
 				continue
 			}
 			seen[file] = true
-			raw, valid := readR18LocalSTRM(library.Path, file)
+			root := library.RootForPath(file)
+			if root == "" {
+				continue
+			}
+			raw, valid := readR18LocalSTRM(root, file)
 			if !valid {
 				continue
 			}

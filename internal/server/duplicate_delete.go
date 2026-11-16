@@ -32,13 +32,14 @@ type deletionFile struct {
 }
 
 type movieDeletion struct {
-	MovieID     int64          `json:"movie_id"`
-	Key         string         `json:"key"`
-	LibraryID   int64          `json:"library_id"`
-	LibraryPath string         `json:"library_path"`
-	AListURL    string         `json:"alist_url"`
-	Sources     []string       `json:"sources"`
-	Files       []deletionFile `json:"files"`
+	MovieID      int64          `json:"movie_id"`
+	Key          string         `json:"key"`
+	LibraryID    int64          `json:"library_id"`
+	LibraryPath  string         `json:"library_path"`
+	LibraryPaths []string       `json:"library_paths,omitempty"`
+	AListURL     string         `json:"alist_url"`
+	Sources      []string       `json:"sources"`
+	Files        []deletionFile `json:"files"`
 }
 
 func readDeletionSTRM(file string) ([]byte, error) {
@@ -66,6 +67,9 @@ func deletionDigest(data []byte) string {
 }
 
 func deletionLocalPath(root, source string, allowMissing bool) (string, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", errors.New("只允许删除当前媒体库内的 STRM 文件")
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
@@ -126,15 +130,21 @@ func (a *App) deletionPlan(ctx context.Context, id, libraryID int64, key string)
 		return plan, nil, errors.New("读取删除进度失败")
 	}
 	if state != "" {
-		if json.Unmarshal([]byte(state), &plan) != nil || plan.MovieID != id || plan.Key != key || plan.LibraryID != movie.LibraryID || plan.LibraryPath != lib.Path || plan.AListURL != cfg.AListURL || !reflect.DeepEqual(plan.Sources, sources) || len(plan.Files) != len(sources) {
+		if json.Unmarshal([]byte(state), &plan) != nil || plan.MovieID != id || plan.Key != key || plan.LibraryID != movie.LibraryID || plan.LibraryPath != lib.RootForPath(movie.SourcePath) || plan.AListURL != cfg.AListURL || !reflect.DeepEqual(plan.Sources, sources) || len(plan.Files) != len(sources) {
 			return plan, nil, errors.New("未完成的删除记录与当前影片或 AList 配置不同，请恢复原配置后重试")
+		}
+		if len(plan.LibraryPaths) == 0 {
+			plan.LibraryPaths = []string{plan.LibraryPath}
+		}
+		if !reflect.DeepEqual(plan.LibraryPaths, lib.DirectoryPaths()) {
+			return plan, nil, errors.New("未完成的删除记录与当前媒体库目录不同，请恢复原配置后重试")
 		}
 	} else {
 		members, err := a.db.DuplicateMovieMembers(ctx, libraryID, key, 1, 0)
 		if err != nil || members.Total < 2 {
 			return plan, nil, errors.New("该番号当前不足两份，请重新查重")
 		}
-		plan = movieDeletion{MovieID: id, Key: key, LibraryID: movie.LibraryID, LibraryPath: lib.Path, AListURL: cfg.AListURL, Sources: sources, Files: []deletionFile{}}
+		plan = movieDeletion{MovieID: id, Key: key, LibraryID: movie.LibraryID, LibraryPath: lib.RootForPath(movie.SourcePath), LibraryPaths: lib.DirectoryPaths(), AListURL: cfg.AListURL, Sources: sources, Files: []deletionFile{}}
 	}
 	for i, source := range sources {
 		if err := ctx.Err(); err != nil {
@@ -144,7 +154,7 @@ func (a *App) deletionPlan(ctx context.Context, id, libraryID int64, key string)
 		if state != "" {
 			file = plan.Files[i]
 		}
-		local, err := deletionLocalPath(lib.Path, source, file.Removed)
+		local, err := deletionLocalPath(lib.RootForPath(source), source, file.Removed)
 		if err != nil {
 			return plan, nil, err
 		}
@@ -311,7 +321,8 @@ func (a *App) adminDuplicateDelete(c *gin.Context) {
 		}
 	}
 	for _, file := range plan.Files {
-		local, err := deletionLocalPath(plan.LibraryPath, file.LocalPath, true)
+		library := store.Library{Path: plan.LibraryPath, Paths: plan.LibraryPaths}
+		local, err := deletionLocalPath(library.RootForPath(file.LocalPath), file.LocalPath, true)
 		if err != nil {
 			fail(err)
 			return

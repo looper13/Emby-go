@@ -27,13 +27,16 @@ var hlsURIAttribute = regexp.MustCompile(`URI="([^"]*)"`)
 type hlsProxySession struct {
 	item      string
 	userID    int64
+	libraryID int64
+	movieID   int64
+	sourceURL string
 	expires   time.Time
 	nextID    uint64
 	byteCount int
 	resources map[string]string
 }
 
-func (a *App) newHLSProxySession(item string) (string, error) {
+func (a *App) newHLSProxySession(item string, playbackSettings ...proxyPlaybackSettings) (string, error) {
 	id := randomSessionID()
 	if id == "" {
 		return "", errors.New("生成 HLS 代理会话 ID 失败")
@@ -59,9 +62,16 @@ func (a *App) newHLSProxySession(item string) (string, error) {
 		}
 		delete(a.hlsProxySessions, oldestID)
 	}
+	var settings proxyPlaybackSettings
+	if len(playbackSettings) != 0 {
+		settings = playbackSettings[0]
+	}
 	a.hlsProxySessions[id] = &hlsProxySession{
 		item:      item,
 		userID:    a.db.UserID(),
+		libraryID: settings.libraryID,
+		movieID:   settings.movieID,
+		sourceURL: settings.sourceURL,
 		expires:   now.Add(hlsProxySessionTTL),
 		resources: make(map[string]string),
 	}
@@ -274,5 +284,38 @@ func (a *App) hlsProxyResource(c *gin.Context) {
 		c.Status(404)
 		return
 	}
-	owner.proxyRemoteWithHLSSession(c, target, sessionID)
+	owner.hlsProxyMu.Lock()
+	session := owner.hlsProxySessions[sessionID]
+	var settings proxyPlaybackSettings
+	if session != nil {
+		settings.libraryID, settings.sourceURL = session.libraryID, session.sourceURL
+		settings.movieID = session.movieID
+	}
+	owner.hlsProxyMu.Unlock()
+	if session == nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	movie, _, _, valid := owner.resolvePlaybackTarget(item)
+	if !valid || !movie.IsVisible() {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if settings.movieID != 0 && settings.movieID != movie.ID {
+		selected, err := owner.db.Movie(settings.movieID)
+		if err != nil || !selected.IsVisible() || !owner.db.CanAccessLibrary(selected.LibraryID) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		movie = selected
+	}
+	if settings.libraryID != 0 {
+		library, err := owner.db.Library(settings.libraryID)
+		if err != nil || movie.LibraryID != settings.libraryID || !library.Enabled || !library.IsDirectory() || !library.ProxyEnabled {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		settings.headers = library.ProxyHeaders
+	}
+	owner.proxyRemoteWithHLSSession(c, target, sessionID, settings)
 }

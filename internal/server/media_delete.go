@@ -130,7 +130,7 @@ func (a *App) collectMovieLocalFiles(movie store.Movie, lib store.Library) ([]st
 		movieDir = filepath.Dir(movie.SourcePath)
 	}
 	movieDir = filepath.Clean(movieDir)
-	libRoot := filepath.Clean(lib.Path)
+	libRoot := lib.RootForPath(movieDir)
 
 	filesMap := make(map[string]struct{})
 	addFile := func(path string) {
@@ -139,7 +139,7 @@ func (a *App) collectMovieLocalFiles(movie store.Movie, lib store.Library) ([]st
 			return
 		}
 		clean := filepath.Clean(p)
-		if isPathInsideLibrary(libRoot, clean) {
+		if root := lib.RootForPath(clean); root != "" && isPathInsideLibrary(root, clean) {
 			filesMap[clean] = struct{}{}
 		}
 	}
@@ -218,7 +218,7 @@ func (a *App) collectMovieLocalFiles(movie store.Movie, lib store.Library) ([]st
 			}
 		}
 
-		isDedicatedDir = !hasOtherMovies && isPathInsideLibrary(libRoot, movieDir)
+		isDedicatedDir = !hasOtherMovies && libRoot != "" && isPathInsideLibrary(libRoot, movieDir)
 		if isDedicatedDir {
 			for _, entry := range entries {
 				full := filepath.Join(movieDir, entry.Name())
@@ -268,6 +268,20 @@ func (a *App) collectMovieLocalFiles(movie store.Movie, lib store.Library) ([]st
 
 func (a *App) deleteMovieWithFiles(ctx context.Context, movie store.Movie, lib store.Library) (movieDeleteOutcome, error) {
 	sources := append([]string{movie.SourcePath}, movie.AdditionalParts...)
+	// 删除与远端 STRM 解析前复查实际根目录，拒绝指向目录库外的源文件。
+	for _, source := range sources {
+		root := lib.RootForPath(source)
+		if root == "" {
+			return movieDeleteOutcome{}, fmt.Errorf("影片源文件不在当前媒体库内: %s", source)
+		}
+		if _, err := os.Lstat(source); err == nil {
+			if !isPathInsideLibrary(root, source) {
+				return movieDeleteOutcome{}, fmt.Errorf("影片源文件不在当前媒体库内: %s", source)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return movieDeleteOutcome{}, err
+		}
+	}
 	cfg := a.configSnapshot()
 	var alistClient *alist.Client
 	if cfg.AListURL != "" && cfg.AListToken != "" {
@@ -385,4 +399,3 @@ func (a *App) embyDeleteItem(c *gin.Context) {
 	}
 	a.adminDelete(c)
 }
-

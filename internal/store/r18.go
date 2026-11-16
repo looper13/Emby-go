@@ -54,8 +54,21 @@ func (s *Store) migrateR18Libraries() error {
 		if e != nil {
 			return e
 		}
-		_, e = tx.Exec(`CREATE TABLE libraries_r18_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL CHECK(length(trim(path))>0), type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type IN ('nfo_directory','avdb_javdb')), revision INTEGER NOT NULL DEFAULT 1, proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1)), resolve_redirects INTEGER NOT NULL DEFAULT 0 CHECK(resolve_redirects IN (0,1)));
-INSERT INTO libraries_r18_new(id,name,path,type,enabled,source_type,revision,proxy_enabled,resolve_redirects) SELECT id,name,path,type,enabled,CASE WHEN source_type='postgres_r18' THEN 'avdb_javdb' ELSE source_type END,revision+CASE WHEN source_type='postgres_r18' THEN 1 ELSE 0 END,COALESCE(proxy_enabled,0),resolve_redirects FROM libraries;
+		pathsProjection, headersProjection := "'[]'", "'{}'"
+		for _, column := range []struct {
+			name       string
+			projection *string
+		}{{"paths", &pathsProjection}, {"proxy_headers", &headersProjection}} {
+			var exists bool
+			if e = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('libraries') WHERE name=?)", column.name).Scan(&exists); e != nil {
+				return e
+			}
+			if exists {
+				*column.projection = column.name
+			}
+		}
+		_, e = tx.Exec(`CREATE TABLE libraries_r18_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT UNIQUE NOT NULL CHECK(length(trim(path))>0), type TEXT NOT NULL DEFAULT 'movies', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), source_type TEXT NOT NULL DEFAULT 'nfo_directory' CHECK(source_type IN ('nfo_directory','avdb_javdb')), revision INTEGER NOT NULL DEFAULT 1, proxy_enabled INTEGER NOT NULL DEFAULT 0 CHECK(proxy_enabled IN (0,1)), resolve_redirects INTEGER NOT NULL DEFAULT 0 CHECK(resolve_redirects IN (0,1)), paths TEXT NOT NULL DEFAULT '[]', proxy_headers TEXT NOT NULL DEFAULT '{}');
+INSERT INTO libraries_r18_new(id,name,path,type,enabled,source_type,revision,proxy_enabled,resolve_redirects,paths,proxy_headers) SELECT id,name,path,type,enabled,CASE WHEN source_type='postgres_r18' THEN 'avdb_javdb' ELSE source_type END,revision+CASE WHEN source_type='postgres_r18' THEN 1 ELSE 0 END,COALESCE(proxy_enabled,0),resolve_redirects,` + pathsProjection + `,` + headersProjection + ` FROM libraries;
 DROP TABLE libraries;
 ALTER TABLE libraries_r18_new RENAME TO libraries;`)
 		if e != nil {

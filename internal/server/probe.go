@@ -273,7 +273,7 @@ func (a *App) adminProbeMediaItem(c *gin.Context) {
 			failures = append(failures, item.label()+"：源不是 http(s) 地址")
 			continue
 		}
-		result, runErr := probe.Run(ctx, ffprobe, url, a.configSnapshot().ProbeTimeout())
+		result, runErr := a.runMediaProbe(ctx, ffprobe, url, item)
 		if runErr != nil {
 			failures = append(failures, item.label()+"："+runErr.Error())
 			continue
@@ -496,7 +496,7 @@ func (a *App) probeOne(ctx context.Context, ffprobe string, target probeTarget, 
 		}
 	}
 
-	result, err := probe.Run(ctx, ffprobe, url, a.configSnapshot().ProbeTimeout())
+	result, err := a.runMediaProbe(ctx, ffprobe, url, target)
 	if err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			return

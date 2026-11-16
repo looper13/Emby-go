@@ -85,7 +85,7 @@ func (a *App) adminDuplicateSTRM(c *gin.Context) {
 		if c.Request.Context().Err() != nil {
 			return
 		}
-		out.Files = append(out.Files, readDuplicateSTRM(lib.Path, source))
+		out.Files = append(out.Files, readDuplicateSTRM(lib.RootForPath(source), source))
 	}
 	c.JSON(http.StatusOK, out)
 }

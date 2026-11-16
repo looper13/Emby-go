@@ -13,6 +13,22 @@ export interface ManualPayload {
   source_path: string; source_url: string; title: string; year: number; number: string;
   original_title: string; plot: string; genres: string[]; tags: string[]; studios: string[];
 }
+export interface DirectoryLibraryPayload {
+  Name: string;
+  Paths: string[];
+  Type: LibraryContentType;
+  ProxyEnabled: boolean;
+  ResolveRedirects: boolean;
+  ProxyHeaders: Record<string, string>;
+}
+export interface LibraryUpdatePayload {
+  Name?: string;
+  Paths?: string[];
+  ProxyEnabled?: boolean;
+  ResolveRedirects?: boolean;
+  ProxyHeaders?: Record<string, string>;
+  Revision: number;
+}
 export function invalid(): never { throw new Error('服务响应格式不正确'); }
 export function record(value: unknown): Record<string, unknown> { return isRecord(value) ? value : invalid(); }
 export function count(value: unknown): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : invalid(); }
@@ -53,11 +69,11 @@ const read = (path: string, signal?: AbortSignal) => apiClient.request(`/api/adm
 const write = (path: string, method: string, json?: unknown) => apiClient.request(`/api/admin/${path}`, { auth: 'required', method, json });
 export const adminApi = {
   libraries: async (signal?: AbortSignal) => parseLibraries(await read('libraries', signal)),
-  async createLibrary(payload: { Name: string; Path: string; Type?: LibraryContentType; ProxyEnabled?: boolean; ResolveRedirects?: boolean; }): Promise<LibraryDto> {
+  async createLibrary(payload: DirectoryLibraryPayload): Promise<LibraryDto> {
     const result = await write('libraries', 'POST', payload);
     return parseLibraries({ items: [result], total: 1 }).items![0]!;
   },
-  async updateLibrary(id: number, payload: { ProxyEnabled: boolean; ResolveRedirects?: boolean; Revision: number }): Promise<LibraryDto> {
+  async updateLibrary(id: number, payload: LibraryUpdatePayload): Promise<LibraryDto> {
     const result = await write(`libraries/${id}`, 'PUT', payload);
     return parseLibraries({ items: [result], total: 1 }).items![0]!;
   },

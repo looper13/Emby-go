@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"emby-go/internal/probe"
+	"emby-go/internal/store"
 )
 
 func TestAudioPlaybackFFmpegAndSubtitleExtraction(t *testing.T) {
@@ -36,16 +38,28 @@ func TestAudioPlaybackFFmpegAndSubtitleExtraction(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generate fixture: %v %s", err, out)
 	}
-	origin := httptest.NewServer(http.FileServer(http.Dir(root)))
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Referer") != "https://player.example/" || r.Header.Get("Origin") != "https://player.example" {
+			http.Error(w, "缺少播放源请求头", http.StatusForbidden)
+			return
+		}
+		http.FileServer(http.Dir(root)).ServeHTTP(w, r)
+	}))
 	defer origin.Close()
 	url := origin.URL + "/fixture.mkv"
 	app, dir := detailTestApp(t, filepath.Join(root, "app"), `<movie><title>Film</title><runtime>1</runtime></movie>`)
 	writeFile(t, filepath.Join(dir, "ABF-018.strm"), url)
 	app.cfg.FFmpegEnabled, app.cfg.FFmpegPath, app.cfg.PlaybackConcurrency = true, program, 1
-	app.db.AddLibrary("L", dir)
+	if _, err := app.db.AddDirectoryLibrary("L", []string{dir}, store.LibraryMovies, true, true, map[string]string{"Referer": "https://player.example/", "Origin": "https://player.example"}); err != nil {
+		t.Fatal(err)
+	}
 	ts, token := detailServer(t, app)
 	scanOnce(t, ts, token)
-	result, err := probe.Run(ctx, ffprobe, url, 15*time.Second)
+	movie, err := app.db.Movie(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.runMediaProbe(ctx, ffprobe, url, probeTarget{Movie: movie, Path: movie.SourcePath, Primary: true, Index: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,4 +227,83 @@ func TestAudioPlaybackProcessPermitLifetime(t *testing.T) {
 		extra()
 		t.Fatal("acquired permit during shutdown")
 	}
+}
+
+func TestAudioHLSRechecksLibraryAndMovieAfterDirectoryRemoval(t *testing.T) {
+	app := accountApp(t)
+	removedRoot, retainedRoot := t.TempDir(), t.TempDir()
+	library, err := app.db.AddDirectoryLibrary("多目录播放库", []string{removedRoot, retainedRoot}, store.LibraryMixed, true, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addMovie := func(movie store.Movie) store.Movie {
+		t.Helper()
+		writeFile(t, movie.SourcePath, "https://source.example/media.mp4")
+		movie.ID, err = app.db.UpsertMovie(movie, 0, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return movie
+	}
+	removed := addMovie(store.Movie{LibraryID: library.ID, SourcePath: filepath.Join(removedRoot, "film.strm"), Title: "移除的影片", Status: "success"})
+	if removed.ID != library.ID {
+		t.Fatalf("夹具要求影片 ID 与媒体库 ID 相同：movie=%d library=%d", removed.ID, library.ID)
+	}
+	retained := addMovie(store.Movie{LibraryID: library.ID, SourcePath: filepath.Join(retainedRoot, "episode.strm"), Title: "保留的剧集", Status: "success", AdditionalParts: []string{filepath.Join(retainedRoot, "episode-cd2.strm")}, Television: &store.Television{SeriesPath: retainedRoot, Title: "Show", Season: 1, Episode: 1}})
+	alternative := retained
+	alternative.ID = 0
+	alternative.SourcePath = filepath.Join(retainedRoot, "episode-4k.strm")
+	alternative.AdditionalParts = nil
+	alternative = addMovie(alternative)
+	output := t.TempDir()
+	writeFile(t, filepath.Join(output, "index.m3u8"), "#EXTM3U\nseg000000.m4s\n")
+	writeFile(t, filepath.Join(output, "seg000000.m4s"), "缓存视频分片")
+	done := make(chan struct{})
+	close(done)
+	bindSession := func(name, item string, movie store.Movie) {
+		app.mediaSessions[name] = &audioSession{userID: app.db.UserID(), libraryID: movie.LibraryID, movieID: movie.ID, item: item, dir: output, cancel: func() {}, done: done}
+	}
+	app.mediaSessions = map[string]*audioSession{}
+	bindSession("removed", strconv.FormatInt(removed.ID, 10), removed)
+	bindSession("retained", strconv.FormatInt(retained.ID, 10), retained)
+	bindSession("part", virtualPartID(retained.ID, 2), retained)
+	bindSession("alternative", strconv.FormatInt(alternative.ID, 10), alternative)
+	t.Cleanup(func() {
+		app.mediaMu.Lock()
+		app.mediaSessions = nil
+		app.mediaMu.Unlock()
+	})
+	requestSession := func(name string, want int) {
+		t.Helper()
+		session := app.mediaSessions[name]
+		for _, file := range []string{"index.m3u8", "seg000000.m4s"} {
+			response := accountRequest(app, http.MethodGet, "/Videos/"+session.item+"/hls/"+name+"/"+file, "", "")
+			if response.Code != want {
+				t.Fatalf("会话 %s 的 %s：status=%d want=%d body=%s", name, file, response.Code, want, response.Body)
+			}
+		}
+	}
+	for _, name := range []string{"removed", "retained", "part", "alternative"} {
+		requestSession(name, http.StatusOK)
+	}
+	if _, err := app.db.UpdateDirectoryLibrary(library.ID, library.Name, []string{retainedRoot}, true, false, nil, library.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.db.Movie(removed.ID); !store.NotFound(err) {
+		t.Fatalf("移除目录后影片索引仍存在：%v", err)
+	}
+	if !app.canAccessItem(strconv.FormatInt(removed.ID, 10)) {
+		t.Fatal("夹具未触发影片 ID 被重新解释成仍有权限的媒体库 ID")
+	}
+	requestSession("removed", http.StatusNotFound)
+	for _, name := range []string{"retained", "part", "alternative"} {
+		requestSession(name, http.StatusOK)
+	}
+	retained.Status = "pending"
+	if _, err := app.db.UpsertMovie(retained, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	requestSession("retained", http.StatusNotFound)
+	requestSession("part", http.StatusNotFound)
+	requestSession("alternative", http.StatusOK)
 }

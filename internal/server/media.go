@@ -468,7 +468,7 @@ func (a *App) playback(c *gin.Context) {
 	// authorized HTTP source exposed by /stream, without our account token.
 	externalRaw := raw
 	if library, err := a.db.Library(movie.LibraryID); err == nil {
-		externalRaw, err = libraryPlaybackURL(c, raw, library)
+		externalRaw, err = playbackExternalURL(c, id, raw, library)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 			return
@@ -542,7 +542,7 @@ func (a *App) playback(c *gin.Context) {
 		other := a.mediaSourceWithURL(version, strconv.FormatInt(version.ID, 10), version.SourcePath, otherRaw, c)
 		other["Name"] = filepath.Base(version.SourcePath)
 		if library, err := a.db.Library(version.LibraryID); err == nil {
-			if external, err := libraryPlaybackURL(c, otherRaw, library); err == nil {
+			if external, err := playbackExternalURL(c, strconv.FormatInt(version.ID, 10), otherRaw, library); err == nil {
 				other["ExternalStreamUrl"] = external
 			}
 		}
@@ -1247,7 +1247,14 @@ func (a *App) proxyStream(c *gin.Context) {
 		c.JSON(http.StatusUnsupportedMediaType, gin.H{"error": "unsupported source"})
 		return
 	}
-	a.proxyRemote(c, raw)
+	library, err := a.db.Library(movie.LibraryID)
+	if err != nil || !library.Enabled {
+		c.JSON(http.StatusNotFound, gin.H{"error": "library not found"})
+		return
+	}
+	settings := playbackProxySettings(library, raw)
+	settings.movieID = movie.ID
+	a.proxyRemoteWithHLSSession(c, raw, "", settings)
 }
 
 // proxyRemote 将外部视频响应透传给客户端，保留 Range 播放所需的状态和响应头。
@@ -1255,11 +1262,16 @@ func (a *App) proxyRemote(c *gin.Context, raw string) {
 	a.proxyRemoteWithHLSSession(c, raw, "")
 }
 
-func (a *App) proxyRemoteWithHLSSession(c *gin.Context, raw, hlsSessionID string) {
+func (a *App) proxyRemoteWithHLSSession(c *gin.Context, raw, hlsSessionID string, playbackSettings ...proxyPlaybackSettings) {
+	var settings proxyPlaybackSettings
+	if len(playbackSettings) != 0 {
+		settings = playbackSettings[0]
+	}
+	headers := proxyHeadersForTarget(settings, raw)
 	parsed, _ := url.Parse(raw)
 	knownPlaylist := parsed != nil && strings.EqualFold(path.Ext(parsed.Path), ".m3u8")
 	forwardRange := !knownPlaylist
-	resp, err := a.doProxyRequest(c, raw, forwardRange)
+	resp, err := a.doProxyRequest(c, raw, forwardRange, headers)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -1267,7 +1279,7 @@ func (a *App) proxyRemoteWithHLSSession(c *gin.Context, raw, hlsSessionID string
 	if isHLSResponse(resp) {
 		if forwardRange && c.GetHeader("Range") != "" && resp.StatusCode == http.StatusPartialContent {
 			resp.Body.Close()
-			resp, err = a.doProxyRequest(c, raw, false)
+			resp, err = a.doProxyRequest(c, raw, false, headers)
 			if err != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 				return
@@ -1291,7 +1303,7 @@ func (a *App) proxyRemoteWithHLSSession(c *gin.Context, raw, hlsSessionID string
 			}
 			if hlsSessionID == "" {
 				var createErr error
-				hlsSessionID, createErr = a.newHLSProxySession(c.Param("id"))
+				hlsSessionID, createErr = a.newHLSProxySession(c.Param("id"), settings)
 				if createErr != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "创建 HLS 代理会话失败"})
 					return
@@ -1317,7 +1329,7 @@ func (a *App) proxyRemoteWithHLSSession(c *gin.Context, raw, hlsSessionID string
 	a.writeProxyResponse(c, raw, resp)
 }
 
-func (a *App) doProxyRequest(c *gin.Context, raw string, forwardRange bool) (*http.Response, error) {
+func (a *App) doProxyRequest(c *gin.Context, raw string, forwardRange bool, configuredHeaders ...map[string]string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, raw, nil)
 	if err != nil {
 		return nil, err
@@ -1340,7 +1352,14 @@ func (a *App) doProxyRequest(c *gin.Context, raw string, forwardRange bool) (*ht
 			req.Header.Set("Referer", "https://www.dmm.co.jp/")
 		}
 	}
-	return streamClient.Do(req)
+	var headers map[string]string
+	if len(configuredHeaders) != 0 {
+		headers = configuredHeaders[0]
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
+	}
+	return proxyClientWithHeaders(headers).Do(req)
 }
 
 func (a *App) writeProxyResponse(c *gin.Context, raw string, resp *http.Response) {

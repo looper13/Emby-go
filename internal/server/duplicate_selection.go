@@ -25,9 +25,10 @@ func (a *App) duplicateSelectionToken(scope int64, item store.DuplicateSelection
 		ID, LibraryID                              int64
 		Number, SourcePath, CreatedAt, LibraryPath string
 		Parts                                      []string
+		LibraryPaths                               []string
 	}
 	snapshot := func(m store.DuplicateSelectionMovie) identity {
-		return identity{m.ID, m.LibraryID, m.Number, m.SourcePath, m.CreatedAt, m.LibraryPath, append([]string{}, m.AdditionalParts...)}
+		return identity{m.ID, m.LibraryID, m.Number, m.SourcePath, m.CreatedAt, m.LibraryPath, append([]string{}, m.AdditionalParts...), append([]string{}, m.LibraryPaths...)}
 	}
 	data, _ := json.Marshal([]identity{snapshot(item.Movie), snapshot(item.Keep)})
 	mac := hmac.New(sha256.New, a.subtitleSigningKey[:])
@@ -91,7 +92,7 @@ func (a *App) validateDuplicateSelection(id, scope int64, key string, keepID int
 		if err != nil {
 			return store.DuplicateSelectionMovie{}, errors.New("媒体库不存在或不可访问")
 		}
-		return store.DuplicateSelectionMovie{DuplicateMovie: store.DuplicateMovie{ID: movie.ID, LibraryID: movie.LibraryID, LibraryName: lib.Name, Number: movie.Number, Title: movie.Title, SourcePath: movie.SourcePath, Status: movie.Status, AdditionalParts: movie.AdditionalParts}, CreatedAt: movie.CreatedAt, PathLength: utf8.RuneCountInString(movie.SourcePath), LibraryPath: lib.Path}, nil
+		return store.DuplicateSelectionMovie{DuplicateMovie: store.DuplicateMovie{ID: movie.ID, LibraryID: movie.LibraryID, LibraryName: lib.Name, Number: movie.Number, Title: movie.Title, SourcePath: movie.SourcePath, Status: movie.Status, AdditionalParts: movie.AdditionalParts}, CreatedAt: movie.CreatedAt, PathLength: utf8.RuneCountInString(movie.SourcePath), LibraryPath: lib.RootForPath(movie.SourcePath), LibraryPaths: lib.DirectoryPaths()}, nil
 	}
 	movie, err := read(id)
 	if err != nil {

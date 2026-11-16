@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 )
 
@@ -26,17 +27,35 @@ func (l Library) CollectionType() string {
 var ErrConflict = errors.New("数据已被修改，请刷新后重试")
 var ErrLibraryCapability = errors.New("该媒体库不支持目录操作")
 
-// Empty SourceType remains compatible with callers constructing directory
-// library values themselves; path must still exist as a capability boundary.
+// 未填写来源类型的旧调用仍按目录库处理，目录列表必须非空。
 func (l Library) IsDirectory() bool {
-	return l.Path != "" && (l.SourceType == "" || l.SourceType == SourceDirectory)
+	return (l.SourceType == "" || l.SourceType == SourceDirectory) && len(l.DirectoryPaths()) > 0
 }
 
-const libraryColumns = `id,name,path,type,enabled,source_type,revision,COALESCE(proxy_enabled,0),resolve_redirects`
+const libraryColumns = `id,name,path,type,enabled,source_type,revision,COALESCE(proxy_enabled,0),resolve_redirects,paths,proxy_headers`
 
 func readLibrary(row interface{ Scan(...any) error }) (Library, error) {
 	var l Library
-	err := row.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Enabled, &l.SourceType, &l.Revision, &l.ProxyEnabled, &l.ResolveRedirects)
+	var paths, headers string
+	err := row.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Enabled, &l.SourceType, &l.Revision, &l.ProxyEnabled, &l.ResolveRedirects, &paths, &headers)
+	if err != nil {
+		return l, err
+	}
+	if err = json.Unmarshal([]byte(paths), &l.Paths); err != nil {
+		return l, err
+	}
+	if err = json.Unmarshal([]byte(headers), &l.ProxyHeaders); err != nil {
+		return l, err
+	}
+	if l.Paths == nil {
+		l.Paths = []string{}
+	}
+	if (l.SourceType == "" || l.SourceType == SourceDirectory) && len(l.Paths) == 0 && l.Path != "" {
+		l.Paths = []string{l.Path}
+	}
+	if l.ProxyHeaders == nil {
+		l.ProxyHeaders = map[string]string{}
+	}
 	return l, err
 }
 
@@ -49,17 +68,11 @@ func (s *Store) UpdateLibraryProxy(id int64, enabled bool, revision int64) (Libr
 }
 
 func (s *Store) UpdateLibraryPlaybackSettings(id int64, proxyEnabled, resolveRedirects bool, revision int64) (Library, error) {
-	result, err := s.db.Exec(`UPDATE libraries SET proxy_enabled=?,resolve_redirects=?,revision=revision+1 WHERE id=? AND enabled=1 AND source_type=? AND revision=?`, proxyEnabled, resolveRedirects, id, SourceDirectory, revision)
+	library, err := s.Library(id)
 	if err != nil {
 		return Library{}, err
 	}
-	if err := affectedOne(result, nil); err != nil {
-		return Library{}, err
-	}
-	if err := s.BumpVersion(id); err != nil {
-		return Library{}, err
-	}
-	return s.Library(id)
+	return s.UpdateDirectoryLibrary(id, library.Name, library.DirectoryPaths(), proxyEnabled, resolveRedirects, library.ProxyHeaders, revision)
 }
 
 func (s *Store) listLibraries(where string) ([]Library, error) {

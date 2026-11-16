@@ -50,7 +50,7 @@ describe('management interaction ownership', () => {
     const w = page(LibrariesPage); await flushPromises(); await w.get('#lib-name').setValue('new'); await w.get('#lib-path').setValue('/media');
     await w.get('#lib-type').setValue('tvshows');
     await w.get('#library-form').trigger('submit'); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('new');
-    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Path:'/media',Type:'tvshows',ProxyEnabled:false,ResolveRedirects:false});
+    expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('tvshows'); expect(create).toHaveBeenLastCalledWith({Name:'new',Paths:['/media'],Type:'tvshows',ProxyEnabled:false,ResolveRedirects:false,ProxyHeaders:{}});
     await w.get('#library-form').trigger('submit'); await w.get('#library-form').trigger('submit'); expect(create).toHaveBeenCalledTimes(2);
     pending.resolve(libraries.items[0]!); await flushPromises(); expect(w.get<HTMLInputElement>('#lib-name').element.value).toBe('');
     expect(w.get<HTMLSelectElement>('#lib-type').element.value).toBe('movies');
@@ -74,7 +74,7 @@ describe('management interaction ownership', () => {
     await w.get('#lib-resolve').setValue(true); await w.get('#lib-name').setValue('Resolve'); await w.get('#lib-path').setValue('/resolve');
     const create = vi.spyOn(adminApi, 'createLibrary').mockResolvedValue(lib);
     await w.get('#library-form').trigger('submit'); await flushPromises();
-    expect(create).toHaveBeenCalledWith({ Name: 'Resolve', Path: '/resolve', Type: 'movies', ProxyEnabled: false, ResolveRedirects: true });
+    expect(create).toHaveBeenCalledWith({ Name: 'Resolve', Paths: ['/resolve'], Type: 'movies', ProxyEnabled: false, ResolveRedirects: true, ProxyHeaders: {} });
   });
   it('lets a short create finish after leaving, but cancels its GET and never refreshes the dead page', async () => {
     const read = vi.spyOn(adminApi, 'libraries').mockResolvedValue(libraries); const pending = deferred<(typeof libraries.items)[number]>();

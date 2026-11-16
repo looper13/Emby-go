@@ -136,7 +136,7 @@ func TestUserHLSUsesSessionOwner(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte("#EXTM3U\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a.mediaSessions = map[string]*audioSession{"test-session": {userID: viewerID, item: strconv.FormatInt(id, 10), dir: dir}}
+	a.mediaSessions = map[string]*audioSession{"test-session": {userID: viewerID, libraryID: lib.ID, movieID: id, item: strconv.FormatInt(id, 10), dir: dir}}
 	defer delete(a.mediaSessions, "test-session")
 	if err = a.db.SaveLibraryAccessPolicy(store.LibraryAccessPolicy{}); err != nil {
 		t.Fatal(err)

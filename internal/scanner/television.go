@@ -18,16 +18,20 @@ var seasonFolderPattern = regexp.MustCompile(`(?i)^(?:season|s)[ ._-]*([0-9]{1,3
 
 func televisionRoot(lib store.Library, source string) string {
 	dir := filepath.Dir(source)
+	root := lib.RootForPath(source)
+	if root == "" {
+		return dir
+	}
 	for current := dir; ; current = filepath.Dir(current) {
 		if info, err := os.Stat(filepath.Join(current, "tvshow.nfo")); err == nil && !info.IsDir() {
 			return current
 		}
-		if filepath.Clean(current) == filepath.Clean(lib.Path) || filepath.Dir(current) == current {
+		if filepath.Clean(current) == filepath.Clean(root) || filepath.Dir(current) == current {
 			break
 		}
 	}
 	if seasonFolderPattern.MatchString(filepath.Base(dir)) || strings.EqualFold(filepath.Base(dir), "specials") {
-		if filepath.Clean(dir) != filepath.Clean(lib.Path) {
+		if filepath.Clean(dir) != filepath.Clean(root) {
 			return filepath.Dir(dir)
 		}
 	}

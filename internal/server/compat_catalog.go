@@ -69,11 +69,16 @@ func (a *App) virtualFolderItems() ([]gin.H, error) {
 			folders = append(folders, gin.H{"Name": library.Name, "Locations": []string{}, "CollectionType": library.CollectionType(), "ItemId": id, "Id": id, "LibraryOptions": gin.H{"ContentType": library.CollectionType(), "PathInfos": []gin.H{}, "EnableRealtimeMonitor": false}})
 			continue
 		}
+		paths := library.DirectoryPaths()
+		pathInfos := make([]gin.H, 0, len(paths))
+		for _, path := range paths {
+			pathInfos = append(pathInfos, gin.H{"Path": path})
+		}
 		folders = append(folders, gin.H{
-			"Name": library.Name, "Locations": []string{library.Path},
+			"Name": library.Name, "Locations": paths,
 			"CollectionType": library.CollectionType(), "ItemId": id, "Id": id,
 			"LibraryOptions": gin.H{
-				"ContentType": library.CollectionType(), "PathInfos": []gin.H{{"Path": library.Path}},
+				"ContentType": library.CollectionType(), "PathInfos": pathInfos,
 				"EnableRealtimeMonitor":        !cfg.DisableLibraryMonitor && cfg.MonitorMode() == librarywatch.ModeRealtime,
 				"EnableChapterImageExtraction": false, "ExtractChapterImagesDuringLibraryScan": false,
 			},

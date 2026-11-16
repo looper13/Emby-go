@@ -417,11 +417,15 @@ func (s *Scraper) validateActorMovie(movie store.Movie) error {
 	if err != nil {
 		return err
 	}
-	root, err := filepath.EvalSymlinks(lib.Path)
-	if err != nil {
-		return err
-	}
 	for _, p := range []string{movie.SourcePath, movie.NFOPath} {
+		libraryRoot := lib.RootForPath(p)
+		if libraryRoot == "" {
+			return errors.New("影片路径不在当前媒体库内")
+		}
+		root, err := filepath.EvalSymlinks(libraryRoot)
+		if err != nil {
+			return err
+		}
 		resolved, err := filepath.EvalSymlinks(p)
 		if err != nil {
 			return err

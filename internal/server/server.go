@@ -19,7 +19,6 @@ import (
 	"emby-go/internal/cloud115"
 	"emby-go/internal/cloudguangya"
 	"emby-go/internal/config"
-	"emby-go/internal/librarywatch"
 	"emby-go/internal/logging"
 	"emby-go/internal/metatube"
 	"emby-go/internal/offline"
@@ -105,7 +104,7 @@ type appState struct {
 	// 计划任务调度器：定义存 DB，保存后 Reload 即时生效。
 	sched    *scheduler.Scheduler
 	watchMu  sync.Mutex
-	monitors map[int64]*librarywatch.Monitor
+	monitors map[int64]*libraryMonitorGroup
 
 	// nfoGate 是「扫库 / 探测 / 刮削」三者共用的 NFO 写入通道：
 	// 三者都会「读全文 → 改局部 → 原子写」同一批 NFO，并发会互相覆盖；

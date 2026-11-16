@@ -93,11 +93,43 @@ func RebuildWithProgress(ctx context.Context, s *store.Store, lib store.Library,
 }
 
 func scanWithProgress(ctx context.Context, s *store.Store, lib store.Library, full bool, onProgress func(Progress)) (result Result, scanErr error) {
-	return scanDirectory(ctx, s, lib, lib.Path, true, full, nil, onProgress)
+	if !lib.IsDirectory() {
+		return result, store.ErrLibraryCapability
+	}
+	roots := lib.TraversalPaths()
+	completed := 0
+	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return result, errors.Join(scanErr, err)
+		}
+		report := func(progress Progress) {
+			if onProgress == nil {
+				return
+			}
+			combined := result
+			combined.add(progress.Result)
+			progress.Result = combined
+			progress.Done += completed
+			progress.Total += completed
+			onProgress(progress)
+		}
+		current, err := scanDirectory(ctx, s, lib, root, true, full, nil, report)
+		result.add(current)
+		completed += current.Added + current.Updated + current.Skipped + current.Failed
+		if err != nil {
+			// 某个媒体盘离线时保留其索引，其他根目录仍可以完成扫描。
+			scanErr = errors.Join(scanErr, fmt.Errorf("扫描目录 %s 失败: %w", root, err))
+		}
+	}
+	return result, scanErr
 }
 
 func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, directory string, recursive bool, onProgress func(Progress), forceMetadata ...bool) (Result, error) {
-	root, err := filepath.Abs(lib.Path)
+	libraryRoot := lib.RootForPath(directory)
+	if libraryRoot == "" {
+		return Result{}, fmt.Errorf("刷新目录不在媒体库内: %s", directory)
+	}
+	root, err := filepath.Abs(libraryRoot)
 	if err != nil {
 		return Result{}, err
 	}
@@ -109,7 +141,7 @@ func RefreshDirectory(ctx context.Context, s *store.Store, lib store.Library, di
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return Result{}, fmt.Errorf("刷新目录不在媒体库内: %s", directory)
 	}
-	return scanDirectory(ctx, s, lib, filepath.Join(lib.Path, relative), recursive, len(forceMetadata) > 0 && forceMetadata[0], nil, onProgress)
+	return scanDirectory(ctx, s, lib, filepath.Join(libraryRoot, relative), recursive, len(forceMetadata) > 0 && forceMetadata[0], nil, onProgress)
 }
 
 // RefreshFiles explicitly rereads metadata, including NFO events preserving mtime.
@@ -126,13 +158,17 @@ func refreshFiles(ctx context.Context, s *store.Store, lib store.Library, files 
 	if len(files) == 0 {
 		return Result{}, nil
 	}
-	root, err := filepath.Abs(lib.Path)
-	if err != nil {
-		return Result{}, err
-	}
 	normalized := make([]string, 0, len(files))
 	directory := ""
 	for _, file := range files {
+		libraryRoot := lib.RootForPath(file)
+		if libraryRoot == "" {
+			return Result{}, fmt.Errorf("刷新文件不在媒体库内: %s", file)
+		}
+		root, err := filepath.Abs(libraryRoot)
+		if err != nil {
+			return Result{}, err
+		}
 		absolute, err := filepath.Abs(file)
 		if err != nil {
 			return Result{}, err
@@ -141,7 +177,7 @@ func refreshFiles(ctx context.Context, s *store.Store, lib store.Library, files 
 		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return Result{}, fmt.Errorf("刷新文件不在媒体库内: %s", file)
 		}
-		path := filepath.Join(lib.Path, relative)
+		path := filepath.Join(libraryRoot, relative)
 		if directory != "" && directory != filepath.Dir(path) {
 			return Result{}, errors.New("局部刷新文件必须位于同一目录")
 		}
@@ -161,13 +197,17 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	rootInfo, err := os.Stat(lib.Path)
+	libraryRoot := lib.RootForPath(directory)
+	if libraryRoot == "" {
+		return result, fmt.Errorf("扫描目录不在媒体库内: %s", directory)
+	}
+	rootInfo, err := os.Stat(libraryRoot)
 	perf.walk = time.Since(walkStarted)
 	if err != nil {
 		return result, err
 	}
 	if !rootInfo.IsDir() {
-		return result, fmt.Errorf("媒体库路径不是目录: %s", lib.Path)
+		return result, fmt.Errorf("媒体库路径不是目录: %s", libraryRoot)
 	}
 	groups := make(map[string][]candidate)
 	keys := affectedGroups(files)
@@ -195,7 +235,7 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			reportWalk(path)
 		}
 		if walkErr != nil {
-			if path == directory && filepath.Clean(directory) != filepath.Clean(lib.Path) && os.IsNotExist(walkErr) {
+			if path == directory && filepath.Clean(directory) != filepath.Clean(libraryRoot) && os.IsNotExist(walkErr) {
 				return nil
 			}
 			return walkErr
@@ -236,8 +276,6 @@ func scanDirectory(ctx context.Context, s *store.Store, lib store.Library, direc
 			prefixes = append(prefixes, strings.TrimSuffix(key, ".strm"))
 		}
 		fingerprints, err = s.SourcePrefixScanSources(lib.ID, filepath.Clean(directory), prefixes)
-	} else if recursive && filepath.Clean(directory) == filepath.Clean(lib.Path) {
-		fingerprints, err = s.ScanSources(lib.ID)
 	} else {
 		fingerprints, err = s.DirectoryScanSources(lib.ID, filepath.Clean(directory), recursive)
 	}

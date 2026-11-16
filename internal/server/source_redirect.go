@@ -18,7 +18,7 @@ var sourceRedirectClient = &http.Client{
 }
 
 func libraryPlaybackURL(c *gin.Context, raw string, library store.Library) (string, error) {
-	if !library.ResolveRedirects {
+	if library.ProxyEnabled || !library.ResolveRedirects {
 		return raw, nil
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)

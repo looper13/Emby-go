@@ -14,13 +14,23 @@ import (
 	"emby-go/internal/store"
 )
 
+type libraryMonitorGroup struct {
+	roots map[string]*librarywatch.Monitor
+}
+
+func (group *libraryMonitorGroup) Close() {
+	for _, monitor := range group.roots {
+		monitor.Close()
+	}
+}
+
 func (a *App) startLibraryMonitoring() []string {
 	if a.configSnapshot().DisableLibraryMonitor || a.rootCtx.Err() != nil {
 		return nil
 	}
 	a.watchMu.Lock()
 	if a.monitors == nil {
-		a.monitors = make(map[int64]*librarywatch.Monitor)
+		a.monitors = make(map[int64]*libraryMonitorGroup)
 	}
 	a.watchMu.Unlock()
 	libraries, err := a.db.DirectoryLibraries()
@@ -44,28 +54,42 @@ func (a *App) watchLibrary(library store.Library) error {
 	a.watchMu.Lock()
 	defer a.watchMu.Unlock()
 	cfg := a.configSnapshot()
-	if cfg.DisableLibraryMonitor || a.monitors == nil || a.monitors[library.ID] != nil || a.rootCtx.Err() != nil {
+	if cfg.DisableLibraryMonitor || a.monitors == nil || a.rootCtx.Err() != nil {
 		return nil
 	}
 	mode := cfg.MonitorMode()
-	monitor, err := librarywatch.New(a.rootCtx, library.Path, librarywatch.Options{Mode: mode}, func(ctx context.Context, changes []librarywatch.Change) error {
-		return a.refreshLibraryChanges(ctx, library, changes)
-	}, func(err error) {
-		if !errors.Is(err, errScanBusy) && !errors.Is(err, context.Canceled) {
-			if librarywatch.ShouldRetry(err) {
-				slog.Warn("媒体库监听将重试", "library_id", library.ID, "path", library.Path, "error", err)
-			} else {
-				slog.Warn("媒体库局部刷新部分条目失败，等待文件变化或下次扫描", "library_id", library.ID, "path", library.Path, "error", err)
-			}
-		}
-	})
-	if err != nil {
-		slog.Warn("启动媒体库监听失败，可使用定时扫描", "library_id", library.ID, "error", err)
-		return err
+	group := a.monitors[library.ID]
+	if group == nil {
+		group = &libraryMonitorGroup{roots: map[string]*librarywatch.Monitor{}}
 	}
-	a.monitors[library.ID] = monitor
-	slog.Info("已启动媒体库监控", "library_id", library.ID, "path", library.Path, "mode", mode)
-	return nil
+	var watchErr error
+	for _, root := range library.TraversalPaths() {
+		if group.roots[root] != nil {
+			continue
+		}
+		monitor, err := librarywatch.New(a.rootCtx, root, librarywatch.Options{Mode: mode}, func(ctx context.Context, changes []librarywatch.Change) error {
+			return a.refreshLibraryChanges(ctx, library, changes)
+		}, func(err error) {
+			if !errors.Is(err, errScanBusy) && !errors.Is(err, context.Canceled) {
+				if librarywatch.ShouldRetry(err) {
+					slog.Warn("媒体库监听将重试", "library_id", library.ID, "path", root, "error", err)
+				} else {
+					slog.Warn("媒体库局部刷新部分条目失败，等待文件变化或下次扫描", "library_id", library.ID, "path", root, "error", err)
+				}
+			}
+		})
+		if err != nil {
+			slog.Warn("启动媒体库监听失败，可使用定时扫描", "library_id", library.ID, "path", root, "error", err)
+			watchErr = errors.Join(watchErr, fmt.Errorf("目录 %s: %w", root, err))
+			continue
+		}
+		group.roots[root] = monitor
+		slog.Info("已启动媒体库监控", "library_id", library.ID, "path", root, "mode", mode)
+	}
+	if len(group.roots) > 0 {
+		a.monitors[library.ID] = group
+	}
+	return watchErr
 }
 
 func (a *App) stopLibraryMonitor(id int64) bool {

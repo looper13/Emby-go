@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Vue consumes the same input corpus; these outputs come from the actual Go implementation.
-func TestVueMigrationNumberContract(t *testing.T) {
+// Vue 与 Go 使用同一套输入夹具，断言结果来自实际 Go 实现。
+func TestFrontendNumberContract(t *testing.T) {
 	data, err := os.ReadFile("../../frontend/tests/fixtures/ct/ct-01-number.json")
 	if err != nil {
 		t.Fatal(err)

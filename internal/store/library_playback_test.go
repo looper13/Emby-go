@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ UPDATE libraries SET source_ip='192.168.1.4',target_ip='10.126.126.2'`); err != 
 	}
 	defer s.Close()
 	lib, err = s.Library(lib.ID)
-	if err != nil || lib != expectedLibrary {
+	if err != nil || !reflect.DeepEqual(lib, expectedLibrary) {
 		t.Fatalf("reopen lost setting: %+v %v", lib, err)
 	}
 	var retiredColumns int
