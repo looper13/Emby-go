@@ -31,13 +31,22 @@ type javdbLocalMovie struct {
 	Title  string `json:"title"`
 }
 
-type javdbLocalListPage struct {
+type javdbListMovie struct {
+	ID          string            `json:"id"`
+	Number      string            `json:"number"`
+	Title       string            `json:"title"`
+	CoverURL    string            `json:"cover_url"`
+	HasLocal    bool              `json:"has_local"`
+	LocalMovies []javdbLocalMovie `json:"local_movies"`
+}
+
+type javdbListMoviePage struct {
 	javdbCommunityIdentity
-	Items          []javdbLocalMovie `json:"items"`
-	ListID         string            `json:"list_id"`
-	LocalLibraryID int64             `json:"local_library_id"`
-	NextPage       int               `json:"next_page"`
-	HasMore        bool              `json:"has_more"`
+	Items          []javdbListMovie `json:"items"`
+	ListID         string           `json:"list_id"`
+	LocalLibraryID int64            `json:"local_library_id"`
+	NextPage       int              `json:"next_page"`
+	HasMore        bool             `json:"has_more"`
 }
 
 type javdbCommunityIdentity struct {
@@ -249,53 +258,41 @@ func (a *App) javdbItemListMovies(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "该影片的关联清单不存在"})
 		return
 	}
-	result := javdbLocalListPage{Items: []javdbLocalMovie{}, ListID: listID, LocalLibraryID: movie.LibraryID,
+	result := javdbListMoviePage{Items: []javdbListMovie{}, ListID: listID, LocalLibraryID: movie.LibraryID,
 		javdbCommunityIdentity: javdbCommunityIdentity{Number: strings.TrimSpace(movie.Number), VideoID: video.ID, LibraryID: library.ID}}
-	videos := []r18.Video{}
-	// Skip missing local numbers in bounded batches. Pagination follows the
-	// upstream pages, including pages that contain no locally owned films.
-	for index := 0; index < 4 && page <= 9999; index++ {
-		batch, err := source.ListMovies(ctx, listID, page, 50)
-		if err != nil {
-			a.javdbCommunityFailure(c, "清单影片读取", err)
-			return
-		}
-		if batch.Page != page || batch.PageSize != 50 || len(batch.Items) > 50 {
-			a.javdbCommunityFailure(c, "清单影片读取", errors.New("JavDB 清单影片分页格式不正确"))
-			return
-		}
-		videos = append(videos, batch.Items...)
-		result.NextPage = page + 1
-		result.HasMore = batch.HasMore && result.NextPage <= 9999
-		if !result.HasMore {
-			break
-		}
-		page++
-	}
-	numbers := make([]string, 0, len(videos))
-	for _, video := range videos {
-		numbers = append(numbers, video.Number)
-	}
-	// Match only the current local movie's library, in one bounded SQL query.
-	local, err := a.db.LibrarySTRMMovies(ctx, movie.LibraryID, numbers)
+	// Every upstream film remains visible. Local playback is an annotation,
+	// independently verified against the current library's actual STRM files.
+	batch, err := source.ListMovies(ctx, listID, page, 50)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取本库影片索引失败，请重试"})
+		a.javdbCommunityFailure(c, "清单影片读取", err)
 		return
 	}
-	byNumber := map[string][]store.Movie{}
-	for _, match := range local {
-		key := store.NormalizeDuplicateNumber(match.Number)
-		byNumber[key] = append(byNumber[key], match)
+	if batch.Page != page || batch.PageSize != 50 || len(batch.Items) > 50 {
+		a.javdbCommunityFailure(c, "清单影片读取", errors.New("JavDB 清单影片分页格式不正确"))
+		return
 	}
-	seen := map[int64]bool{}
-	for _, video := range videos {
-		for _, match := range byNumber[store.NormalizeDuplicateNumber(video.Number)] {
-			if seen[match.ID] {
+	result.NextPage = page + 1
+	result.HasMore = batch.HasMore && result.NextPage <= 9999
+	if err := a.prepareR18LocalSourcesForLibrary(ctx, c, movie.LibraryID, batch.Items); err != nil {
+		a.javdbCommunityFailure(c, "本地 STRM 查询", err)
+		return
+	}
+	snapshot, _ := c.Get("r18LocalSources")
+	local := snapshot.(r18LocalSnapshot).Sources
+	for _, video := range batch.Items {
+		matches := local[store.NormalizeDuplicateNumber(video.Number)]
+		video = a.r18Presentation(library, video)
+		item := javdbListMovie{ID: video.ID, Number: video.Number, Title: video.Title, CoverURL: video.CoverURL,
+			HasLocal: len(matches) > 0, LocalMovies: []javdbLocalMovie{}}
+		seen := map[int64]bool{}
+		for _, match := range matches {
+			if seen[match.Movie.ID] {
 				continue
 			}
-			seen[match.ID] = true
-			result.Items = append(result.Items, javdbLocalMovie{ID: match.ID, Number: match.Number, Title: match.Title})
+			seen[match.Movie.ID] = true
+			item.LocalMovies = append(item.LocalMovies, javdbLocalMovie{ID: match.Movie.ID, Number: match.Movie.Number, Title: match.Movie.Title})
 		}
+		result.Items = append(result.Items, item)
 	}
 	c.JSON(http.StatusOK, result)
 }

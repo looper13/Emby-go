@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue';
-import { ChevronDown, Film, ExternalLink, List, MessageSquare, RefreshCw } from '@lucide/vue';
+import { ChevronDown, Film, ExternalLink, List, MessageSquare, Play, RefreshCw } from '@lucide/vue';
 import type { LibraryDto } from '../../api/contracts';
 import { javdbCommunityApi, type JavdbListMovies, type JavdbMatch, type JavdbPage, type JavdbRelatedList, type JavdbReview } from '../../api/javdb-community';
 import { r18Api } from '../../api/r18';
 import { usePageRequest } from '../../composables/usePageRequest';
 import { useAuthStore } from '../../stores/auth';
+import R18Cover from './R18Cover.vue';
 
 const props = defineProps<{ itemId: number; number: string; localLibraryId: number }>();
 const emit = defineEmits<{ open: [id: number] }>();
@@ -26,6 +27,7 @@ const reviewAttempt = ref(1), listAttempt = ref(1);
 const selectedList = shallowRef<JavdbRelatedList>();
 const selectedRelatedPage = ref(1);
 const listMovies = shallowRef<JavdbListMovies>();
+const localMovieCount = computed(() => listMovies.value?.items.filter(movie => movie.has_local).length ?? 0);
 const movieBusy = ref(false), movieError = ref(''), movieAttempt = ref(1);
 const expanded = ref(new Set<string>());
 const matched = computed(() => phase.value === 'ready' && match.value?.status === 'matched');
@@ -193,14 +195,22 @@ watch(() => [props.itemId, props.number, props.localLibraryId] as const, () => {
         <div v-if="listError" class="javdb-error"><p role="alert">{{ listError }}</p><button class="btn" :disabled="listBusy" @click="loadLists(listAttempt, true)">重试清单</button></div>
         <p v-if="listBusy" class="hint" role="status">正在读取第 {{ listAttempt }} 页清单…</p>
         <p v-if="lists && !lists.items.length && !listBusy && !listError" class="hint javdb-state">当前影片暂无相关清单。</p>
-        <div v-if="lists?.items.length" class="javdb-lists"><button v-for="list in lists.items" :key="list.id" type="button" class="javdb-list" :class="{ 'is-selected': selectedList?.id === list.id }" :aria-expanded="selectedList?.id === list.id" aria-controls="javdb-local-list" @click="selectList(list)"><List :size="20" aria-hidden="true" /><span><strong>{{ list.name }}</strong><span class="hint"><span v-if="list.movie_count !== undefined">清单 {{ list.movie_count }} 部 · </span>查看本库影片</span></span><ChevronDown :size="16" aria-hidden="true" /></button></div>
-        <section v-if="selectedList" id="javdb-local-list" class="javdb-local-list" :aria-busy="movieBusy" aria-labelledby="javdb-local-list-title">
-          <div class="javdb-local-heading"><h3 id="javdb-local-list-title">{{ selectedList.name }}</h3><span v-if="listMovies" class="hint">本库匹配 {{ listMovies.items.length }} 个条目</span></div>
-          <div v-if="movieError" class="javdb-error"><p role="alert">{{ movieError }}</p><button class="btn" :disabled="movieBusy" @click="loadListMovies(movieAttempt, true)">重试本库匹配</button></div>
-          <p v-if="movieBusy" class="hint" role="status">正在匹配本库影片…</p>
-          <p v-if="listMovies && !listMovies.items.length && !listMovies.has_more && !movieBusy && !movieError" class="hint">本库没有这份清单的对应影片。</p>
-          <div v-if="listMovies?.items.length" class="javdb-local-movies"><button v-for="movie in listMovies.items" :key="movie.id" class="javdb-local-movie" type="button" :data-local-movie="movie.id" @click="emit('open', movie.id)"><Film :size="18" aria-hidden="true" /><span><strong class="mono">{{ movie.number }}</strong><span>{{ movie.title || movie.number }}</span></span></button></div>
-          <button v-if="listMovies?.has_more" class="btn javdb-match-more" :disabled="movieBusy" @click="loadListMovies(listMovies.next_page)">继续匹配本库影片</button>
+        <div v-if="lists?.items.length" class="javdb-lists"><button v-for="list in lists.items" :key="list.id" type="button" class="javdb-list" :class="{ 'is-selected': selectedList?.id === list.id }" :aria-expanded="selectedList?.id === list.id" aria-controls="javdb-list-movies" @click="selectList(list)"><List :size="20" aria-hidden="true" /><span><strong>{{ list.name }}</strong><span class="hint"><span v-if="list.movie_count !== undefined">清单 {{ list.movie_count }} 部 · </span>查看清单影片</span></span><ChevronDown :size="16" aria-hidden="true" /></button></div>
+        <section v-if="selectedList" id="javdb-list-movies" class="javdb-movie-list" :aria-busy="movieBusy" aria-labelledby="javdb-list-movies-title">
+          <div class="javdb-movie-heading"><h3 id="javdb-list-movies-title">{{ selectedList.name }}</h3><span v-if="listMovies" class="hint">已加载 {{ listMovies.items.length }} 部 · 本地可播放 {{ localMovieCount }} 部</span></div>
+          <div v-if="movieError" class="javdb-error"><p role="alert">{{ movieError }}</p><button class="btn" :disabled="movieBusy" @click="loadListMovies(movieAttempt, true)">重试影片列表</button></div>
+          <p v-if="movieBusy" class="hint" role="status">正在读取清单影片…</p>
+          <p v-if="listMovies && !listMovies.items.length && !listMovies.has_more && !movieBusy && !movieError" class="hint">这份清单暂无影片。</p>
+          <div v-if="listMovies?.items.length" class="javdb-movies">
+            <article v-for="movie in listMovies.items" :key="movie.id" class="javdb-movie-card" :data-javdb-movie="movie.id">
+              <RouterLink class="javdb-movie-link" :to="{ name: 'r18-detail', params: { libraryId: String(listMovies.library_id), id: movie.id } }" :aria-label="`查看 ${movie.title || movie.number} 的 JavDB 详情`">
+                <R18Cover :src="movie.cover_url" :alt="`${movie.title || movie.number} 封面`" loading="lazy"><span class="javdb-local-badge" :class="{ 'is-local': movie.has_local }" :title="movie.has_local ? '本库已有可播放的 STRM 文件' : '本库没有可播放的 STRM 文件'"><Play v-if="movie.has_local" :size="12" aria-hidden="true" />{{ movie.has_local ? '本地可播放' : '无本地 STRM' }}</span></R18Cover>
+                <div class="javdb-movie-copy"><span class="mono">{{ movie.number }}</span><h4 :title="movie.title || movie.number">{{ movie.title || movie.number }}</h4></div>
+              </RouterLink>
+              <div v-if="movie.has_local" class="javdb-local-actions"><button v-for="(local, index) in movie.local_movies" :key="local.id" type="button" class="btn" :data-local-movie="local.id" :aria-label="`查看本库影片 ${local.title || local.number} 的详情`" :title="local.title || local.number" @click="emit('open', local.id)"><Film :size="14" aria-hidden="true" />本库详情<span v-if="movie.local_movies.length > 1"> {{ index + 1 }}</span></button></div>
+            </article>
+          </div>
+          <button v-if="listMovies?.has_more" class="btn javdb-load-more" :disabled="movieBusy" @click="loadListMovies(listMovies.next_page)">加载更多影片</button>
         </section>
         <nav v-if="lists && (lists.items.length || lists.page > 1)" class="javdb-pagination" aria-label="JavDB 清单分页"><button class="btn" :disabled="listBusy || lists.page <= 1" @click="loadLists(lists.page - 1)">上一页清单</button><span class="hint">第 {{ lists.page }} 页<span v-if="lists.total !== undefined"> · 共 {{ lists.total }} 个</span></span><button class="btn" :disabled="listBusy || !lists.has_more" @click="loadLists(lists.page + 1)">下一页清单</button></nav>
       </div>
@@ -237,15 +247,23 @@ watch(() => [props.itemId, props.number, props.localLibraryId] as const, () => {
 .javdb-list > svg { flex-shrink: 0; }
 .javdb-list:hover { border-color: var(--accent); }
 .javdb-list.is-selected { border-color: var(--accent); background: var(--accent-soft); }
-.javdb-local-list { min-width: 0; margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); }
-.javdb-local-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
-.javdb-local-heading h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
-.javdb-local-movies { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 8px; }
-.javdb-local-movie { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 64px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
-.javdb-local-movie > svg { flex-shrink: 0; color: var(--muted); }
-.javdb-local-movie > span { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
-.javdb-local-movie:hover { border-color: var(--accent); }
-.javdb-match-more { margin-top: 12px; }
+.javdb-movie-list { min-width: 0; margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); }
+.javdb-movie-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+.javdb-movie-heading h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.javdb-movies { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--wall-card-min-width, 176px), 100%), 1fr)); gap: 16px; }
+.javdb-movie-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.javdb-movie-link { display: block; flex: 1; min-width: 0; color: var(--text); text-decoration: none; border-radius: 10px; }
+.javdb-movie-link:hover { color: var(--accent); }
+.javdb-movie-link :deep(.r18-poster) { border: 0; }
+.javdb-local-badge { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); padding: 5px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.javdb-local-badge svg { flex-shrink: 0; }
+.javdb-local-badge.is-local { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.javdb-movie-copy { display: grid; gap: 6px; min-width: 0; padding: 12px; }
+.javdb-movie-copy .mono { color: var(--accent); font-size: 12px; overflow-wrap: anywhere; }
+.javdb-movie-copy h4 { margin: 0; font-size: 14px; line-height: 1.6; font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.javdb-local-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px; }
+.javdb-local-actions .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 8px; font-size: 12px; flex: 1; }
+.javdb-load-more { margin-top: 16px; }
 .javdb-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
 .javdb-community .btn { min-height: 44px; }
 .javdb-community :is(button, a, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -256,6 +274,7 @@ watch(() => [props.itemId, props.number, props.localLibraryId] as const, () => {
   .javdb-tabs .btn { flex: 1; justify-content: center; }
   .javdb-review { padding: 12px; }
   .javdb-review-body { font-size: 16px; }
+  .javdb-movies { grid-template-columns: repeat(auto-fill, minmax(min(132px, 100%), 1fr)); gap: 12px; }
   .javdb-pagination > .hint { width: 100%; order: -1; text-align: center; }
 }
 </style>

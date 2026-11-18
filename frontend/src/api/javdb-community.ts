@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import { isRecord } from './contracts';
+import { safeR18ImageURL } from './r18';
 
 export interface JavdbMatch {
   status: 'matched' | 'not_found' | 'no_number';
@@ -17,8 +18,12 @@ export interface JavdbPage<T> {
   number: string; video_id: string; library_id: number;
 }
 export interface JavdbLocalMovie { id: number; number: string; title: string }
+export interface JavdbListMovie {
+  id: string; number: string; title: string; cover_url: string;
+  has_local: boolean; local_movies: JavdbLocalMovie[];
+}
 export interface JavdbListMovies {
-  items: JavdbLocalMovie[]; number: string; video_id: string; library_id: number;
+  items: JavdbListMovie[]; number: string; video_id: string; library_id: number;
   list_id: string; local_library_id: number; next_page: number; has_more: boolean;
 }
 
@@ -79,12 +84,18 @@ export function parseJavdbRelatedLists(value: unknown): JavdbPage<JavdbRelatedLi
 }
 export function parseJavdbListMovies(value: unknown): JavdbListMovies {
   const r = record(value);
-  if (!Array.isArray(r.items) || r.items.length > 2000 || typeof r.has_more !== 'boolean') throw new Error('本库清单影片格式不正确');
+  if (!Array.isArray(r.items) || r.items.length > 50 || typeof r.has_more !== 'boolean') throw new Error('清单影片格式不正确');
   const listId = identity(r.list_id), nextPage = count(r.next_page, true);
-  if (!/^[A-Za-z0-9_-]{1,120}$/u.test(listId) || nextPage > 10000 || r.has_more && nextPage > 9999) throw new Error('本库清单分页格式不正确');
+  if (!/^[A-Za-z0-9_-]{1,120}$/u.test(listId) || nextPage > 10000 || r.has_more && nextPage > 9999) throw new Error('清单影片分页格式不正确');
   return { items: r.items.map(item => {
     const movie = record(item);
-    return { id: count(movie.id, true), number: text(movie.number), title: text(movie.title) };
+    if (!Array.isArray(movie.local_movies) || movie.local_movies.length > 2000 || typeof movie.has_local !== 'boolean'
+      || movie.has_local !== (movie.local_movies.length > 0)) throw new Error('清单影片本地播放状态不正确');
+    return { id: identity(movie.id), number: text(movie.number), title: text(movie.title), cover_url: safeR18ImageURL(text(movie.cover_url)),
+      has_local: movie.has_local, local_movies: movie.local_movies.map(item => {
+        const local = record(item);
+        return { id: count(local.id, true), number: text(local.number), title: text(local.title) };
+      }) };
   }), number: text(r.number), video_id: identity(r.video_id), library_id: count(r.library_id, true),
   list_id: listId, local_library_id: count(r.local_library_id, true), next_page: nextPage, has_more: r.has_more };
 }
@@ -121,7 +132,7 @@ export const javdbCommunityApi = {
     const query = new URLSearchParams({ library_id: String(library), page: String(page), related_page: String(relatedPage) });
     if (refresh) query.set('refresh', '1');
     const result = parseJavdbListMovies(await apiClient.request(`/api/r18/items/${item}/related-lists/${listId}/movies?${query}`, { auth: 'required', signal, timeoutMs: 22000 }));
-    if (result.list_id !== listId || result.library_id !== library || result.next_page <= page) throw new Error('清单影片来源或分页不一致');
+    if (result.list_id !== listId || result.library_id !== library || result.next_page !== page + 1) throw new Error('清单影片来源或分页不一致');
     return result;
   },
 };

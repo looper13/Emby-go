@@ -2,21 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia, type Pinia } from 'pinia';
 import { apiClient } from '../src/api/client';
-import { javdbCommunityApi, parseJavdbListMovies, parseJavdbMatch, parseJavdbRelatedLists, parseJavdbReviews, type JavdbListMovies, type JavdbMatch, type JavdbPage, type JavdbReview } from '../src/api/javdb-community';
+import { javdbCommunityApi, parseJavdbListMovies, parseJavdbMatch, parseJavdbRelatedLists, parseJavdbReviews, type JavdbListMovie, type JavdbListMovies, type JavdbMatch, type JavdbPage, type JavdbReview } from '../src/api/javdb-community';
 import { r18Api } from '../src/api/r18';
 import JavdbCommunitySection from '../src/components/media/JavdbCommunitySection.vue';
+import { applyMediaVisibility } from '../src/composables/useMediaVisibility';
 
 const libraries = [{ Id: 2, Name: '在线 JavDB', Path: '', SourceType: 'avdb_javdb' as const }];
 const match: JavdbMatch = { status: 'matched', number: 'TEST-001', library_id: 2, library_name: '在线 JavDB', video: { id: 'fixture', number: 'TEST-001', title: '匹配影片' } };
 const review: JavdbReview = { id: 'first', username: '评论作者', content: '真实评论字段的隔离夹具', score: '4.5', status: '看过', created_at: '2026-11-18' };
 const pageIdentity = { number: 'TEST-001', video_id: 'fixture', library_id: 2 };
 const reviews: JavdbPage<JavdbReview> = { ...pageIdentity, items: [review], page: 1, page_size: 15, has_more: true, total: 16 };
-const localMovies: JavdbListMovies = { ...pageIdentity, list_id: 'list1', local_library_id: 1, next_page: 2, has_more: false,
-  items: [{ id: 11, number: 'TEST-002', title: '本库已有影片' }] };
+const localMovie: JavdbListMovie = { id: 'film-two', number: 'TEST-002', title: '清单中已匹配的影片', cover_url: '/api/r18/libraries/2/videos/film-two/images/poster', has_local: true,
+  local_movies: [{ id: 11, number: 'TEST-002', title: '本库已有影片' }] };
+const unmatchedMovie: JavdbListMovie = { id: 'film-three', number: 'TEST-003', title: '未入库的清单影片', cover_url: '/api/r18/libraries/2/videos/film-three/images/poster', has_local: false, local_movies: [] };
+const localMovies: JavdbListMovies = { ...pageIdentity, list_id: 'list1', local_library_id: 1, next_page: 2, has_more: false, items: [localMovie, unmatchedMovie] };
 let pinia: Pinia;
 let wrapper: VueWrapper | undefined;
 function component(number = 'TEST-001') {
-  wrapper = mount(JavdbCommunitySection, { props: { itemId: 5, number, localLibraryId: 1 }, global: { plugins: [pinia], stubs: { RouterLink: { props: ['to'], template: '<a><slot /></a>' } } } });
+  wrapper = mount(JavdbCommunitySection, { props: { itemId: 5, number, localLibraryId: 1 }, global: { plugins: [pinia], stubs: { RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' } } } });
   return wrapper;
 }
 function button(text: string) {
@@ -24,6 +27,7 @@ function button(text: string) {
 }
 
 beforeEach(() => {
+  applyMediaVisibility(false);
   pinia = createPinia();
   vi.spyOn(apiClient, 'request').mockRejectedValue(new Error('不应调用未隔离接口'));
   vi.spyOn(r18Api, 'libraries').mockResolvedValue({ items: libraries, total: libraries.length });
@@ -32,7 +36,7 @@ beforeEach(() => {
   vi.spyOn(javdbCommunityApi, 'lists').mockResolvedValue({ ...pageIdentity, items: [{ id: 'list1', name: '相关影片清单', movie_count: 32 }], page: 1, page_size: 15, has_more: false });
   vi.spyOn(javdbCommunityApi, 'listMovies').mockImplementation(async (_item, library, listId) => ({ ...localMovies, library_id: library, list_id: listId }));
 });
-afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); vi.restoreAllMocks(); });
+afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); applyMediaVisibility(false); vi.restoreAllMocks(); });
 
 describe('普通影片详情的 JavDB 评论与清单', () => {
   it('按入库影片 ID 匹配，默认加载评论，清单在点击后加载', async () => {
@@ -49,7 +53,13 @@ describe('普通影片详情的 JavDB 评论与清单', () => {
     expect(list.attributes('href')).toBeUndefined();
     await list.trigger('click'); await flushPromises();
     expect(javdbCommunityApi.listMovies).toHaveBeenCalledWith(5, 2, 'list1', 1, 1, expect.any(AbortSignal), false);
-    expect(wrapper!.text()).toContain('本库已有影片');
+    expect(wrapper!.text()).toContain(localMovie.title);
+    expect(wrapper!.text()).toContain(unmatchedMovie.title);
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(2);
+    expect(wrapper!.findAll('.javdb-local-badge').map(badge => badge.text())).toEqual(['本地可播放', '无本地 STRM']);
+    expect(wrapper!.findAll('.javdb-movie-card img').map(image => image.attributes('src'))).toEqual([localMovie.cover_url, unmatchedMovie.cover_url]);
+    const links = wrapper!.findAllComponents({ name: 'RouterLink' }).filter(link => link.classes().includes('javdb-movie-link'));
+    expect(links.map(link => link.props('to'))).toEqual([localMovie, unmatchedMovie].map(movie => ({ name: 'r18-detail', params: { libraryId: '2', id: movie.id } })));
     await wrapper!.get('[data-local-movie="11"]').trigger('click');
     expect(wrapper!.emitted('open')).toEqual([[11]]);
     await button('评论').trigger('click');
@@ -156,44 +166,74 @@ describe('普通影片详情的 JavDB 评论与清单', () => {
     expect(button('展开完整评论').attributes('aria-expanded')).toBe('false');
   });
 
-  it('跳过没有本库匹配的批次，后续匹配只显示本库条目', async () => {
-    vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, items: [], has_more: true, next_page: 5 }).mockResolvedValueOnce({ ...localMovies, next_page: 6 });
+  it('没有本地 STRM 的清单影片仍显示标题封面，后续页也正常加载', async () => {
+    vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, items: [unmatchedMovie], has_more: true, next_page: 2 }).mockResolvedValueOnce({ ...localMovies, items: [localMovie], next_page: 3 });
     component(); await flushPromises();
     await button('相关清单').trigger('click'); await flushPromises();
     await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
-    expect(wrapper!.findAll('.javdb-local-movie')).toHaveLength(0);
-    expect(wrapper!.text()).not.toContain('本库没有这份清单');
-    await button('继续匹配本库影片').trigger('click'); await flushPromises();
-    expect(javdbCommunityApi.listMovies).toHaveBeenLastCalledWith(5, 2, 'list1', 5, 1, expect.any(AbortSignal), false);
-    expect(wrapper!.findAll('.javdb-local-movie')).toHaveLength(1);
-    expect(wrapper!.text()).toContain('本库已有影片');
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(1);
+    expect(wrapper!.text()).toContain(unmatchedMovie.title);
+    expect(wrapper!.get('.javdb-movie-card img').attributes('src')).toBe(unmatchedMovie.cover_url);
+    expect(wrapper!.text()).toContain('无本地 STRM');
+    expect(wrapper!.find('[data-local-movie]').exists()).toBe(false);
+    await button('加载更多影片').trigger('click'); await flushPromises();
+    expect(javdbCommunityApi.listMovies).toHaveBeenLastCalledWith(5, 2, 'list1', 2, 1, expect.any(AbortSignal), false);
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(2);
+    expect(wrapper!.text()).toContain(localMovie.title);
+    expect(wrapper!.text()).toContain('已加载 2 部 · 本地可播放 1 部');
     expect(wrapper!.find('.javdb-list[href]').exists()).toBe(false);
   });
 
-  it('整个清单都没有本库对应番号时只显示空态', async () => {
+  it('空清单显示暂无影片，未匹配本地 STRM 的清单仍有卡片', async () => {
     vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, items: [] });
     component(); await flushPromises();
     await button('相关清单').trigger('click'); await flushPromises();
     await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
-    expect(wrapper!.text()).toContain('本库没有这份清单的对应影片');
-    expect(wrapper!.findAll('.javdb-local-movie')).toHaveLength(0);
-    expect(wrapper!.findAll('button').some(item => item.text().includes('继续匹配本库影片'))).toBe(false);
+    expect(wrapper!.text()).toContain('这份清单暂无影片');
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(0);
+    expect(wrapper!.findAll('button').some(item => item.text().includes('加载更多影片'))).toBe(false);
+    await wrapper!.get('.javdb-list').trigger('click');
+    vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, items: [unmatchedMovie] });
+    await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(1);
+    expect(wrapper!.text()).toContain(unmatchedMovie.title);
+    expect(wrapper!.text()).not.toContain('这份清单暂无影片');
+    expect(wrapper!.text()).toContain('本地可播放 0 部');
   });
 
-  it('继续匹配去重本库条目，失败保留原结果并重试同一批次', async () => {
-    vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, has_more: true, next_page: 5 }).mockRejectedValueOnce(new Error('清单影片读取失败'))
-      .mockResolvedValueOnce({ ...localMovies, next_page: 6, items: [{ ...localMovies.items[0]!, title: '更新后的本库标题' }, { id: 12, number: 'TEST-003', title: '另一部本库影片' }] });
+  it('继续加载按 JavDB 影片去重，失败保留标题封面和本地状态并重试同一页', async () => {
+    vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, items: [localMovie], has_more: true, next_page: 2 }).mockRejectedValueOnce(new Error('清单影片读取失败'))
+      .mockResolvedValueOnce({ ...localMovies, next_page: 3, items: [{ ...localMovie, title: '更新后的清单标题', has_local: false, local_movies: [] }, unmatchedMovie] });
     component(); await flushPromises();
     await button('相关清单').trigger('click'); await flushPromises();
     await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
-    await button('继续匹配本库影片').trigger('click'); await flushPromises();
+    await button('加载更多影片').trigger('click'); await flushPromises();
     expect(wrapper!.get('[role="alert"]').text()).toContain('清单影片读取失败');
-    expect(wrapper!.findAll('.javdb-local-movie')).toHaveLength(1);
-    await button('重试本库匹配').trigger('click'); await flushPromises();
-    expect(javdbCommunityApi.listMovies).toHaveBeenLastCalledWith(5, 2, 'list1', 5, 1, expect.any(AbortSignal), true);
-    expect(wrapper!.findAll('.javdb-local-movie')).toHaveLength(2);
-    expect(wrapper!.text()).toContain('本库匹配 2 个条目');
-    expect(wrapper!.text()).toContain('更新后的本库标题');
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(1);
+    expect(wrapper!.get('.javdb-movie-card img').attributes('src')).toBe(localMovie.cover_url);
+    await button('重试影片列表').trigger('click'); await flushPromises();
+    expect(javdbCommunityApi.listMovies).toHaveBeenLastCalledWith(5, 2, 'list1', 2, 1, expect.any(AbortSignal), true);
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(2);
+    expect(wrapper!.text()).toContain('已加载 2 部 · 本地可播放 0 部');
+    expect(wrapper!.text()).toContain('更新后的清单标题');
+    expect(wrapper!.find('[data-local-movie]').exists()).toBe(false);
+  });
+
+  it('隐藏图片保留全部标题和播放角标，多份本地版本分别进入本库详情', async () => {
+    vi.mocked(javdbCommunityApi.listMovies).mockResolvedValueOnce({ ...localMovies, items: [{ ...localMovie, local_movies: [...localMovie.local_movies, { id: 12, number: 'TEST-002', title: '本库第二版本' }] }, unmatchedMovie] });
+    component(); await flushPromises();
+    await button('相关清单').trigger('click'); await flushPromises();
+    await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(2);
+    expect(wrapper!.findAll('[data-local-movie]')).toHaveLength(2);
+    await wrapper!.get('[data-local-movie="12"]').trigger('click');
+    expect(wrapper!.emitted('open')).toEqual([[12]]);
+    applyMediaVisibility(true); await flushPromises();
+    expect(wrapper!.findAll('.javdb-movie-card img')).toHaveLength(0);
+    expect(wrapper!.findAll('.javdb-movie-card .image-hidden')).toHaveLength(2);
+    expect(wrapper!.text()).toContain(localMovie.title);
+    expect(wrapper!.text()).toContain(unmatchedMovie.title);
+    expect(wrapper!.findAll('.javdb-local-badge').map(badge => badge.text())).toEqual(['本地可播放', '无本地 STRM']);
   });
 
   it('当前库身份变化或响应来自其他库时不展示清单影片', async () => {
@@ -202,13 +242,13 @@ describe('普通影片详情的 JavDB 评论与清单', () => {
     await button('相关清单').trigger('click'); await flushPromises();
     await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
     expect(wrapper!.get('[role="alert"]').text()).toContain('媒体库或清单已更新');
-    expect(wrapper!.findAll('.javdb-local-movie')).toHaveLength(0);
+    expect(wrapper!.findAll('.javdb-movie-card')).toHaveLength(0);
   });
 
   it('切换清单及影片时取消旧匹配并忽略迟到条目', async () => {
     let resolve!: (page: JavdbListMovies) => void;
     vi.mocked(javdbCommunityApi.lists).mockResolvedValueOnce({ ...pageIdentity, items: [{ id: 'list1', name: '第一份清单' }, { id: 'list2', name: '第二份清单' }], page: 1, page_size: 15, has_more: false });
-    vi.mocked(javdbCommunityApi.listMovies).mockReturnValueOnce(new Promise(done => { resolve = done; })).mockResolvedValueOnce({ ...localMovies, list_id: 'list2', items: [{ id: 12, number: 'TEST-003', title: '第二份清单的本库影片' }] });
+    vi.mocked(javdbCommunityApi.listMovies).mockReturnValueOnce(new Promise(done => { resolve = done; })).mockResolvedValueOnce({ ...localMovies, list_id: 'list2', items: [{ ...unmatchedMovie, id: 'film-four', title: '第二份清单的影片' }] });
     component(); await flushPromises();
     await button('相关清单').trigger('click'); await flushPromises();
     await wrapper!.findAll('.javdb-list')[0]!.trigger('click'); await flushPromises();
@@ -216,12 +256,12 @@ describe('普通影片详情的 JavDB 评论与清单', () => {
     await wrapper!.findAll('.javdb-list')[1]!.trigger('click'); await flushPromises();
     expect(oldSignal.aborted).toBe(true);
     resolve(localMovies); await flushPromises();
-    expect(wrapper!.text()).toContain('第二份清单的本库影片');
-    expect(wrapper!.text()).not.toContain('本库已有影片');
+    expect(wrapper!.text()).toContain('第二份清单的影片');
+    expect(wrapper!.text()).not.toContain(localMovie.title);
     const currentSignal = vi.mocked(javdbCommunityApi.listMovies).mock.calls[1]![5]!;
     await wrapper!.setProps({ itemId: 6, number: 'TEST-002' }); await flushPromises();
     expect(currentSignal.aborted).toBe(true);
-    expect(wrapper!.find('#javdb-local-list').exists()).toBe(false);
+    expect(wrapper!.find('#javdb-list-movies').exists()).toBe(false);
   });
 
   it('清单头分页后重置旧匹配，使用新页核验关联清单', async () => {
@@ -231,7 +271,7 @@ describe('普通影片详情的 JavDB 评论与清单', () => {
     await button('相关清单').trigger('click'); await flushPromises();
     await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
     await button('下一页清单').trigger('click'); await flushPromises();
-    expect(wrapper!.find('#javdb-local-list').exists()).toBe(false);
+    expect(wrapper!.find('#javdb-list-movies').exists()).toBe(false);
     await wrapper!.get('.javdb-list').trigger('click'); await flushPromises();
     expect(javdbCommunityApi.listMovies).toHaveBeenLastCalledWith(5, 2, 'list2', 1, 2, expect.any(AbortSignal), false);
   });
@@ -249,17 +289,19 @@ describe('JavDB 社区 API 契约', () => {
     expect(apiClient.request).toHaveBeenNthCalledWith(2, '/api/r18/items/5/reviews?library_id=2&page=2&limit=15&refresh=1', expect.objectContaining({ auth: 'required', signal }));
   });
 
-  it('清单本库匹配接口不发送自选本库 ID、番号或路径，拒绝错误续页', async () => {
+  it('清单接口不发送自选本库 ID、番号或路径，每次只继续一个上游页', async () => {
     vi.mocked(javdbCommunityApi.listMovies).mockRestore();
     vi.mocked(apiClient.request).mockResolvedValueOnce(localMovies).mockResolvedValueOnce({ ...localMovies, next_page: 1 });
     const signal = new AbortController().signal;
     await javdbCommunityApi.listMovies(5, 2, 'list1', 1, 2, signal, true);
     expect(apiClient.request).toHaveBeenCalledWith('/api/r18/items/5/related-lists/list1/movies?library_id=2&page=1&related_page=2&refresh=1', expect.objectContaining({ auth: 'required', signal, timeoutMs: 22000 }));
     await expect(javdbCommunityApi.listMovies(5, 2, 'list1', 1, 2, signal)).rejects.toThrow('来源或分页不一致');
+    vi.mocked(apiClient.request).mockResolvedValueOnce({ ...localMovies, next_page: 5 });
+    await expect(javdbCommunityApi.listMovies(5, 2, 'list1', 1, 2, signal)).rejects.toThrow('来源或分页不一致');
     await expect(javdbCommunityApi.listMovies(5, 2, '../other', 1, 2, signal)).rejects.toThrow();
   });
 
-  it('拒绝异常匹配、分页及清单标识，只保留本库展示字段', () => {
+  it('拒绝异常匹配、分页及清单标识，只保留展示字段和同源封面', () => {
     expect(parseJavdbMatch(match)).toEqual(match);
     expect(() => parseJavdbMatch({ ...match, video: null })).toThrow();
     expect(() => parseJavdbReviews({ ...reviews, items: null })).toThrow();
@@ -268,6 +310,11 @@ describe('JavDB 社区 API 契约', () => {
     expect(parseJavdbRelatedLists({ ...pageIdentity, items: [{ id: 'valid', name: '清单', url: 'javascript:alert(1)' }], page: 1, page_size: 15, has_more: false }).items[0]).not.toHaveProperty('url');
     expect(() => parseJavdbRelatedLists({ items: [{ id: '../other', name: '清单', url: 'https://javdb.com/lists/../other' }], page: 1, page_size: 15, has_more: false })).toThrow();
     expect(parseJavdbListMovies({ ...localMovies, items: [{ ...localMovies.items[0], source_path: '/private/file' }] }).items[0]).not.toHaveProperty('source_path');
+    expect(parseJavdbListMovies({ ...localMovies, items: [{ ...localMovie, cover_url: 'https://untrusted.fixture.invalid/cover.jpg' }] }).items[0]!.cover_url).toBe('');
+    expect(parseJavdbListMovies({ ...localMovies, items: [{ ...localMovie, cover_url: 'javascript:alert(1)' }] }).items[0]!.cover_url).toBe('');
+    expect(parseJavdbListMovies(localMovies).items).toEqual([localMovie, unmatchedMovie]);
+    expect(() => parseJavdbListMovies({ ...localMovies, items: [{ ...localMovie, has_local: false }] })).toThrow('本地播放状态不正确');
+    expect(() => parseJavdbListMovies({ ...localMovies, items: [{ ...localMovie, local_movies: [] }] })).toThrow('本地播放状态不正确');
     expect(() => parseJavdbListMovies({ ...localMovies, local_library_id: 0 })).toThrow();
     expect(() => parseJavdbListMovies({ ...localMovies, has_more: true, next_page: 10000 })).toThrow();
   });

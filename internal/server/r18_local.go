@@ -86,6 +86,12 @@ func readR18LocalSTRM(root, source string) (string, bool) {
 }
 
 func (a *App) prepareR18LocalSources(c *gin.Context, videos []r18.Video) error {
+	return a.prepareR18LocalSourcesForLibrary(c.Request.Context(), c, 0, videos)
+}
+
+// A zero library ID preserves the catalog's existing authorized-library scope.
+// Community lists use the current movie's library and the shared request budget.
+func (a *App) prepareR18LocalSourcesForLibrary(parent context.Context, c *gin.Context, libraryID int64, videos []r18.Video) error {
 	numbers := make([]string, 0, len(videos))
 	local := r18LocalSnapshot{Sources: map[string][]r18LocalMatch{}}
 	for _, v := range videos {
@@ -97,9 +103,15 @@ func (a *App) prepareR18LocalSources(c *gin.Context, videos []r18.Video) error {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	movies, err := a.db.LocalSTRMMovies(ctx, numbers)
+	var movies []store.Movie
+	var err error
+	if libraryID > 0 {
+		movies, err = a.db.LibrarySTRMMovies(ctx, libraryID, numbers)
+	} else {
+		movies, err = a.db.LocalSTRMMovies(ctx, numbers)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()

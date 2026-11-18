@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -56,6 +57,7 @@ func newJavdbListFixture(t *testing.T, movies http.HandlerFunc) javdbListFixture
 	if err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(local.Path, "parent.strm"), "https://media.fixture.invalid/parent.mp4")
 	parent, err := app.db.UpsertMovie(store.Movie{LibraryID: local.ID, SourcePath: filepath.Join(local.Path, "parent.strm"), Status: "success", Number: "TEST-001", Title: "当前本库影片"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +222,7 @@ func TestR18CommunityListMoviesMatchCurrentLibraryAndRecheckWarmIndex(t *testing
 		if req.URL.Path != "/api/v1/javdb/movies/tags" || q.Get("list_id") != "allowed" || q.Get("limit") != "50" {
 			t.Error("错误的清单影片请求", req.URL)
 		}
-		rows := []any{map[string]any{"id": "first", "number": "TEST-001", "title": "上游父影片"}, map[string]any{"id": "second", "number": "TEST-002", "title": "上游影片标题"}, map[string]any{"id": "foreign", "number": "OTHER-999"}, map[string]any{"id": "duplicate", "number": "TEST-002"}}
+		rows := []any{map[string]any{"id": "first", "number": "TEST-001", "title": "上游父影片", "cover_url": "https://images.fixture.invalid/first.jpg"}, map[string]any{"id": "second", "number": "TEST-002", "title": "上游影片标题", "cover_url": "https://images.fixture.invalid/second.jpg"}, map[string]any{"id": "foreign", "number": "OTHER-999", "title": "尚未入本库的清单影片"}, map[string]any{"id": "duplicate", "number": "TEST-002"}}
 		more := true
 		if q.Get("page") == "2" {
 			rows = []any{map[string]any{"id": "missing", "number": "MISSING-001"}}
@@ -234,6 +236,7 @@ func TestR18CommunityListMoviesMatchCurrentLibraryAndRecheckWarmIndex(t *testing
 	}
 	add := func(library store.Library, name, number, status string, tv *store.Television) int64 {
 		t.Helper()
+		writeFile(t, filepath.Join(library.Path, name+".strm"), "https://media.fixture.invalid/movie.mp4")
 		id, err := f.app.db.UpsertMovie(store.Movie{LibraryID: library.ID, SourcePath: filepath.Join(library.Path, name+".strm"), Number: number, Title: name, Status: status, Television: tv}, 1, time.Now())
 		if err != nil {
 			t.Fatal(err)
@@ -241,6 +244,7 @@ func TestR18CommunityListMoviesMatchCurrentLibraryAndRecheckWarmIndex(t *testing
 		return id
 	}
 	owned := add(f.local, "本库标题", "test_002", "manual", nil)
+	version := add(f.local, "本库第二版本", "TEST-002", "success", nil)
 	add(other, "其他库同番号", "TEST-002", "success", nil)
 	add(other, "其他库独有番号", "OTHER-999", "success", nil)
 	add(other, "另一个外库条目", "MISSING-001", "success", nil)
@@ -251,28 +255,44 @@ func TestR18CommunityListMoviesMatchCurrentLibraryAndRecheckWarmIndex(t *testing
 	path := f.path("allowed") + "&local_library_id=" + strconv.FormatInt(other.ID, 10) + "&number=OTHER-999"
 	result := r18TestCall(t, f.server.URL, "GET", path, f.token, nil, 200)
 	items := result["items"].([]any)
-	if len(items) != 2 || result["local_library_id"] != float64(f.local.ID) || result["next_page"] != float64(3) || result["has_more"] != false {
-		t.Fatal("本库匹配或清单翻页错误", result)
+	if len(items) != 4 || result["local_library_id"] != float64(f.local.ID) || result["next_page"] != float64(2) || result["has_more"] != true {
+		t.Fatal("清单过滤了未匹配影片或翻页错误", result)
 	}
-	if items[0].(map[string]any)["id"] != float64(f.parent) || items[1].(map[string]any)["id"] != float64(owned) || items[1].(map[string]any)["title"] != "本库标题" {
-		t.Fatal("没有使用本库条目与本库标题", items)
+	first, second, foreign, duplicate := items[0].(map[string]any), items[1].(map[string]any), items[2].(map[string]any), items[3].(map[string]any)
+	if first["id"] != r18.EncodeID("first", "javdb") || second["title"] != "上游影片标题" || foreign["title"] != "尚未入本库的清单影片" || first["has_local"] != true || second["has_local"] != true || foreign["has_local"] != false || duplicate["has_local"] != true {
+		t.Fatal("没有保留清单身份、标题或当前库播放角标", items)
 	}
-	if strings.Contains(mustJSON(t, result), "source_path") || strings.Contains(mustJSON(t, result), "其他库") || strings.Contains(mustJSON(t, result), "未就绪影片") {
+	local := second["local_movies"].([]any)
+	if len(local) != 2 || local[0].(map[string]any)["id"] != float64(owned) || local[1].(map[string]any)["id"] != float64(version) || local[0].(map[string]any)["title"] != "本库标题" || len(foreign["local_movies"].([]any)) != 0 {
+		t.Fatal("没有保留本库播放版本或把其他库当作本地匹配", items)
+	}
+	wantCover := "/api/r18/libraries/" + strconv.FormatInt(f.source.ID, 10) + "/videos/" + r18.EncodeID("second", "javdb") + "/images/poster"
+	cached, known := f.app.cachedR18Video(f.source, r18.EncodeID("second", "javdb"), false)
+	if second["cover_url"] != wantCover || !known || cached.CoverURL != "https://images.fixture.invalid/second.jpg" {
+		t.Fatal("清单封面没有使用图片代理或丢失源图资料", second)
+	}
+	if strings.Contains(mustJSON(t, result), "source_path") || strings.Contains(mustJSON(t, result), "其他库") || strings.Contains(mustJSON(t, result), "未就绪影片") || strings.Contains(mustJSON(t, result), "https://images.fixture.invalid") {
 		t.Fatal("匹配结果包含其他范围或私人路径", result)
+	}
+	result = r18TestCall(t, f.server.URL, "GET", path+"&page=2", f.token, nil, 200)
+	if len(result["items"].([]any)) != 1 || result["items"].([]any)[0].(map[string]any)["has_local"] != false || result["next_page"] != float64(3) || result["has_more"] != false {
+		t.Fatal("清单末页的未匹配影片被过滤", result)
 	}
 	if calls.Load() != 2 {
 		t.Fatal("上游分页请求数量错误", calls.Load())
 	}
-	current, err := f.app.db.Movie(owned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current.Number = "TEST-004"
-	if _, err := f.app.db.UpsertMovie(current, 1, time.Now()); err != nil {
-		t.Fatal(err)
+	for _, id := range []int64{owned, version} {
+		current, err := f.app.db.Movie(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current.Number = "TEST-004"
+		if _, err := f.app.db.UpsertMovie(current, 1, time.Now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	result = r18TestCall(t, f.server.URL, "GET", path, f.token, nil, 200)
-	if len(result["items"].([]any)) != 1 || calls.Load() != 2 {
+	if len(result["items"].([]any)) != 4 || result["items"].([]any)[1].(map[string]any)["has_local"] != false || len(result["items"].([]any)[1].(map[string]any)["local_movies"].([]any)) != 0 || calls.Load() != 2 {
 		t.Fatal("暖上游缓存没有重新匹配当前本库索引", result, calls.Load())
 	}
 	viewer, err := f.app.db.CreateUser("list-viewer", "password-1234")
@@ -287,7 +307,7 @@ func TestR18CommunityListMoviesMatchCurrentLibraryAndRecheckWarmIndex(t *testing
 		t.Fatal(err)
 	}
 	result = r18TestCall(t, f.server.URL, "GET", path, "list-viewer-token", nil, 200)
-	if len(result["items"].([]any)) != 1 {
+	if len(result["items"].([]any)) != 4 || result["items"].([]any)[1].(map[string]any)["has_local"] != false {
 		t.Fatal("普通用户获得其他库授权后发生跨库匹配", result)
 	}
 	if err := f.app.db.ForUser(viewer.ID).SaveLibraryAccessPolicy(store.LibraryAccessPolicy{LibraryIDs: []int64{f.local.ID, other.ID}}); err != nil {
@@ -300,7 +320,7 @@ func TestR18CommunityListMoviesMatchCurrentLibraryAndRecheckWarmIndex(t *testing
 	}
 }
 
-func TestR18CommunityListMoviesContinueAfterEntirelyUnmatchedPages(t *testing.T) {
+func TestR18CommunityListMoviesRetainEntirelyUnmatchedPages(t *testing.T) {
 	var calls atomic.Int64
 	f := newJavdbListFixture(t, func(w http.ResponseWriter, req *http.Request) {
 		calls.Add(1)
@@ -313,17 +333,57 @@ func TestR18CommunityListMoviesContinueAfterEntirelyUnmatchedPages(t *testing.T)
 		}
 		writeJavdbListData(w, map[string]any{"movies": []any{map[string]any{"id": "entry" + strconv.Itoa(page), "number": number}}, "has_next": more})
 	})
+	writeFile(t, filepath.Join(f.local.Path, "owned.strm"), "https://media.fixture.invalid/owned.mp4")
 	owned, err := f.app.db.UpsertMovie(store.Movie{LibraryID: f.local.ID, SourcePath: filepath.Join(f.local.Path, "owned.strm"), Number: "TEST-002", Title: "第五页的本库影片", Status: "success"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := r18TestCall(t, f.server.URL, "GET", f.path("allowed"), f.token, nil, 200)
-	if len(result["items"].([]any)) != 0 || result["has_more"] != true || result["next_page"] != float64(5) || calls.Load() != 4 {
-		t.Fatal("未匹配页被误判为整个清单结束", result, calls.Load())
+	for page := 1; page <= 5; page++ {
+		result := r18TestCall(t, f.server.URL, "GET", f.path("allowed")+"&page="+strconv.Itoa(page), f.token, nil, 200)
+		items := result["items"].([]any)
+		if len(items) != 1 || result["has_more"] != (page < 5) || result["next_page"] != float64(page+1) || calls.Load() != int64(page) {
+			t.Fatal("未匹配影片被跳过或清单分页不正确", result, calls.Load())
+		}
+		item := items[0].(map[string]any)
+		if item["id"] != r18.EncodeID("entry"+strconv.Itoa(page), "javdb") || item["has_local"] != (page == 5) {
+			t.Fatal("清单条目身份或本地播放角标错误", item)
+		}
+		if page == 5 && item["local_movies"].([]any)[0].(map[string]any)["id"] != float64(owned) {
+			t.Fatal("后续匹配没有保留本库详情入口", item)
+		}
 	}
-	result = r18TestCall(t, f.server.URL, "GET", f.path("allowed")+"&page=5", f.token, nil, 200)
-	if len(result["items"].([]any)) != 1 || result["items"].([]any)[0].(map[string]any)["id"] != float64(owned) || result["has_more"] != false || calls.Load() != 5 {
-		t.Fatal("继续匹配没有找到后续本库影片", result, calls.Load())
+}
+
+func TestR18CommunityListMoviesPlaybackFlagRechecksActualSTRM(t *testing.T) {
+	var calls atomic.Int64
+	f := newJavdbListFixture(t, func(w http.ResponseWriter, req *http.Request) {
+		calls.Add(1)
+		writeJavdbListData(w, map[string]any{"movies": []any{map[string]any{"id": "first", "number": "TEST-001", "title": "有本库索引的影片"}, map[string]any{"id": "missing", "number": "MISSING-001", "title": "未入库影片"}}, "has_next": false})
+	})
+	assertLocal := func(want bool) {
+		t.Helper()
+		result := r18TestCall(t, f.server.URL, "GET", f.path("allowed"), f.token, nil, 200)
+		items := result["items"].([]any)
+		if len(items) != 2 || items[0].(map[string]any)["has_local"] != want || items[1].(map[string]any)["has_local"] != false {
+			t.Fatal("可播放角标未核验实际 STRM 或隐藏了未匹配影片", result)
+		}
+		local := items[0].(map[string]any)["local_movies"].([]any)
+		if want && (len(local) != 1 || local[0].(map[string]any)["id"] != float64(f.parent)) || !want && len(local) != 0 {
+			t.Fatal("本库详情入口与可播放状态不一致", local)
+		}
+	}
+	assertLocal(true)
+	file := filepath.Join(f.local.Path, "parent.strm")
+	writeFile(t, file, "not a media URL")
+	assertLocal(false)
+	writeFile(t, file, "https://media.fixture.invalid/restored.mp4")
+	assertLocal(true)
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	assertLocal(false)
+	if calls.Load() != 1 {
+		t.Fatal("本地状态校验没有复用只读上游清单缓存", calls.Load())
 	}
 }
 
