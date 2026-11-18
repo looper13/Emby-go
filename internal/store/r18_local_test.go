@@ -55,6 +55,75 @@ func r18LocalIDs(t *testing.T, s *Store, numbers []string) []int64 {
 	return ids
 }
 
+func TestR18LibrarySTRMMoviesLimitMatchesToCurrentLibrary(t *testing.T) {
+	s := r18LocalStore(t)
+	a, b := r18LocalLibrary(t, s, "当前库"), r18LocalLibrary(t, s, "另一个可访问库")
+	first := r18LocalMovie(t, s, a, "a", "TEST-001", "success", nil)
+	second := r18LocalMovie(t, s, a, "b", "test_002", "manual", nil)
+	other := r18LocalMovie(t, s, b, "other", "TEST-001", "success", nil)
+	r18LocalMovie(t, s, b, "missing-local", "MISSING-001", "success", nil)
+	for _, entry := range []struct {
+		name, number, status string
+		tv                   *Television
+	}{
+		{"zeros", "TEST-0001", "success", nil}, {"suffix", "TEST-001-C", "success", nil},
+		{"pending", "TEST-002", "pending", nil}, {"episode", "TEST-001", "success", &Television{SeriesPath: "show", Season: 1, Episode: 1}},
+	} {
+		r18LocalMovie(t, s, a, entry.name, entry.number, entry.status, entry.tv)
+	}
+	query := []string{"test_001", "TEST002", "MISSING-001", "TEST-001"}
+	read := func(db *Store, id int64) []int64 {
+		t.Helper()
+		movies, err := db.LibrarySTRMMovies(context.Background(), id, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []int64{}
+		for _, movie := range movies {
+			ids = append(ids, movie.ID)
+			if movie.LibraryID != id {
+				t.Fatal("返回了其他库的匹配", movie)
+			}
+		}
+		return ids
+	}
+	if got := read(s, a.ID); !reflect.DeepEqual(got, []int64{first, second}) {
+		t.Fatal("本库番号匹配不正确", got)
+	}
+	if got := r18LocalIDs(t, s, []string{"TEST-001"}); !reflect.DeepEqual(got, []int64{first, other}) {
+		t.Fatal("改变了原有 R18 跨库匹配", got)
+	}
+	if _, err := s.LibrarySTRMMovies(context.Background(), 0, query); err == nil {
+		t.Fatal("空本库 ID 回退到了全部库")
+	}
+	if err := s.InitializeAdministrator("scope-admin", "long-fixture-password"); err != nil {
+		t.Fatal(err)
+	}
+	viewer, err := s.CreateUser("scope-viewer", "long-fixture-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := s.ForUser(viewer.ID)
+	if err := user.SaveLibraryAccessPolicy(LibraryAccessPolicy{LibraryIDs: []int64{b.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(user, a.ID); len(got) != 0 {
+		t.Fatal("未授权本库被匹配", got)
+	}
+	if err := user.SaveLibraryAccessPolicy(LibraryAccessPolicy{LibraryIDs: []int64{a.ID, b.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(user, a.ID); !reflect.DeepEqual(got, []int64{first, second}) {
+		t.Fatal("授权其他库改变了本库范围", got)
+	}
+	if _, err := s.db.Exec("UPDATE libraries SET enabled=0 WHERE id=?", a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(user, a.ID); len(got) != 0 {
+		t.Fatal("停用的本库被匹配", got)
+	}
+}
+
 func TestR18LocalSTRMMoviesAuthorizationAndLibraryState(t *testing.T) {
 	s := r18LocalStore(t)
 	a, b, external := r18LocalLibrary(t, s, "A"), r18LocalLibrary(t, s, "B"), r18LocalLibrary(t, s, "非目录来源")

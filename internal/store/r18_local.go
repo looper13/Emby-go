@@ -11,6 +11,19 @@ const r18LocalMovieLimit = 2000
 
 // LocalSTRMMovies 批量匹配用户可访问目录库中的精确番号，不读取 STRM 文件或远程地址。
 func (s *Store) LocalSTRMMovies(ctx context.Context, numbers []string) ([]Movie, error) {
+	return s.localSTRMMovies(ctx, 0, numbers)
+}
+
+// LibrarySTRMMovies limits number matching to one current directory library.
+// A missing or inaccessible library never falls back to all libraries.
+func (s *Store) LibrarySTRMMovies(ctx context.Context, libraryID int64, numbers []string) ([]Movie, error) {
+	if libraryID <= 0 {
+		return nil, errors.New("无效的本库影片匹配范围")
+	}
+	return s.localSTRMMovies(ctx, libraryID, numbers)
+}
+
+func (s *Store) localSTRMMovies(ctx context.Context, libraryID int64, numbers []string) ([]Movie, error) {
 	items := []Movie{}
 	if len(numbers) > r18LocalNumberLimit {
 		return nil, errors.New("本地 STRM 匹配一次最多支持 1000 个番号")
@@ -37,7 +50,12 @@ func (s *Store) LocalSTRMMovies(ctx context.Context, numbers []string) ([]Movie,
 	// 多取一条仅用于检测超限，不能静默遗漏同一影片的其它本地版本。
 	query := "SELECT " + movieCols + ` FROM movies WHERE status IN ('success','manual') AND television='null'
 		AND library_id IN (SELECT id FROM ` + s.userLibrariesSQL() + ` WHERE source_type=?)
-		AND ` + duplicateNumberSQL + ` IN (` + placeholders + `) ORDER BY library_id,source_path,id LIMIT ?`
+		AND ` + duplicateNumberSQL + ` IN (` + placeholders + `)`
+	if libraryID > 0 {
+		query += " AND library_id=?"
+		args = append(args, libraryID)
+	}
+	query += " ORDER BY library_id,source_path,id LIMIT ?"
 	args = append(args, r18LocalMovieLimit+1)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

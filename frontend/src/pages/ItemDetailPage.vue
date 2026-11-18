@@ -22,6 +22,7 @@ import PlotSection from '../components/media/PlotSection.vue';
 import TrailerSection from '../components/media/TrailerSection.vue';
 import ArtworkGallery from '../components/media/ArtworkGallery.vue';
 import ActorList from '../components/media/ActorList.vue';
+import JavdbCommunitySection from '../components/media/JavdbCommunitySection.vue';
 import SimilarItems from '../components/media/SimilarItems.vue';
 import MetadataList from '../components/media/MetadataList.vue';
 import FileDetails from '../components/media/FileDetails.vue';
@@ -91,9 +92,9 @@ const nextTitle = computed(() => {
   return '';
 });
 
-function openItem(id: number) {
+function openItem(id: number, libraryId?: number) {
   saveViewPosition({ scrollY: window.scrollY, wallCount: wall.items.length, focusID: String(id) });
-  void router.push({ path: `/item/${id}`, query: route.query });
+  void router.push({ path: `/item/${id}`, query: { ...route.query, ...(libraryId ? { library_id: String(libraryId) } : {}) } });
 }
 
 function prev() {
@@ -219,6 +220,7 @@ watch(() => tasks.revision, () => { void enter(true); });
       <TrailerSection :url="data.movie.trailer_url?.trim() || ''" :thumb="trailerThumb" :fallback="data.movie.cover_url" @play="player.trailer(data.movie, data.movie.trailer_url || '')" />
       <ArtworkGallery :id="data.movie.id" :images="backdrops" />
       <ActorList :actors="data.actors ?? []" @entity="entity" />
+      <JavdbCommunitySection v-if="!data.movie.television && data.movie.Number?.trim()" :item-id="data.movie.id" :number="data.movie.Number" :local-library-id="data.movie.library_id" @open="openItem($event, data.movie.library_id)" />
       <SimilarItems :items="similar" @open="openSimilar" />
       <FileDetails v-if="auth.isAdministrator" :files="data.files ?? []" />
       <MetadataList :movie="data.movie" :library-name="data.library_name" @entity="entity" />

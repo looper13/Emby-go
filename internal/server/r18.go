@@ -34,6 +34,7 @@ type r18ClientEntry struct {
 
 func (a *App) registerR18Routes(r *gin.Engine) {
 	browse := r.Group("/api/r18", a.requireAuth, noStore)
+	a.registerJavdbCommunityRoutes(browse)
 	browse.GET("/libraries", a.bind((*App).r18Libraries))
 	browse.GET("/libraries/:lib/tags", a.bind((*App).r18Tags))
 	browse.GET("/libraries/:lib/videos", a.bind((*App).r18Videos))
