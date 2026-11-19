@@ -8,6 +8,7 @@ const filterKeys = new Set([
   'year',
   'view', 'tv_series', 'tv_season', 'favorite', 'type',
   'page', 'page_size', 'filter', 'from',
+  'javdb_library_id', 'javdb_list_id', 'javdb_related_page',
 ]);
 
 export function isValidItemId(value: string): boolean {
@@ -25,6 +26,9 @@ function filteredQuery(input: URLSearchParams): URLSearchParams {
   for (const [key, value] of input) {
     if (!filterKeys.has(key) || output.has(key)) continue;
     if (key === 'library_id' && value !== '0' && !isValidItemId(value)) continue;
+    if (key === 'javdb_library_id' && !isValidItemId(value)) continue;
+    if (key === 'javdb_list_id' && !/^[A-Za-z0-9_-]{1,120}$/u.test(value)) continue;
+    if (key === 'javdb_related_page' && (!/^[1-9]\d{0,3}$/u.test(value) || Number(value) > 9999)) continue;
     if (['limit', 'offset', 'page', 'page_size'].includes(key) && !/^\d+$/u.test(value)) continue;
     output.set(key, value);
   }

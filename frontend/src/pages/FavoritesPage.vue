@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ChevronLeft, ChevronRight, RefreshCw, Search, Film } from '@lucide/vue';
+import { ChevronLeft, ChevronRight, RefreshCw, Search, Film, List } from '@lucide/vue';
 import { favoritesApi, favoriteDestination, type FavoriteItem } from '../api/favorites';
+import { javdbCommunityApi, javdbListFavoriteDestination, type JavdbListFavorite } from '../api/javdb-community';
 import { usePageRequest } from '../composables/usePageRequest';
 import FavoriteButton from '../components/media/FavoriteButton.vue';
+import JavdbListFavoriteButton from '../components/media/JavdbListFavoriteButton.vue';
 import MediaImage from '../components/media/MediaImage.vue';
 import { imageURL } from '../lib/image-url';
 import { useMediaVisibility } from '../composables/useMediaVisibility';
@@ -12,7 +14,7 @@ import { useCardSize } from '../composables/useCardSize';
 const route = useRoute(), router = useRouter(), scope = usePageRequest();
 const { hideImages } = useMediaVisibility();
 const { cardSize, setSize } = useCardSize();
-const tabs = [['Movie,Episode', '影片与单集'], ['Series,Season', '剧集与季'], ['Person', '演员'], ['Genre', '类型'], ['Studio', '厂商'], ['Tag', '标签'], ['BoxSet', '合集']] as const;
+const tabs = [['Movie,Episode', '影片与单集'], ['Series,Season', '剧集与季'], ['Person', '演员'], ['Genre', '类型'], ['Studio', '厂商'], ['Tag', '标签'], ['BoxSet', '合集'], ['JavDB', 'AVdb 清单']] as const;
 const typeLabels: Record<string, string> = {
   Movie: '电影',
   Episode: '单集',
@@ -25,17 +27,22 @@ const typeLabels: Record<string, string> = {
   BoxSet: '合集',
 };
 const type = computed(() => tabs.find(([id]) => id === route.query.type)?.[0] ?? tabs[0][0]);
+const isJavdbListTab = computed(() => type.value === 'JavDB');
 const offset = computed(() => { const n = Number(route.query.offset ?? 0); return Number.isSafeInteger(n) && n >= 0 ? n : 0; });
-const search = ref(''), items = ref<FavoriteItem[]>([]), total = ref(0), loading = ref(false), error = ref('');
+const search = ref(''), items = ref<FavoriteItem[]>([]), linkItems = ref<JavdbListFavorite[]>([]), total = ref(0), loading = ref(false), error = ref('');
 function navigate(values: Record<string, string | undefined>) { void router.replace({ path: '/favorites', query: { ...route.query, ...values } }); }
 async function load() {
   const current = scope.begin(); loading.value = true; error.value = '';
   search.value = typeof route.query.search === 'string' ? route.query.search : '';
   try {
-    const result = await favoritesApi.list(type.value, search.value, offset.value, current.signal);
+    const result = isJavdbListTab.value
+      ? await javdbCommunityApi.listFavorites(search.value, offset.value, current.signal)
+      : await favoritesApi.list(type.value, search.value, offset.value, current.signal);
     if (!current.isCurrent()) return;
     if (offset.value > 0 && result.items.length === 0) { navigate({ offset: String(Math.max(0, Math.ceil(result.total / 48) - 1) * 48) }); return; }
-    items.value = result.items; total.value = result.total;
+    if (isJavdbListTab.value) { linkItems.value = result.items as JavdbListFavorite[]; items.value = []; }
+    else { items.value = result.items as FavoriteItem[]; linkItems.value = []; }
+    total.value = result.total;
   } catch (cause) { if (current.isCurrent()) error.value = cause instanceof Error ? cause.message : '读取收藏失败'; }
   finally { if (current.isCurrent()) loading.value = false; }
 }
@@ -57,7 +64,19 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
     </form>
     <p v-if="error" role="alert">{{ error }} <button class="btn" @click="load">重试</button></p>
     <p v-if="loading" role="status">加载中…</p>
-    <div v-else-if="!error && items.length" class="favorites-grid">
+    <div v-else-if="!error && isJavdbListTab && linkItems.length" class="favorites-grid">
+      <article v-for="item in linkItems" :key="`${item.library_id}:${item.list_id}`" class="favorite-card">
+        <RouterLink :to="javdbListFavoriteDestination(item)" class="favorite-link">
+          <div class="favorite-art favorite-link-art"><List :size="36" aria-hidden="true" /></div>
+          <div class="favorite-meta">
+            <strong :title="item.name">{{ item.name }}</strong>
+            <small class="favorite-sub">AVdb 清单<span v-if="item.movie_count !== undefined"> · {{ item.movie_count }} 部</span></small>
+          </div>
+        </RouterLink>
+        <div class="favorite-card-actions"><JavdbListFavoriteButton :library-id="item.library_id" :list-id="item.list_id" :favorite="true" :label="item.name" :item-id="item.movie_id" :related-page="item.related_page" @changed="load" /></div>
+      </article>
+    </div>
+    <div v-else-if="!error && !isJavdbListTab && items.length" class="favorites-grid">
       <article v-for="item in items" :key="item.Id" class="favorite-card">
         <RouterLink :to="favoriteDestination(item)" class="favorite-link">
           <div class="favorite-art" :class="{ portrait: item.Type === 'Person' }">
@@ -122,6 +141,7 @@ watch(() => route.fullPath, () => { items.value = []; void load(); }, { immediat
 .favorite-art.portrait {
   aspect-ratio: 3 / 4;
 }
+.favorite-link-art { aspect-ratio: 2 / 3; }
 .favorite-card:hover .favorite-art {
   border-color: var(--accent);
   box-shadow: 0 6px 18px rgba(43, 122, 254, 0.25);

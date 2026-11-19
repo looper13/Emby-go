@@ -30,6 +30,14 @@ import FileTimeline from '../components/media/FileTimeline.vue';
 import { useScrapePreviewStore } from '../stores/scrape-preview';
 const emit = defineEmits<{ title: [value: string] }>();
 const route = useRoute(); const router = useRouter(); const history = inject(viewHistoryKey)!;
+const savedJavdbList = computed(() => {
+  const libraryId = route.query.javdb_library_id, listId = route.query.javdb_list_id, relatedPage = route.query.javdb_related_page;
+  if (typeof libraryId !== 'string' || !/^[1-9]\d{0,18}$/u.test(libraryId) || !Number.isSafeInteger(Number(libraryId))
+    || typeof listId !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/u.test(listId)
+    || typeof relatedPage !== 'string' || !/^[1-9]\d{0,3}$/u.test(relatedPage)) return undefined;
+  const page = Number(relatedPage);
+  return page <= 9999 ? { libraryId: Number(libraryId), listId, relatedPage: page } : undefined;
+});
 const scope = usePageRequest(); const data = shallowRef<DetailDto | null>(null); const error = ref('');
 const tasks = useTasksStore(); const toasts = useToastStore();
 const auth = useAuthStore();
@@ -94,7 +102,9 @@ const nextTitle = computed(() => {
 
 function openItem(id: number, libraryId?: number) {
   saveViewPosition({ scrollY: window.scrollY, wallCount: wall.items.length, focusID: String(id) });
-  void router.push({ path: `/item/${id}`, query: { ...route.query, ...(libraryId ? { library_id: String(libraryId) } : {}) } });
+  const query = { ...route.query };
+  delete query.javdb_library_id; delete query.javdb_list_id; delete query.javdb_related_page;
+  void router.push({ path: `/item/${id}`, query: { ...query, ...(libraryId ? { library_id: String(libraryId) } : {}) } });
 }
 
 function prev() {
@@ -220,7 +230,7 @@ watch(() => tasks.revision, () => { void enter(true); });
       <TrailerSection :url="data.movie.trailer_url?.trim() || ''" :thumb="trailerThumb" :fallback="data.movie.cover_url" @play="player.trailer(data.movie, data.movie.trailer_url || '')" />
       <ArtworkGallery :id="data.movie.id" :images="backdrops" />
       <ActorList :actors="data.actors ?? []" @entity="entity" />
-      <JavdbCommunitySection v-if="!data.movie.television && data.movie.Number?.trim()" :item-id="data.movie.id" :number="data.movie.Number" :local-library-id="data.movie.library_id" @open="openItem($event, data.movie.library_id)" />
+      <JavdbCommunitySection v-if="!data.movie.television && data.movie.Number?.trim()" :item-id="data.movie.id" :number="data.movie.Number" :local-library-id="data.movie.library_id" :saved-list="savedJavdbList" @open="openItem($event, data.movie.library_id)" />
       <SimilarItems :items="similar" @open="openSimilar" />
       <FileDetails v-if="auth.isAdministrator" :files="data.files ?? []" />
       <MetadataList :movie="data.movie" :library-name="data.library_name" @entity="entity" />

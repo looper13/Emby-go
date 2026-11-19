@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, disposePinia, type Pinia } from 'pinia';
 import { apiClient } from '../src/api/client';
-import { javdbCommunityApi, parseJavdbListMovies, parseJavdbMatch, parseJavdbRelatedLists, parseJavdbReviews, type JavdbListMovie, type JavdbListMovies, type JavdbMatch, type JavdbPage, type JavdbReview } from '../src/api/javdb-community';
+import { javdbCommunityApi, parseJavdbListFavorites, parseJavdbListMovies, parseJavdbMatch, parseJavdbRelatedLists, parseJavdbReviews, type JavdbListMovie, type JavdbListMovies, type JavdbMatch, type JavdbPage, type JavdbReview } from '../src/api/javdb-community';
 import { r18Api } from '../src/api/r18';
 import JavdbCommunitySection from '../src/components/media/JavdbCommunitySection.vue';
 import { applyMediaVisibility } from '../src/composables/useMediaVisibility';
@@ -18,8 +18,8 @@ const unmatchedMovie: JavdbListMovie = { id: 'film-three', number: 'TEST-003', t
 const localMovies: JavdbListMovies = { ...pageIdentity, list_id: 'list1', local_library_id: 1, next_page: 2, has_more: false, items: [localMovie, unmatchedMovie] };
 let pinia: Pinia;
 let wrapper: VueWrapper | undefined;
-function component(number = 'TEST-001') {
-  wrapper = mount(JavdbCommunitySection, { props: { itemId: 5, number, localLibraryId: 1 }, global: { plugins: [pinia], stubs: { RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' } } } });
+function component(number = 'TEST-001', savedList?: { libraryId: number; listId: string; relatedPage: number }) {
+  wrapper = mount(JavdbCommunitySection, { props: { itemId: 5, number, localLibraryId: 1, savedList }, global: { plugins: [pinia], stubs: { RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' } } } });
   return wrapper;
 }
 function button(text: string) {
@@ -39,6 +39,15 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; disposePinia(pinia); applyMediaVisibility(false); vi.restoreAllMocks(); });
 
 describe('普通影片详情的 JavDB 评论与清单', () => {
+  it('从已收藏链接直接打开来源 AVdb 清单', async () => {
+    component('TEST-001', { libraryId: 2, listId: 'list1', relatedPage: 1 }); await flushPromises();
+    expect(javdbCommunityApi.reviews).not.toHaveBeenCalled();
+    expect(javdbCommunityApi.lists).toHaveBeenCalledWith(5, 2, 1, expect.any(AbortSignal), false);
+    expect(javdbCommunityApi.listMovies).toHaveBeenCalledWith(5, 2, 'list1', 1, 1, expect.any(AbortSignal), false);
+    expect(wrapper!.text()).toContain(localMovie.title);
+    expect(wrapper!.text()).toContain(unmatchedMovie.title);
+  });
+
   it('按入库影片 ID 匹配，默认加载评论，清单在点击后加载', async () => {
     component(); await flushPromises();
     expect(javdbCommunityApi.match).toHaveBeenCalledWith(5, 2, expect.any(AbortSignal), false);
@@ -83,6 +92,21 @@ describe('普通影片详情的 JavDB 评论与清单', () => {
     expect(button('下一页评论').attributes('disabled')).toBeDefined();
     expect(javdbCommunityApi.match).toHaveBeenCalledTimes(1);
     expect(javdbCommunityApi.lists).toHaveBeenCalledTimes(1);
+  });
+
+  it('仅收藏 AVdb 清单链接，不触发清单展开或影片请求', async () => {
+    vi.spyOn(javdbCommunityApi, 'setListFavorite').mockResolvedValue();
+    vi.spyOn(javdbCommunityApi, 'removeListFavorite').mockResolvedValue();
+    component(); await flushPromises();
+    await button('相关清单').trigger('click'); await flushPromises();
+    const favorite = wrapper!.get('.javdb-list-favorite');
+    await favorite.trigger('click'); await flushPromises();
+    expect(javdbCommunityApi.setListFavorite).toHaveBeenCalledWith(5, 2, 'list1', 1);
+    expect(javdbCommunityApi.listMovies).not.toHaveBeenCalled();
+    expect(favorite.attributes('aria-pressed')).toBe('true');
+    await favorite.trigger('click'); await flushPromises();
+    expect(javdbCommunityApi.removeListFavorite).toHaveBeenCalledWith(2, 'list1');
+    expect(favorite.attributes('aria-pressed')).toBe('false');
   });
 
   it('清单失败可以单独重试，未知数量不显示为零', async () => {
@@ -301,6 +325,20 @@ describe('JavDB 社区 API 契约', () => {
     await expect(javdbCommunityApi.listMovies(5, 2, '../other', 1, 2, signal)).rejects.toThrow();
   });
 
+  it('AVdb 清单收藏只保存可重开的来源引用并校验返回身份', async () => {
+    vi.mocked(apiClient.request).mockResolvedValueOnce({ favorite: true, library_id: 2, list_id: 'list1' })
+      .mockResolvedValueOnce({ items: [{ library_id: 2, movie_id: 5, list_id: 'list1', related_page: 3, name: '精选清单', movie_count: 24 }], total: 1 })
+      .mockResolvedValueOnce(null);
+    await javdbCommunityApi.setListFavorite(5, 2, 'list1', 3);
+    expect(apiClient.request).toHaveBeenNthCalledWith(1, '/api/r18/items/5/related-lists/list1/favorite?library_id=2&page=3', { auth: 'required', method: 'POST' });
+    expect(await javdbCommunityApi.listFavorites('', 0)).toEqual({ items: [{ library_id: 2, movie_id: 5, list_id: 'list1', related_page: 3, name: '精选清单', movie_count: 24 }], total: 1 });
+    expect(apiClient.request).toHaveBeenNthCalledWith(2, '/api/r18/list-favorites?search=&offset=0&limit=48', expect.objectContaining({ auth: 'required' }));
+    await javdbCommunityApi.removeListFavorite(2, 'list1');
+    expect(apiClient.request).toHaveBeenNthCalledWith(3, '/api/r18/list-favorites/2/list1', { auth: 'required', method: 'DELETE' });
+    expect(() => parseJavdbListFavorites({ items: [{ ...localMovies, list_id: '../bad' }], total: 1 })).toThrow();
+    await expect(javdbCommunityApi.setListFavorite(5, 2, '../bad', 1)).rejects.toThrow();
+  });
+
   it('拒绝异常匹配、分页及清单标识，只保留展示字段和同源封面', () => {
     expect(parseJavdbMatch(match)).toEqual(match);
     expect(() => parseJavdbMatch({ ...match, video: null })).toThrow();
@@ -308,6 +346,7 @@ describe('JavDB 社区 API 契约', () => {
     expect(() => parseJavdbReviews({ ...reviews, page: 0 })).toThrow();
     expect(() => parseJavdbReviews({ ...reviews, total: -1 })).toThrow();
     expect(parseJavdbRelatedLists({ ...pageIdentity, items: [{ id: 'valid', name: '清单', url: 'javascript:alert(1)' }], page: 1, page_size: 15, has_more: false }).items[0]).not.toHaveProperty('url');
+    expect(() => parseJavdbRelatedLists({ ...pageIdentity, items: [{ id: 'valid', name: '清单', favorite: 'yes' }], page: 1, page_size: 15, has_more: false })).toThrow();
     expect(() => parseJavdbRelatedLists({ items: [{ id: '../other', name: '清单', url: 'https://javdb.com/lists/../other' }], page: 1, page_size: 15, has_more: false })).toThrow();
     expect(parseJavdbListMovies({ ...localMovies, items: [{ ...localMovies.items[0], source_path: '/private/file' }] }).items[0]).not.toHaveProperty('source_path');
     expect(parseJavdbListMovies({ ...localMovies, items: [{ ...localMovie, cover_url: 'https://untrusted.fixture.invalid/cover.jpg' }] }).items[0]!.cover_url).toBe('');

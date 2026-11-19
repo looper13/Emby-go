@@ -51,7 +51,8 @@ func (s *Store) migrateUsers() error {
 	}
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL COLLATE NOCASE UNIQUE,password_hash TEXT NOT NULL,is_administrator INTEGER NOT NULL DEFAULT 0,is_disabled INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS user_policy(user_id INTEGER PRIMARY KEY,enable_all_folders INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS user_library_grants(user_id INTEGER NOT NULL,library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,PRIMARY KEY(user_id,library_id));`)
+CREATE TABLE IF NOT EXISTS user_library_grants(user_id INTEGER NOT NULL,library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,PRIMARY KEY(user_id,library_id));
+CREATE TABLE IF NOT EXISTS javdb_list_favorites(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,movie_id INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE,list_id TEXT NOT NULL,related_page INTEGER NOT NULL,name TEXT NOT NULL,movie_count INTEGER,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,library_id,list_id));`)
 	if err != nil {
 		return err
 	}
@@ -229,7 +230,7 @@ func (s *Store) DeleteUser(id int64) error {
 	if err = tx.QueryRow("SELECT id FROM users WHERE id=?", id).Scan(&found); err != nil {
 		return err
 	}
-	for _, table := range []string{"access_tokens", "userdata", "item_favorites", "user_policy", "user_library_grants"} {
+	for _, table := range []string{"access_tokens", "userdata", "item_favorites", "javdb_list_favorites", "user_policy", "user_library_grants"} {
 		if _, err = tx.Exec("DELETE FROM "+table+" WHERE user_id=?", id); err != nil {
 			return err
 		}

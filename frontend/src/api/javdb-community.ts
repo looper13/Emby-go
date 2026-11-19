@@ -12,7 +12,10 @@ export interface JavdbMatch {
 export interface JavdbReview {
   id: string; username: string; content: string; score: string; status: string; created_at: string;
 }
-export interface JavdbRelatedList { id: string; name: string; movie_count?: number }
+export interface JavdbRelatedList { id: string; name: string; movie_count?: number; favorite?: boolean }
+export interface JavdbListFavorite {
+  library_id: number; movie_id: number; list_id: string; related_page: number; name: string; movie_count?: number;
+}
 export interface JavdbPage<T> {
   items: T[]; page: number; page_size: number; has_more: boolean; total?: number;
   number: string; video_id: string; library_id: number;
@@ -79,8 +82,20 @@ export function parseJavdbRelatedLists(value: unknown): JavdbPage<JavdbRelatedLi
   return parsePage(value, item => {
     const r = record(item), id = identity(r.id);
     if (!/^[A-Za-z0-9_-]{1,120}$/u.test(id)) throw new Error('JavDB 清单标识格式不正确');
-    return { id, name: text(r.name), movie_count: r.movie_count === undefined ? undefined : count(r.movie_count) };
+    if (r.favorite !== undefined && typeof r.favorite !== 'boolean') throw new Error('JavDB 清单收藏状态格式不正确');
+    return { id, name: text(r.name), movie_count: r.movie_count === undefined ? undefined : count(r.movie_count), favorite: r.favorite === true };
   });
+}
+export function parseJavdbListFavorites(value: unknown): { items: JavdbListFavorite[]; total: number } {
+  const r = record(value);
+  if (!Array.isArray(r.items)) throw new Error('AVdb 清单收藏格式不正确');
+  return { items: r.items.map(item => {
+    const favorite = record(item), libraryId = count(favorite.library_id, true), movieId = count(favorite.movie_id, true);
+    const listId = identity(favorite.list_id), relatedPage = count(favorite.related_page, true);
+    if (!/^[A-Za-z0-9_-]{1,120}$/u.test(listId) || relatedPage > 9999) throw new Error('AVdb 清单收藏标识格式不正确');
+    return { library_id: libraryId, movie_id: movieId, list_id: listId, related_page: relatedPage, name: text(favorite.name),
+      movie_count: favorite.movie_count === undefined ? undefined : count(favorite.movie_count) };
+  }), total: count(r.total) };
 }
 export function parseJavdbListMovies(value: unknown): JavdbListMovies {
   const r = record(value);
@@ -126,6 +141,23 @@ export const javdbCommunityApi = {
     if (result.page !== page || result.page_size !== 15 || result.library_id !== library) throw new Error('JavDB 清单分页或来源不一致');
     return result;
   },
+  async listFavorites(search: string, offset: number, signal?: AbortSignal): Promise<{ items: JavdbListFavorite[]; total: number }> {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('AVdb 收藏分页位置不正确');
+    const query = new URLSearchParams({ search, offset: String(offset), limit: '48' });
+    return parseJavdbListFavorites(await apiClient.request(`/api/r18/list-favorites?${query}`, { auth: 'required', signal }));
+  },
+  async setListFavorite(item: number, library: number, listId: string, page: number) {
+    count(item, true); count(library, true); count(page, true);
+    if (!/^[A-Za-z0-9_-]{1,120}$/u.test(listId) || page > 9999) throw new Error('AVdb 清单收藏条件不正确');
+    const query = new URLSearchParams({ library_id: String(library), page: String(page) });
+    const response = record(await apiClient.request(`/api/r18/items/${item}/related-lists/${listId}/favorite?${query}`, { auth: 'required', method: 'POST' }));
+    if (response.favorite !== true || response.library_id !== library || response.list_id !== listId) throw new Error('AVdb 清单收藏响应不一致');
+  },
+  async removeListFavorite(library: number, listId: string) {
+    count(library, true);
+    if (!/^[A-Za-z0-9_-]{1,120}$/u.test(listId)) throw new Error('AVdb 清单收藏条件不正确');
+    await apiClient.request(`/api/r18/list-favorites/${library}/${listId}`, { auth: 'required', method: 'DELETE' });
+  },
   async listMovies(item: number, library: number, listId: string, page: number, relatedPage: number, signal?: AbortSignal, refresh = false) {
     count(item, true); count(library, true); count(page, true); count(relatedPage, true);
     if (!/^[A-Za-z0-9_-]{1,120}$/u.test(listId) || page > 9999 || relatedPage > 9999) throw new Error('关联清单查询条件不正确');
@@ -136,3 +168,9 @@ export const javdbCommunityApi = {
     return result;
   },
 };
+
+export function javdbListFavoriteDestination(item: JavdbListFavorite) {
+  return { path: `/item/${item.movie_id}`, query: {
+    javdb_library_id: String(item.library_id), javdb_list_id: item.list_id, javdb_related_page: String(item.related_page),
+  } };
+}

@@ -354,6 +354,58 @@ func TestR18CommunityListMoviesRetainEntirelyUnmatchedPages(t *testing.T) {
 	}
 }
 
+func TestR18CommunityListFavoritesUseAuthenticatedAVdbReferences(t *testing.T) {
+	f := newJavdbListFixture(t, func(w http.ResponseWriter, req *http.Request) {
+		writeJavdbListData(w, map[string]any{"movies": []any{}, "has_next": false})
+	})
+	base := "/api/r18/items/" + strconv.FormatInt(f.parent, 10) + "/related-lists"
+	query := "?library_id=" + strconv.FormatInt(f.source.ID, 10)
+	lists := r18TestCall(t, f.server.URL, "GET", base+query+"&page=2", f.token, nil, 200)
+	item := lists["items"].([]any)[0].(map[string]any)
+	if item["id"] != "page-two" || item["favorite"] != false {
+		t.Fatal("关联清单收藏初始状态错误", item)
+	}
+	path := base + "/page-two/favorite" + query + "&page=2"
+	result := r18TestCall(t, f.server.URL, "POST", path, f.token, nil, 200)
+	if result["favorite"] != true || result["library_id"] != float64(f.source.ID) || result["list_id"] != "page-two" {
+		t.Fatal("收藏响应不匹配", result)
+	}
+	lists = r18TestCall(t, f.server.URL, "GET", base+query+"&page=2", f.token, nil, 200)
+	if lists["items"].([]any)[0].(map[string]any)["favorite"] != true {
+		t.Fatal("关联清单状态未更新", lists)
+	}
+	favorites := r18TestCall(t, f.server.URL, "GET", "/api/r18/list-favorites?search=关联&offset=0&limit=48", f.token, nil, 200)
+	items := favorites["items"].([]any)
+	if favorites["total"] != float64(1) || len(items) != 1 {
+		t.Fatal("AVdb 清单收藏没有出现在用户清单中", favorites)
+	}
+	saved := items[0].(map[string]any)
+	if saved["library_id"] != float64(f.source.ID) || saved["movie_id"] != float64(f.parent) || saved["list_id"] != "page-two" || saved["related_page"] != float64(2) || saved["name"] != "关联清单" {
+		t.Fatal("保存的 AVdb 清单上下文错误", saved)
+	}
+	if strings.Contains(mustJSON(t, favorites), "list-fixture-key") || strings.Contains(mustJSON(t, favorites), f.source.Path) {
+		t.Fatal("清单收藏暴露了 AVdb 凭据或连接地址", favorites)
+	}
+	viewer, err := f.app.db.CreateUser("favorite-viewer", "password-1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.app.db.SaveUserToken("favorite-viewer-token", viewer.ID); err != nil {
+		t.Fatal(err)
+	}
+	other := r18TestCall(t, f.server.URL, "GET", "/api/r18/list-favorites", "favorite-viewer-token", nil, 200)
+	if other["total"] != float64(0) || len(other["items"].([]any)) != 0 {
+		t.Fatal("AVdb 清单收藏泄露给其他用户", other)
+	}
+	r18TestCall(t, f.server.URL, "DELETE", "/api/r18/list-favorites/"+strconv.FormatInt(f.source.ID, 10)+"/page-two", "favorite-viewer-token", nil, 204)
+	remaining := r18TestCall(t, f.server.URL, "GET", "/api/r18/list-favorites", f.token, nil, 200)
+	if remaining["total"] != float64(1) {
+		t.Fatal("其他用户取消了此账号的清单收藏", remaining)
+	}
+	r18TestCall(t, f.server.URL, "POST", base+"/unknown/favorite"+query+"&page=2", f.token, nil, 404)
+	r18TestCall(t, f.server.URL, "DELETE", "/api/r18/list-favorites/not-a-library/page-two", f.token, nil, 400)
+}
+
 func TestR18CommunityListMoviesPlaybackFlagRechecksActualSTRM(t *testing.T) {
 	var calls atomic.Int64
 	f := newJavdbListFixture(t, func(w http.ResponseWriter, req *http.Request) {

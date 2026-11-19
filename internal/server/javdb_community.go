@@ -49,6 +49,13 @@ type javdbListMoviePage struct {
 	HasMore        bool             `json:"has_more"`
 }
 
+type javdbFavoriteableList struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	MovieCount *int   `json:"movie_count,omitempty"`
+	Favorite   bool   `json:"favorite"`
+}
+
 type javdbCommunityIdentity struct {
 	Number    string `json:"number"`
 	VideoID   string `json:"video_id"`
@@ -60,6 +67,9 @@ func (a *App) registerJavdbCommunityRoutes(browse *gin.RouterGroup) {
 	browse.GET("/items/:id/reviews", a.bind((*App).javdbItemReviews))
 	browse.GET("/items/:id/related-lists", a.bind((*App).javdbItemRelatedLists))
 	browse.GET("/items/:id/related-lists/:list/movies", a.bind((*App).javdbItemListMovies))
+	browse.POST("/items/:id/related-lists/:list/favorite", a.bind((*App).javdbItemListFavorite))
+	browse.GET("/list-favorites", a.bind((*App).javdbListFavorites))
+	browse.DELETE("/list-favorites/:library/:list", a.bind((*App).deleteJavdbListFavorite))
 }
 
 func (a *App) javdbCommunityItem(c *gin.Context) (store.Movie, store.Library, bool) {
@@ -193,10 +203,19 @@ func (a *App) javdbCommunityRead(c *gin.Context, lists bool) {
 			a.javdbCommunityFailure(c, "相关清单读取", err)
 			return
 		}
+		items := make([]javdbFavoriteableList, 0, len(result.Items))
+		for _, item := range result.Items {
+			items = append(items, javdbFavoriteableList{ID: item.ID, Name: item.Name, MovieCount: item.MovieCount,
+				Favorite: a.db.IsJavdbListFavorite(library.ID, item.ID)})
+		}
 		c.JSON(http.StatusOK, struct {
-			r18.RelatedListPage
+			Items    []javdbFavoriteableList `json:"items"`
+			Page     int                     `json:"page"`
+			PageSize int                     `json:"page_size"`
+			HasMore  bool                    `json:"has_more"`
+			Total    *int                    `json:"total,omitempty"`
 			javdbCommunityIdentity
-		}{result, identity})
+		}{items, result.Page, result.PageSize, result.HasMore, result.Total, identity})
 		return
 	}
 	result, err := source.Reviews(ctx, video.ID, page, limit)
@@ -212,6 +231,84 @@ func (a *App) javdbCommunityRead(c *gin.Context, lists bool) {
 
 func (a *App) javdbItemReviews(c *gin.Context)      { a.javdbCommunityRead(c, false) }
 func (a *App) javdbItemRelatedLists(c *gin.Context) { a.javdbCommunityRead(c, true) }
+
+func (a *App) javdbItemListFavorite(c *gin.Context) {
+	movie, library, ok := a.javdbCommunityItem(c)
+	if !ok {
+		return
+	}
+	listID := c.Param("list")
+	if !javdbListID.MatchString(listID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 AVdb 清单标识"})
+		return
+	}
+	page, limit, ok := javdbCommunityPage(c)
+	if !ok {
+		return
+	}
+	if limit != 15 || strings.TrimSpace(movie.Number) == "" || movie.Television != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 AVdb 关联清单"})
+		return
+	}
+	source, ok := a.javdbCommunityClient(c, library)
+	if !ok {
+		return
+	}
+	ctx, cancel := r18RequestContext(c)
+	defer cancel()
+	video, err := source.MatchNumber(ctx, movie.Number)
+	if err != nil {
+		a.javdbCommunityFailure(c, "清单收藏校验", err)
+		return
+	}
+	result, err := source.RelatedLists(ctx, video.ID, page, limit)
+	if err != nil {
+		a.javdbCommunityFailure(c, "清单收藏校验", err)
+		return
+	}
+	for _, item := range result.Items {
+		if item.ID != listID {
+			continue
+		}
+		if err := a.db.SaveJavdbListFavorite(store.JavdbListFavorite{LibraryID: library.ID, MovieID: movie.ID,
+			ListID: item.ID, RelatedPage: page, Name: item.Name, MovieCount: item.MovieCount}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存 AVdb 清单收藏失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"favorite": true, "library_id": library.ID, "list_id": item.ID})
+		return
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": "该影片的 AVdb 关联清单不存在"})
+}
+
+func (a *App) javdbListFavorites(c *gin.Context) {
+	offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, limitErr := strconv.Atoi(c.DefaultQuery("limit", "48"))
+	if err != nil || limitErr != nil || offset < 0 || offset > 1000000 || limit < 1 || limit > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 AVdb 清单收藏分页条件"})
+		return
+	}
+	items, total, err := a.db.JavdbListFavorites(strings.TrimSpace(c.Query("search")), offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 AVdb 清单收藏失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
+}
+
+func (a *App) deleteJavdbListFavorite(c *gin.Context) {
+	libraryID, err := strconv.ParseInt(c.Param("library"), 10, 64)
+	listID := c.Param("list")
+	if err != nil || libraryID <= 0 || !javdbListID.MatchString(listID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 AVdb 清单标识"})
+		return
+	}
+	if err := a.db.DeleteJavdbListFavorite(libraryID, listID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "取消 AVdb 清单收藏失败"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
 
 func (a *App) javdbItemListMovies(c *gin.Context) {
 	movie, library, ok := a.javdbCommunityItem(c)

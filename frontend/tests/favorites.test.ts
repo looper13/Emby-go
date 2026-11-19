@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import FavoriteButton from '../src/components/media/FavoriteButton.vue';
 import FavoritesPage from '../src/pages/FavoritesPage.vue';
 import { favoriteDestination, favoriteEntityId, favoritesApi, parseFavoriteItem, type FavoriteItem } from '../src/api/favorites';
+import { javdbCommunityApi, javdbListFavoriteDestination, type JavdbListFavorite } from '../src/api/javdb-community';
 import { apiClient } from '../src/api/client';
 import { useToastStore } from '../src/stores/toasts';
 import { useAuthStore } from '../src/stores/auth';
@@ -77,6 +78,10 @@ describe('favorite controls and API', () => {
       expect(favoriteDestination({ ...item, Type: Type!, Id: favoriteEntityId(key!, 'Name'), Name: 'Name' })).toEqual({ path: '/items', query: { [key!]: 'Name' } });
     }
   });
+  it('AVdb 清单链接回到来源影片并自动定位原清单', () => {
+    const link: JavdbListFavorite = { library_id: 2, movie_id: 5, list_id: 'list_1', related_page: 3, name: '精选清单' };
+    expect(javdbListFavoriteDestination(link)).toEqual({ path: '/item/5', query: { javdb_library_id: '2', javdb_list_id: 'list_1', javdb_related_page: '3' } });
+  });
 });
 
 describe('favorites page', () => {
@@ -104,5 +109,20 @@ describe('favorites page', () => {
     list.mockRejectedValueOnce(new Error('offline')); await w.get('[aria-label="刷新收藏"]').trigger('click'); await flushPromises();
     expect(w.get('[role="alert"]').text()).toContain('offline');
     await w.get('[role="alert"] button').trigger('click'); await flushPromises(); expect(w.find('[role="alert"]').exists()).toBe(false);
+  });
+  it('shows saved AVdb links in their own tab and removes them without loading media favorites', async () => {
+    const link: JavdbListFavorite = { library_id: 2, movie_id: 5, list_id: 'list_1', related_page: 3, name: '精选清单', movie_count: 24 };
+    const list = vi.spyOn(javdbCommunityApi, 'listFavorites').mockResolvedValueOnce({ items: [link], total: 1 }).mockResolvedValue({ items: [], total: 0 });
+    const remove = vi.spyOn(javdbCommunityApi, 'removeListFavorite').mockResolvedValue();
+    const mediaList = vi.spyOn(favoritesApi, 'list');
+    const { w } = await page('/favorites?type=JavDB');
+    expect(list).toHaveBeenCalledWith('', 0, expect.any(AbortSignal));
+    expect(mediaList).not.toHaveBeenCalled();
+    expect(w.text()).toContain('AVdb 清单'); expect(w.text()).toContain('24 部');
+    const linkComponent = w.findAllComponents({ name: 'RouterLink' }).find(component => component.classes().includes('favorite-link'))!;
+    expect(linkComponent.props('to')).toEqual(javdbListFavoriteDestination(link));
+    await w.get('.javdb-list-favorite').trigger('click'); await flushPromises();
+    expect(remove).toHaveBeenCalledWith(2, 'list_1');
+    expect(w.text()).toContain('暂无收藏');
   });
 });

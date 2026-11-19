@@ -6,9 +6,13 @@ import { javdbCommunityApi, type JavdbListMovies, type JavdbMatch, type JavdbPag
 import { r18Api } from '../../api/r18';
 import { usePageRequest } from '../../composables/usePageRequest';
 import { useAuthStore } from '../../stores/auth';
+import JavdbListFavoriteButton from './JavdbListFavoriteButton.vue';
 import R18Cover from './R18Cover.vue';
 
-const props = defineProps<{ itemId: number; number: string; localLibraryId: number }>();
+const props = defineProps<{
+  itemId: number; number: string; localLibraryId: number;
+  savedList?: { libraryId: number; listId: string; relatedPage: number };
+}>();
 const emit = defineEmits<{ open: [id: number] }>();
 const auth = useAuthStore();
 const matchScope = usePageRequest(), reviewScope = usePageRequest(), listScope = usePageRequest();
@@ -28,6 +32,7 @@ const selectedList = shallowRef<JavdbRelatedList>();
 const selectedRelatedPage = ref(1);
 const listMovies = shallowRef<JavdbListMovies>();
 const localMovieCount = computed(() => listMovies.value?.items.filter(movie => movie.has_local).length ?? 0);
+const savedListTarget = computed(() => props.savedList);
 const movieBusy = ref(false), movieError = ref(''), movieAttempt = ref(1);
 const expanded = ref(new Set<string>());
 const matched = computed(() => phase.value === 'ready' && match.value?.status === 'matched');
@@ -56,7 +61,11 @@ async function loadMatch(current: ReturnType<typeof matchScope.begin>, refresh =
     const result = await javdbCommunityApi.match(props.itemId, selectedLibrary.value, current.signal, refresh);
     if (!current.isCurrent()) return;
     match.value = result; phase.value = 'ready';
-    if (result.status === 'matched') void loadReviews();
+    if (result.status === 'matched') {
+      const target = savedListTarget.value;
+      if (target && target.libraryId === result.library_id) { tab.value = 'lists'; void loadLists(target.relatedPage); }
+      else void loadReviews();
+    }
   } catch (cause) {
     if (current.isCurrent()) { problem.value = message(cause); phase.value = 'error'; }
   }
@@ -70,7 +79,9 @@ async function initialize() {
     if (!current.isCurrent()) return;
     libraries.value = result.items ?? [];
     if (!libraries.value.length) { selectedLibrary.value = 0; phase.value = 'unavailable'; return; }
-    if (!libraries.value.some(library => library.Id === selectedLibrary.value)) selectedLibrary.value = libraries.value[0]!.Id;
+    const requestedLibrary = savedListTarget.value?.libraryId;
+    if (requestedLibrary && libraries.value.some(library => library.Id === requestedLibrary)) selectedLibrary.value = requestedLibrary;
+    else if (!libraries.value.some(library => library.Id === selectedLibrary.value)) selectedLibrary.value = libraries.value[0]!.Id;
     await loadMatch(current);
   } catch (cause) {
     if (current.isCurrent()) { problem.value = message(cause); phase.value = 'error'; }
@@ -111,6 +122,14 @@ async function loadLists(page = 1, refresh = false) {
     }
     resetListMovies();
     lists.value = result;
+    const target = savedListTarget.value;
+    if (target && target.libraryId === identity.library_id && target.relatedPage === page) {
+      const selected = result.items.find(item => item.id === target.listId);
+      if (selected) {
+        selectedList.value = selected; selectedRelatedPage.value = result.page;
+        void loadListMovies();
+      } else movieError.value = '收藏的 AVdb 清单已无法从当前影片打开。';
+    }
   } catch (cause) {
     if (current.isCurrent() && match.value === identity) listError.value = message(cause);
   } finally {
@@ -147,6 +166,10 @@ function selectTab(value: 'reviews' | 'lists') {
   tab.value = value;
   if (value === 'lists' && !lists.value && !listBusy.value && !listError.value) void loadLists();
 }
+function setListFavoriteState(id: string, favorite: boolean) {
+  if (!lists.value) return;
+  lists.value = { ...lists.value, items: lists.value.items.map(list => list.id === id ? { ...list, favorite } : list) };
+}
 function toggleReview(id: string) {
   const next = new Set(expanded.value);
   if (next.has(id)) next.delete(id); else next.add(id);
@@ -155,7 +178,7 @@ function toggleReview(id: string) {
 function reviewBody(review: JavdbReview) {
   return review.content.length > 600 && !expanded.value.has(review.id) ? `${review.content.slice(0, 600)}…` : review.content;
 }
-watch(() => [props.itemId, props.number, props.localLibraryId] as const, () => { void initialize(); }, { immediate: true });
+watch(() => [props.itemId, props.number, props.localLibraryId, props.savedList?.libraryId, props.savedList?.listId, props.savedList?.relatedPage] as const, () => { void initialize(); }, { immediate: true });
 </script>
 
 <template>
@@ -195,7 +218,10 @@ watch(() => [props.itemId, props.number, props.localLibraryId] as const, () => {
         <div v-if="listError" class="javdb-error"><p role="alert">{{ listError }}</p><button class="btn" :disabled="listBusy" @click="loadLists(listAttempt, true)">重试清单</button></div>
         <p v-if="listBusy" class="hint" role="status">正在读取第 {{ listAttempt }} 页清单…</p>
         <p v-if="lists && !lists.items.length && !listBusy && !listError" class="hint javdb-state">当前影片暂无相关清单。</p>
-        <div v-if="lists?.items.length" class="javdb-lists"><button v-for="list in lists.items" :key="list.id" type="button" class="javdb-list" :class="{ 'is-selected': selectedList?.id === list.id }" :aria-expanded="selectedList?.id === list.id" aria-controls="javdb-list-movies" @click="selectList(list)"><List :size="20" aria-hidden="true" /><span><strong>{{ list.name }}</strong><span class="hint"><span v-if="list.movie_count !== undefined">清单 {{ list.movie_count }} 部 · </span>查看清单影片</span></span><ChevronDown :size="16" aria-hidden="true" /></button></div>
+        <div v-if="lists?.items.length" class="javdb-lists"><div v-for="list in lists.items" :key="list.id" class="javdb-list-row">
+          <button type="button" class="javdb-list" :class="{ 'is-selected': selectedList?.id === list.id }" :aria-expanded="selectedList?.id === list.id" aria-controls="javdb-list-movies" @click="selectList(list)"><List :size="20" aria-hidden="true" /><span><strong>{{ list.name }}</strong><span class="hint"><span v-if="list.movie_count !== undefined">清单 {{ list.movie_count }} 部 · </span>查看清单影片</span></span><ChevronDown :size="16" aria-hidden="true" /></button>
+          <JavdbListFavoriteButton :library-id="lists.library_id" :list-id="list.id" :favorite="list.favorite" :label="list.name" :item-id="itemId" :related-page="lists.page" @changed="setListFavoriteState(list.id, $event)" />
+        </div></div>
         <section v-if="selectedList" id="javdb-list-movies" class="javdb-movie-list" :aria-busy="movieBusy" aria-labelledby="javdb-list-movies-title">
           <div class="javdb-movie-heading"><h3 id="javdb-list-movies-title">{{ selectedList.name }}</h3><span v-if="listMovies" class="hint">已加载 {{ listMovies.items.length }} 部 · 本地可播放 {{ localMovieCount }} 部</span></div>
           <div v-if="movieError" class="javdb-error"><p role="alert">{{ movieError }}</p><button class="btn" :disabled="movieBusy" @click="loadListMovies(movieAttempt, true)">重试影片列表</button></div>
@@ -240,8 +266,9 @@ watch(() => [props.itemId, props.number, props.localLibraryId] as const, () => {
 .javdb-score { color: var(--text); }
 .javdb-review-body { max-width: 80ch; margin: 12px 0 0; color: var(--text); font-size: 15px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .javdb-expand { margin-top: 12px; }
-.javdb-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; }
-.javdb-list { display: flex; align-items: center; gap: 12px; min-width: 0; width: 100%; min-height: 44px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.javdb-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px; }
+.javdb-list-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.javdb-list { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; width: 100%; min-height: 44px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .javdb-list > span { display: grid; gap: 8px; flex: 1; min-width: 0; }
 .javdb-list strong { overflow-wrap: anywhere; line-height: 1.5; }
 .javdb-list > svg { flex-shrink: 0; }

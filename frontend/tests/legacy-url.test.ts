@@ -73,6 +73,10 @@ describe('authentication destinations', () => {
     expect(sanitizeReturnTo('/overview')).toBe('/overview');
     expect(sanitizeReturnTo('/actors')).toBe('/actors');
     expect(sanitizeReturnTo('/items?search=https%3A%2F%2Fexample.com')).toBe('/items?search=https%3A%2F%2Fexample.com');
+    expect(sanitizeReturnTo('/item/123?javdb_library_id=2&javdb_list_id=list_1&javdb_related_page=3'))
+      .toBe('/item/123?javdb_library_id=2&javdb_list_id=list_1&javdb_related_page=3');
+    expect(sanitizeReturnTo('/item/123?javdb_library_id=bad&javdb_list_id=list_1&javdb_related_page=3'))
+      .toBe('/item/123?javdb_list_id=list_1&javdb_related_page=3');
   });
 
   it('converts a legacy login returnTo only when it is an internal allowed route', () => {
