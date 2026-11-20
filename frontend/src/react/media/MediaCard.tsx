@@ -79,7 +79,7 @@ export function MediaCard({ movie, tags, userdata, busy = new Set(), canManage =
         <small>
           {movie.television ? <span className="meta-tag">{movie.television.title} · S{movie.television.season}E{movie.television.episode}</span>
             : number ? <span className="meta-tag mono">{number}</span> : null}
-          {movie.Rating > 0 && <span className="meta-rating"><Star size={10} fill="currentColor" aria-hidden="true" />{movie.Rating}</span>}
+          {movie.Rating > 0 && <span className="meta-rating"><Star size={11} fill="currentColor" aria-hidden="true" />{movie.Rating}</span>}
           {movie.Year > 0 && <span className="meta-year">{movie.Year}</span>}
           {movie.OriginalTitle && !movie.television && <span className="meta-orig" title={movie.OriginalTitle}>{movie.OriginalTitle}</span>}
           {!movie.television && !movie.Year && !movie.Rating && !movie.OriginalTitle && <span className="meta-protocol">{movie.source_protocol}</span>}

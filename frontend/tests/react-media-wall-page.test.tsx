@@ -99,6 +99,19 @@ describe('React media wall page', () => {
     expect(items.mock.calls.at(-1)?.[0].get('order')).toBe('desc')
   })
 
+  it('loads movies when filtering by library', async () => {
+    useReactAuthStore.setState({ token: 'test-token', user: authFixture.User, phase: 'authenticated' })
+    vi.spyOn(catalogApi, 'libraries').mockResolvedValue({ items: [{ Id: 2, Name: 'guangya', Path: '/media/guangya', Type: 'movies' }], total: 1 })
+    const items = vi.spyOn(catalogApi, 'items').mockResolvedValue({ items: [movie], total: 1, image_tags: {} })
+    render(<Harness initialEntry="/items?library_id=2" />)
+
+    expect(await screen.findByRole('region', { name: '影视库' })).toBeInTheDocument()
+    await waitFor(() => expect(items).toHaveBeenCalled())
+    expect(items.mock.calls.at(-1)?.[0].get('library_id')).toBe('2')
+    expect(await screen.findByRole('button', { name: '清除媒体库：guangya' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: new RegExp(`查看 ${movie.Title} 详情`) })).toBeInTheDocument()
+  })
+
   it('returns from detail with 300 loaded cards, the original focus and scroll, without refetching pages', async () => {
     const user = userEvent.setup()
     useReactAuthStore.setState({ token: 'test-token', user: authFixture.User, phase: 'authenticated' })

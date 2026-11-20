@@ -6,14 +6,22 @@
   place-items: center;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 8px;
   color: var(--muted);
   background: var(--panel-2);
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 .favorite-button:hover,
-.favorite-button.selected { color: #ee8195; border-color: #b9687a; }
+.favorite-button.selected {
+  color: #ff5c7c;
+  border-color: rgba(255, 92, 124, 0.45);
+  background: color-mix(in srgb, #ff5c7c 10%, var(--panel-2));
+}
+.favorite-button.selected {
+  box-shadow: 0 2px 8px rgba(255, 92, 124, 0.25);
+}
 .favorite-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .favorite-button:disabled { opacity: .55; cursor: wait; }
 

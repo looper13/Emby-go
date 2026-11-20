@@ -3,31 +3,35 @@
 .react-tv-heading h3 { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); font: 600 14px/1.35 var(--font-sans, sans-serif); }
 .react-tv-heading .favorite-button { width: 30px; height: 30px; flex-basis: 30px; }
 .react-tv-count { margin-left: auto; color: var(--dim); font-size: 10px; white-space: nowrap; }
-.react-tv-seasons { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; width: fit-content; max-width: 100%; margin: 8px 0 12px; padding: 2px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); }
-.react-tv-seasons button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; font: 500 11px var(--font-sans); cursor: pointer; }
+.react-tv-seasons { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; width: fit-content; max-width: 100%; margin: 8px 0 12px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); }
+.react-tv-seasons button { min-height: 28px; padding: 0 12px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font: 500 11.5px var(--font-sans); cursor: pointer; transition: all 0.15s ease; }
 .react-tv-seasons button:hover { color: var(--text); }
-.react-tv-seasons button.is-active { color: var(--text); background: var(--panel); box-shadow: inset 0 0 0 1px var(--line-strong), 0 1px 2px rgba(0, 0, 0, .12); font-weight: 600; }
+.react-tv-seasons button.is-active { color: var(--text); background: var(--panel); box-shadow: 0 1px 4px rgba(0, 0, 0, .14); font-weight: 600; }
 .react-tv-season-favorite { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 .react-tv-season-favorite strong { color: var(--text); font-size: 11px; }
 .react-tv-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--danger); font-size: 11px; }
 .react-tv-error .react-wall-more { min-height: 28px; display: inline-flex; gap: 5px; }
-.react-tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--wall-card-min-width, 176px)), 1fr)); align-items: start; gap: 14px 11px; margin-bottom: 12px; }
+.react-tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--wall-card-min-width, 176px)), 1fr)); align-items: start; gap: 18px 14px; margin-bottom: 14px; }
 .react-tv-grid.is-episodes { grid-template-columns: repeat(auto-fill, minmax(min(100%, max(210px, calc(var(--wall-card-min-width, 176px) * 1.25))), 1fr)); }
 .react-tv-entry { position: relative; min-width: 0; }
-.react-tv-card { width: 100%; min-width: 0; display: grid; align-content: start; gap: 5px; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
-.react-tv-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 5px; }
-.react-tv-cover { position: relative; width: 100%; aspect-ratio: 2 / 3; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel-2); text-align: center; box-shadow: var(--shadow); }
+.react-tv-card { width: 100%; min-width: 0; display: grid; align-content: start; gap: 6px; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1); }
+.react-tv-card:hover { transform: translateY(-4px); }
+.react-tv-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; }
+.react-tv-cover { position: relative; width: 100%; aspect-ratio: 2 / 3; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--panel-2); text-align: center; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+.react-tv-card:hover .react-tv-cover { border-color: var(--accent); box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 25%, transparent); }
 .react-tv-grid.is-episodes .react-tv-cover { aspect-ratio: 16 / 9; }
-.react-tv-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.react-tv-cover img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.react-tv-card:hover .react-tv-cover img { transform: scale(1.04); }
 .react-tv-cover > span { display: -webkit-box; max-width: 100%; padding: 10px; overflow: hidden; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
-.react-tv-card strong { overflow: hidden; color: var(--text); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.react-tv-card small { overflow: hidden; color: var(--dim); font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.react-tv-entry .television-favorite-button { position: absolute; z-index: 2; top: 5px; right: 5px; }
-.react-tv-skeleton { aspect-ratio: 2 / 3; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-2); }
+.react-tv-card strong { overflow: hidden; color: var(--text); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; transition: color 0.15s ease; }
+.react-tv-card:hover strong { color: var(--accent); }
+.react-tv-card small { overflow: hidden; color: var(--dim); font-size: 10px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.react-tv-entry .television-favorite-button { position: absolute; z-index: 2; top: 6px; right: 6px; }
+.react-tv-skeleton { aspect-ratio: 2 / 3; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
 .react-tv-grid.is-episodes .react-tv-skeleton { aspect-ratio: 16 / 9; }
 .react-tv-state { margin: 9px 0; color: var(--dim); font-size: 11px; }
-.react-tv-load-more { min-height: 30px; padding: 0 11px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); background: var(--panel); font: 11px var(--font-sans); cursor: pointer; }
-.react-tv-load-more:hover { color: var(--text); border-color: var(--line-strong); }
+.react-tv-load-more { min-height: 32px; padding: 0 16px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel); font: 500 11.5px var(--font-sans); cursor: pointer; transition: all 0.15s ease; }
+.react-tv-load-more:hover { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
 .react-tv-load-more:disabled { opacity: .55; cursor: wait; }
 
 @media (max-width: 480px) {

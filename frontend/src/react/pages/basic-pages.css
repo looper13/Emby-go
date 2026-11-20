@@ -43,18 +43,29 @@
 .react-overview-empty svg { color: var(--console-dim); }
 .react-overview-empty strong { color: var(--console-text); font-size: 13px; }
 .react-overview-empty small { font-size: 11px; }
+.react-overview-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--wall-card-min-width, 176px)), 1fr)); align-items: start; gap: 18px 14px; }
 .react-favorites-tabs { display: flex; flex-wrap: wrap; gap: 5px 15px; border-bottom: 1px solid var(--console-line); margin: 0 0 14px; }
 .react-favorites-tabs button { min-height: 34px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; color: var(--console-muted); background: transparent; font-size: 12px; cursor: pointer; }
 .react-favorites-tabs button[aria-selected="true"] { border-bottom-color: var(--console-accent); color: var(--console-accent); }
-.react-favorites-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,145px),1fr)); gap: 14px 12px; }
-.react-favorite-card { position: relative; min-width: 0; }
+.react-card-sizes { margin: 0; padding: 2px; border: 1px solid var(--console-line); border-radius: 8px; background: var(--console-panel-raised); display: inline-flex; align-items: center; gap: 2px; height: 32px; }
+.react-card-sizes legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.react-card-sizes button { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; color: var(--console-dim); background: transparent; font: 600 11px var(--font-sans); cursor: pointer; transition: all 0.15s ease; }
+.react-card-sizes button:hover { color: var(--console-text); }
+.react-card-sizes button[aria-pressed="true"] { color: #ffffff; background: var(--console-accent); box-shadow: 0 1px 4px color-mix(in srgb, var(--console-accent) 30%, transparent); }
+.react-favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--wall-card-min-width, 176px)), 1fr)); gap: 18px 14px; }
+.react-favorite-card { position: relative; min-width: 0; transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1); }
+.react-favorite-card:hover { transform: translateY(-4px); }
 .react-favorite-card a { display: flex; flex-direction: column; color: inherit; text-decoration: none; }
-.react-favorite-art { display: grid; place-items: center; aspect-ratio: 2/3; overflow: hidden; border: 1px solid var(--console-line); border-radius: 5px; color: var(--console-dim); background: var(--console-panel-raised); }
-.react-favorite-art img { width: 100%; height: 100%; object-fit: cover; }
+.react-favorite-art { display: grid; place-items: center; aspect-ratio: 2/3; overflow: hidden; border: 1px solid var(--console-line); border-radius: 10px; color: var(--console-dim); background: #111520; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); transition: border-color 0.22s ease, box-shadow 0.22s ease; }
+.react-favorite-card:hover .react-favorite-art { border-color: var(--console-accent); box-shadow: 0 10px 26px color-mix(in srgb, var(--console-accent) 28%, transparent); }
+.react-favorite-art img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.react-favorite-card:hover .react-favorite-art img { transform: scale(1.04); }
 .react-favorite-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 7px 2px; }
-.react-favorite-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.react-favorite-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--console-muted); font-size: 10px; }
-.react-favorite-remove { position: absolute; z-index: 2; top: 5px; right: 5px; width: 29px; height: 29px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.15); border-radius: 50%; color: #fb7185; background: rgba(9,12,22,.82); cursor: pointer; }
+.react-favorite-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; transition: color 0.15s ease; }
+.react-favorite-card:hover .react-favorite-copy strong { color: var(--console-accent); }
+.react-favorite-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--console-muted); font-size: 11px; }
+.react-favorite-remove { position: absolute; z-index: 2; top: 6px; right: 6px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.18); border-radius: 50%; color: #fb7185; background: rgba(9,12,22,.82); backdrop-filter: blur(8px); cursor: pointer; transition: all 0.15s ease; }
+.react-favorite-remove:hover { transform: scale(1.08); background: rgba(9,12,22,.95); color: #ff4d6d; }
 .react-page-auth-sections { max-width: 850px; }
 @keyframes react-page-spin { to { transform: rotate(360deg); } }
 @media(max-width:640px) {
@@ -63,6 +74,7 @@
   .react-page-field.full,.react-page-footer { grid-column: 1; }
   .react-page-heading { align-items: flex-start; }
   .react-page-stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .react-overview-shelf { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 7px; }
   .react-favorites-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px 10px; }
 }
 @media(prefers-reduced-motion:reduce) { .react-page-state[role="status"] svg { animation: none; } }

@@ -131,7 +131,12 @@ export function MediaWallPage() {
         const result = await catalogApi.libraries(current.signal)
         if (!current.isCurrent()) return
         const visibleLibraries = (result.items || []).filter((item) => item.Enabled !== false)
-        setLibraries(visibleLibraries)
+        setLibraries((prev) => {
+          if (prev.length === visibleLibraries.length && prev.every((p, i) => p.Id === visibleLibraries[i]?.Id && p.Name === visibleLibraries[i]?.Name && p.Type === visibleLibraries[i]?.Type)) {
+            return prev
+          }
+          return visibleLibraries
+        })
 
         const selected = visibleLibraries.find((item) => String(item.Id) === libraryID)
         if (selected?.SourceType === 'avdb_javdb') {
@@ -146,10 +151,14 @@ export function MediaWallPage() {
           return
         }
 
+        const isTv = selected?.Type === 'tvshows' || selected?.Type === 'mixed'
+        const browseTv = isTv && query.get('view') !== 'index' && !query.get('status') && !activeEntity && !query.get('scrape') && query.get('favorite') !== 'true'
+        const shouldShowWall = !browseTv || selected?.Type !== 'tvshows'
+
         const params = new URLSearchParams(queryKey)
-        if (browseTelevision && library?.Type === 'mixed') params.set('media_type', 'Movie')
+        if (browseTv && selected?.Type === 'mixed') params.set('media_type', 'Movie')
         const restored = wallPrepare(params, preservePosition)
-        if (showWall && !restored) {
+        if (shouldShowWall && !restored) {
           const wanted = Math.max(WALL_PAGE_SIZE, viewTarget?.wallCount || WALL_PAGE_SIZE)
           while (current.isCurrent() && useReactMediaWallStore.getState().items.length < wanted
             && !useReactMediaWallStore.getState().done && !useReactMediaWallStore.getState().error) {
@@ -184,12 +193,10 @@ export function MediaWallPage() {
 
     void enter()
     return () => {
-      clearTimeout(searchTimer.current)
-      randomController.current?.abort()
       scope.cancel()
       wallCancel()
     }
-  }, [browseTelevision, history.target, library, libraryID, location.search, navigate, queryKey, revision, scope, showWall, wallCancel, wallLoadMore, wallPrepare, wallRefresh])
+  }, [history.target, libraryID, location.search, navigate, queryKey, revision, scope, wallCancel, wallLoadMore, wallPrepare, wallRefresh])
 
   const loadMore = useCallback(async (retry = false) => {
     const request = requestRef.current
