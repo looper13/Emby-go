@@ -1,12 +1,36 @@
 .react-item-detail { display: grid; gap: 16px; min-width: 0; }
 .react-detail-loading { min-height: 260px; display: grid; align-content: center; justify-items: center; gap: 10px; padding: 24px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--panel); text-align: center; }
 .react-detail-loading p { margin: 0; }
-.react-item-hero { position: relative; isolation: isolate; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #0c101a; box-shadow: 0 12px 36px rgba(0,0,0,.45); }
+.react-item-hero { position: relative; isolation: isolate; min-width: 0; overflow: visible; border: 1px solid var(--line); border-radius: 12px; background: #0c101a; box-shadow: 0 12px 36px rgba(0,0,0,.45); }
 .react-item-hero-image,
-.react-item-hero-scrim { position: absolute; z-index: -2; inset: 0; overflow: hidden; }
+.react-item-hero-scrim { position: absolute; z-index: -2; inset: 0; overflow: hidden; border-radius: 12px; }
 .react-item-hero-image img { width: 100%; height: 100%; object-fit: cover; object-position: center 32%; filter: saturate(.9) brightness(.65); transform: scale(1.025); }
 .react-item-hero-scrim { z-index: -1; background: linear-gradient(90deg, rgba(8, 11, 18, .98) 0%, rgba(8, 11, 18, .88) 35%, rgba(8, 11, 18, .55) 70%, rgba(8, 11, 18, .35) 100%), linear-gradient(0deg, rgba(8, 11, 18, .92) 0%, rgba(8, 11, 18, .4) 40%, transparent 80%); }
-[data-theme="light"] .react-item-hero-scrim { background: linear-gradient(90deg, rgba(17, 20, 29, .95), rgba(17, 20, 29, .78) 45%, rgba(17, 20, 29, .44)), linear-gradient(0deg, rgba(17, 20, 29, .68), transparent 72%); }
+.react-item-hero[data-has-backdrop="false"] .react-item-hero-scrim { display: none; }
+
+[data-theme="light"] .react-item-hero { background: var(--panel); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); }
+[data-theme="light"] .react-item-hero-image img { filter: saturate(0.85) opacity(0.32); }
+[data-theme="light"] .react-item-hero-scrim { background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.92) 38%, rgba(255, 255, 255, 0.65) 72%, rgba(255, 255, 255, 0.4) 100%), linear-gradient(0deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.5) 45%, transparent 85%); }
+[data-theme="light"] .react-item-hero-copy { color: var(--text); }
+[data-theme="light"] .react-item-eyebrow { color: var(--accent); }
+[data-theme="light"] .react-item-title-row h1 { color: var(--text); }
+[data-theme="light"] .react-item-title-row .favorite-button { color: var(--muted); border-color: var(--line); background: var(--panel); }
+[data-theme="light"] .react-item-title-row .favorite-button:hover,
+[data-theme="light"] .react-item-title-row .favorite-button.selected { color: #ef4444; border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.08); }
+[data-theme="light"] .react-item-original { color: var(--muted); }
+[data-theme="light"] .react-item-poster-wrap { border-color: var(--line); background: var(--panel-2); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--line); }
+[data-theme="light"] .react-item-meta-pills > span { border-color: var(--line); color: var(--text); background: var(--panel-2); }
+[data-theme="light"] .react-item-meta-pills .react-item-rating { color: #d97706; border-color: rgba(217, 119, 6, 0.3); background: rgba(245, 158, 11, 0.12); }
+[data-theme="light"] .react-item-meta-pills .react-item-status { color: #fff; }
+[data-theme="light"] .react-item-tech-badges > span { border-color: var(--line); color: var(--text); background: var(--panel-2); }
+[data-theme="light"] .react-item-tags button { border-color: var(--line); color: var(--muted); background: var(--panel-2); }
+[data-theme="light"] .react-item-tags button:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+[data-theme="light"] .react-item-plot-short { color: var(--muted); }
+[data-theme="light"] .react-item-hero .react-detail-action { color: var(--text); border-color: var(--line); background: var(--panel); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); }
+[data-theme="light"] .react-item-hero .react-detail-action:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--panel-2); }
+[data-theme="light"] .react-item-unplayable { color: var(--warn); }
+[data-theme="light"] .react-detail-version { color: var(--muted); }
+[data-theme="light"] .react-detail-version select { border-color: var(--line); color: var(--text); background: var(--panel); }
 .react-item-hero-topbar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px 0; }
 .react-item-navigation { display: inline-flex; gap: 6px; }
 .react-item-hero .react-detail-action { min-height: 32px; border-radius: 8px; color: rgba(255,255,255,.9); border-color: rgba(255,255,255,.15); background: rgba(8,11,18,.45); backdrop-filter: blur(10px); transition: all 0.15s ease; }

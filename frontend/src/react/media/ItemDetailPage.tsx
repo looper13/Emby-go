@@ -307,7 +307,7 @@ export function ItemDetailPage() {
   }
 
   return <article className="react-item-detail">
-    <header className="react-item-hero">
+    <header className="react-item-hero" data-has-backdrop={Boolean(!hideImages && heroImage)}>
       <div className="react-item-hero-image">{!hideImages && heroImage && <DetailImage src={heroImage} fallback={movie.cover_url} alt="" loading="eager" />}</div>
       <div className="react-item-hero-scrim" />
       <div className="react-item-hero-topbar">

@@ -1,11 +1,17 @@
-.react-detail-playback { position: relative; z-index: 4; min-width: 0; margin: 14px 0 2px; }
+.react-detail-playback { position: relative; z-index: 10; min-width: 0; margin: 14px 0 2px; }
 .react-detail-track-fields { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; }
 .react-detail-track-fields label { min-width: 0; max-width: 260px; flex: 1 1 170px; display: grid; gap: 5px; color: var(--muted); font-size: 10.5px; font-weight: 500; }
 .react-detail-track-fields select { width: 100%; min-width: 0; height: 35px; padding: 0 27px 0 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--panel-2); font: 11.5px var(--font-sans); text-overflow: ellipsis; transition: border-color 0.15s ease; }
 .react-detail-track-fields select:focus { border-color: var(--accent); outline: 0; }
 .react-external-player { position: relative; flex: 0 0 auto; }
-.react-external-player-menu { position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; width: 180px; max-width: calc(100vw - 32px); padding: 5px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
+.react-external-player button[aria-expanded="true"] svg:last-child { transform: rotate(180deg); }
+.react-external-player button svg:last-child { transition: transform 0.2s ease; }
+.react-external-player-menu { position: absolute; z-index: 50; bottom: calc(100% + 6px); right: 0; width: 180px; max-width: calc(100vw - 32px); padding: 5px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,.22), var(--shadow); }
 .react-external-player-menu a { min-height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 6px; color: var(--text); text-decoration: none; font-size: 11.5px; transition: all 0.15s ease; }
 .react-external-player-menu a:hover,
 .react-external-player-menu a:focus-visible { color: var(--accent); background: var(--panel-2); outline: 0; }
 .react-detail-playback-error { display: flex; align-items: center; gap: 7px; margin-top: 7px; color: var(--danger); font-size: 10px; overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .react-external-player-menu { left: 0; right: 0; width: auto; }
+}
