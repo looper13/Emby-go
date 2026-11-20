@@ -1,0 +1,38 @@
+.react-actor-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 13px 0; }
+.react-actor-controls .react-page-field { flex: 1 1 220px; max-width: 360px; }
+.react-actor-stats { margin: 15px 0 0; }
+.react-actor-config { margin: 0 0 16px; }
+.react-actor-config > summary { min-height: 42px; display: flex; align-items: center; padding: 0 12px; border: 1px solid var(--console-line); border-radius: 5px; color: var(--console-text); background: var(--console-panel-raised); cursor: pointer; font-size: 12px; font-weight: 600; }
+.react-actor-config[open] > summary { border-radius: 5px 5px 0 0; }
+.react-actor-config-body { padding: 10px; border: 1px solid var(--console-line); border-top: 0; border-radius: 0 0 5px 5px; }
+.react-actor-config-body .react-page-panel { padding: 12px; box-shadow: none; }
+.react-actor-search { flex: 1 1 230px; max-width: 380px; }
+.react-actor-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,145px),1fr)); gap: 18px 12px; }
+.react-actor-card { position: relative; min-width: 0; }
+.react-actor-card > a { display: flex; flex-direction: column; gap: 5px; color: inherit; text-decoration: none; }
+.react-actor-art { position: relative; display: grid; place-items: center; aspect-ratio: 3 / 4; overflow: hidden; border: 1px solid var(--console-line); border-radius: 5px; background: var(--console-panel-raised); color: var(--console-dim); }
+.react-actor-art img { width: 100%; height: 100%; object-fit: cover; }
+.react-actor-art > span { display: grid; place-items: center; width: 100%; height: 100%; }
+.react-actor-art small { position: absolute; z-index: 1; bottom: 7px; left: 7px; padding: 3px 7px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; color: #75d4b2; background: rgba(0,0,0,.72); font-size: 9px; }
+.react-actor-art small.missing { color: #f2c76d; }
+.react-actor-art small.count { inset: 7px 7px auto auto; color: #e8e9ee; }
+.react-actor-card strong { font-size: 12px; overflow-wrap: anywhere; }
+.react-actor-card > a > span { color: var(--console-muted); font-size: 10px; }
+.react-actor-card > button { position: absolute; top: 6px; right: 6px; width: 31px; height: 31px; }
+.react-background-progress { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--console-line); border-left: 3px solid #64a8d1; border-radius: 5px; background: var(--console-panel-raised); }
+.react-background-progress header { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.react-background-progress header span { color: var(--console-muted); font-family: var(--font-mono,monospace); }
+.react-background-progress progress { width: 100%; height: 7px; accent-color: #56a889; }
+.react-background-progress p { margin: 0; color: var(--console-muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.react-background-progress ul { margin: 0; padding-left: 20px; color: var(--console-muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.react-scheduled-row { display: grid; grid-template-columns: minmax(190px,1fr) auto auto; align-items: center; gap: 10px 15px; padding: 12px 0; border-top: 1px solid var(--console-line); }
+.react-scheduled-row > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.react-scheduled-row strong { font-size: 12px; }
+.react-scheduled-row span,.react-scheduled-row small { color: var(--console-muted); font-size: 10px; overflow-wrap: anywhere; }
+.react-scheduled-row code { font-family: var(--font-mono,monospace); }
+@media(max-width:640px) {
+  .react-actor-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px 10px; }
+  .react-actor-controls .react-page-field { max-width: none; }
+  .react-scheduled-row { grid-template-columns: minmax(0,1fr) auto; }
+  .react-scheduled-row .react-page-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}

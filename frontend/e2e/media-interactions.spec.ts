@@ -39,7 +39,7 @@ test('full detail sections, real reread and failed refresh preserve expansion, r
     await expect(page.locator('.item-hero-title')).toHaveText(m.Title); await expect(page.locator('#plot-toggle')).toHaveAttribute('aria-expanded', 'true'); await expect(page.locator('#detail-reread')).toBeEnabled();
     await page.locator('#detail-reread').click(); await expect(page.locator('#detail-reread')).toBeEnabled(); expect(similarReads.length).toBe(1);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: info.outputPath('vue-detail-full.png'), fullPage: true, animations: 'disabled', style: '.detail-path, .item-details dd { color: transparent !important; text-shadow: none !important; }' });
+    await page.screenshot({ path: info.outputPath('react-detail-full.png'), fullPage: true, animations: 'disabled', style: '.detail-path, .item-details dd { color: transparent !important; text-shadow: none !important; }' });
     await page.locator('#item-trailer').click(); await expect(page.locator('#player-overlay')).toBeVisible(); await expect(page.locator('#player-title')).toContainText('预告片'); await expect(page.locator('#player-stage video')).toBeVisible();
     await page.keyboard.press('Escape'); await expect(page.locator('#player-overlay')).toHaveCount(0); await expect(page.locator('#item-trailer')).toBeFocused(); await expect(page).toHaveURL(new RegExp(`/item/${m.id}`));
   } finally { await writeFile(nfo, original); await rm(extra, { force: true }); await live.request(`/api/admin/items/${m.id}/reread`, { method: 'POST' }); }
@@ -64,7 +64,7 @@ test('card actions are separate from navigation; real single probe writes NFO an
   await card.locator('[data-probe]').click(); await expect(page.locator('#toasts')).toContainText('已写入 NFO');
   expect(await readFile(path.join(path.dirname(m.source_path), 'ABF-307.nfo'), 'utf8')).toContain('<streamdetails>'); await expect(page).toHaveURL(/#\/items/);
   await card.focus(); await expect(card.locator('.wall-actions')).toHaveCSS('opacity', '1');
-  await page.screenshot({ path: info.outputPath('vue-card-focus.png'), animations: 'disabled', style: '.wall-path { color: transparent !important; text-shadow: none !important; }' });
+    await page.screenshot({ path: info.outputPath('react-card-focus.png'), animations: 'disabled', style: '.wall-path { color: transparent !important; text-shadow: none !important; }' });
   page.once('dialog', dialog => dialog.dismiss()); await card.locator('[data-delete]').click(); await expect(card).toHaveCount(1);
   page.once('dialog', async dialog => { expect(dialog.message()).toBe('仅删除数据库索引，不删除源文件。继续？'); await dialog.accept(); });
   await card.locator('[data-delete]').click(); await expect(card).toHaveCount(0); expect((await stat(m.source_path)).isFile()).toBe(true);
@@ -78,7 +78,7 @@ test('real Artplayer plays, closes and traps focus; one failed direct request fa
   await expect.poll(() => page.locator('#player-stage video').evaluate((el: HTMLVideoElement) => ({ ready: el.readyState >= 2, muted: el.muted, source: el.currentSrc.includes('/proxy') }))).toEqual({ ready: true, muted: true, source: true });
   expect(requests.filter(p => p.endsWith('/stream')).length).toBe(1); expect(requests.filter(p => p.endsWith('/proxy')).length).toBe(1);
   await page.locator('#player-close').focus(); await page.keyboard.press('Shift+Tab'); expect(await page.evaluate(() => Boolean(document.activeElement?.closest('[role=dialog]')))).toBe(true);
-  await page.screenshot({ path: info.outputPath('vue-player-proxy.png'), animations: 'disabled' });
+    await page.screenshot({ path: info.outputPath('react-player-proxy.png'), animations: 'disabled' });
   await page.keyboard.press('Escape'); await expect(page.locator('#player-overlay')).toHaveCount(0); await expect(page.locator('#detail-play')).toBeFocused(); await expect(page).toHaveURL(new RegExp(`/item/${m.id}$`));
   await page.unroute(`**/Videos/${m.id}/stream`); await page.locator('#detail-play').click(); await expect(page.locator('#player-stage video')).toBeVisible();
   await expect.poll(() => page.locator('#player-stage video').evaluate((el: HTMLVideoElement) => el.readyState >= 2)).toBe(true);

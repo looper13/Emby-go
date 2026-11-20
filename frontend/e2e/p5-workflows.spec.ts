@@ -15,7 +15,7 @@ test('scrape settings retain drafts and masked secrets; real connectivity and la
   await page.locator('#test-translate').click(); await expect(page.locator('#toasts')).toContainText('P5 translated');
   await page.locator('#sc-lib').selectOption(String(p5.libraryId)); await page.locator('#sc-only-missing').uncheck(); await expect(page.locator('#scrape-count')).toHaveText('本次将处理 2 条');
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: info.outputPath('vue-scrape.png'), fullPage: true, animations: 'disabled', style: 'input {color:transparent!important}' });
+  await page.screenshot({ path: info.outputPath('react-scrape.png'), fullPage: true, animations: 'disabled', style: 'input {color:transparent!important}' });
   await navigate(page, 'scheduled'); await navigate(page, 'scrape'); await expect(page.locator('#sc-concurrency')).toHaveValue('2');
 });
 
@@ -31,7 +31,7 @@ test('preview cancellation and late candidate reads preserve physical files and 
   expect(Math.abs((await page.locator('#scrape-confirm').boundingBox())!.y - footer!.y)).toBeLessThan(2);
   await page.locator('#scrape-confirm').focus(); await page.keyboard.press('Tab'); await expect(page.locator('#scrape-close')).toBeFocused();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: info.outputPath('vue-scrape-preview.png'), fullPage: true, animations: 'disabled', style: '.detail-path,.item-details dd {color:transparent!important}' });
+  await page.screenshot({ path: info.outputPath('react-scrape-preview.png'), fullPage: true, animations: 'disabled', style: '.detail-path,.item-details dd {color:transparent!important}' });
   await page.keyboard.press('Escape'); await expect(page.locator('#scrape-overlay')).toHaveCount(0); await expect(page.locator('#detail-scrape')).toBeFocused();
   expect(await disk(movie.directory)).toEqual(before); expect(confirms).toBe(0);
   await page.locator('#detail-scrape').click(); await page.evaluate(() => { location.hash = '#/scrape'; }); await expect(page.locator('#scrape-overlay')).toHaveCount(0);
@@ -123,7 +123,7 @@ test('scheduled real CRUD validates cron, preserves edit selection, executes and
     const created = (await live.request('/api/admin/scheduled')).items.find((task: { name: string }) => task.name === name); id = created.id; expect(JSON.parse(created.params)).toEqual({ library_id: p5.libraryId, only_missing: false, overwrite: false, limit: 1 });
     const row = page.locator(`[data-scheduled="${id}"]`); await row.locator('[data-role=edit]').click(); await navigate(page, 'scrape'); await navigate(page, 'scheduled');
     await expect(page.locator('#s-name')).toHaveValue(name); await expect(page.locator('#s-overwrite')).toHaveValue('false');
-    await page.screenshot({ path: info.outputPath('vue-scheduled.png'), fullPage: true, animations: 'disabled' });
+    await page.screenshot({ path: info.outputPath('react-scheduled.png'), fullPage: true, animations: 'disabled' });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.locator('#s-type').selectOption('scan'); await page.locator('#sched-submit').click(); await expect(page.locator('#s-name')).toHaveValue('');
     await row.locator('label.switch').click(); await expect.poll(async () => (await live.request('/api/admin/scheduled')).items.find((t: { id: number }) => t.id === id).enabled).toBe(true);

@@ -1,0 +1,43 @@
+.favorite-button {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  flex: 0 0 36px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.favorite-button:hover,
+.favorite-button.selected { color: #ee8195; border-color: #b9687a; }
+.favorite-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.favorite-button:disabled { opacity: .55; cursor: wait; }
+
+.wall-entity-favorite { width: 30px; height: 30px; flex-basis: 30px; }
+.television-favorite-button {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+  border-radius: 50%;
+  color: rgba(255, 255, 255, .8);
+  background: rgba(15, 23, 42, .72);
+  border-color: rgba(255, 255, 255, .16);
+  opacity: 0;
+  transform: scale(.92);
+  transition: opacity .15s ease, transform .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.television-favorite-button svg { width: 15px; height: 15px; }
+.television-entry:hover .television-favorite-button,
+.television-entry:focus-within .television-favorite-button,
+.television-favorite-button.selected { opacity: 1; transform: scale(1); }
+.television-favorite-button:hover,
+.television-favorite-button.selected { color: #ff5c7c; border-color: rgba(255, 92, 124, .45); background: rgba(15, 23, 42, .88); }
+
+@media (hover: none) { .television-favorite-button { opacity: .85; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) { .television-favorite-button { transition: none; } }

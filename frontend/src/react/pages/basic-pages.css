@@ -1,0 +1,68 @@
+.react-page-state { display: flex; align-items: center; gap: 9px; min-height: 40px; color: var(--console-muted); font-size: 13px; }
+.react-page-state svg { flex: 0 0 auto; }
+.react-page-state[role="status"] svg { animation: react-page-spin 1s linear infinite; }
+.react-page-error { color: #fda4af; }
+.react-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.react-page-heading h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.react-page-heading p { margin: 5px 0 0; color: var(--console-muted); font-size: 12px; line-height: 1.55; }
+.react-page-panel { min-width: 0; margin: 0 0 16px; padding: 17px; border: 1px solid var(--console-line); border-radius: 6px; background: var(--console-panel); }
+.react-page-panel > h3 { margin: 0 0 13px; font-size: 14px; }
+.react-page-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.react-page-actions,.react-page-row-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.react-page-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 13px; }
+.react-page-field { min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--console-muted); font-size: 12px; }
+.react-page-field.full { grid-column: 1 / -1; }
+.react-page-field input,.react-page-field select,.react-page-field textarea { width: 100%; min-width: 0; }
+.react-page-check { display: flex; align-items: center; gap: 9px; min-height: 34px; color: var(--console-muted); font-size: 12px; }
+.react-page-check input { width: 16px; height: 16px; accent-color: var(--console-accent); }
+.react-page-footer { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.react-page-table-wrap { overflow-x: auto; border: 1px solid var(--console-line); border-radius: 5px; }
+.react-page-table-wrap table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.react-page-table-wrap th,.react-page-table-wrap td { padding: 9px 11px; border-bottom: 1px solid var(--console-line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.react-page-table-wrap th { color: var(--console-muted); font-size: 10px; font-weight: 600; white-space: nowrap; }
+.react-page-table-wrap tr:last-child td { border-bottom: 0; }
+.react-page-table-wrap td code,.react-page-mono { font-family: var(--font-mono,monospace); font-size: 11px; }
+.react-task-error { min-width: 0; max-width: 560px; white-space: normal; overflow-wrap: anywhere; }
+.react-task-error details { margin-top: 8px; }
+.react-task-error summary { color: var(--console-accent); cursor: pointer; }
+.react-task-error pre { max-height: min(360px,50vh); margin: 10px 0 0; padding-right: 8px; overflow: auto; font: inherit; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.react-page-pager { display: flex; justify-content: center; align-items: center; gap: 13px; padding-top: 16px; color: var(--console-muted); font-size: 12px; }
+.react-page-status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 4px; color: #a8b0c0; background: #20283a; font-size: 10px; white-space: nowrap; }
+.react-page-status.success,.react-page-status.ready { color: #6ee7b7; background: rgba(16,185,129,.12); }
+.react-page-status.failed,.react-page-status.incompatible { color: #fda4af; background: rgba(244,63,94,.1); }
+.react-page-status.running,.react-page-status.pending { color: #fcd34d; background: rgba(245,158,11,.11); }
+.react-page-muted { color: var(--console-muted); font-size: 12px; line-height: 1.6; }
+.react-page-banner { padding: 10px 12px; border: 1px solid var(--console-line); border-radius: 5px; color: var(--console-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.react-page-banner.danger { border-color: rgba(244,63,94,.3); color: #fda4af; background: rgba(244,63,94,.08); }
+.react-page-banner.warning { border-color: rgba(245,158,11,.28); color: #fcd34d; background: rgba(245,158,11,.08); }
+.react-page-stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 9px; margin-bottom: 16px; }
+.react-page-stat { min-width: 0; padding: 13px; border: 1px solid var(--console-line); border-radius: 5px; background: var(--console-panel); }
+.react-page-stat span,.react-page-stat small { display: block; color: var(--console-muted); font-size: 10px; }
+.react-page-stat strong { display: block; margin: 5px 0; font: 600 22px/1.15 var(--font-mono,monospace); color: var(--console-text); }
+.react-overview-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 12px; color: var(--console-muted); text-align: center; }
+.react-overview-empty svg { color: var(--console-dim); }
+.react-overview-empty strong { color: var(--console-text); font-size: 13px; }
+.react-overview-empty small { font-size: 11px; }
+.react-favorites-tabs { display: flex; flex-wrap: wrap; gap: 5px 15px; border-bottom: 1px solid var(--console-line); margin: 0 0 14px; }
+.react-favorites-tabs button { min-height: 34px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; color: var(--console-muted); background: transparent; font-size: 12px; cursor: pointer; }
+.react-favorites-tabs button[aria-selected="true"] { border-bottom-color: var(--console-accent); color: var(--console-accent); }
+.react-favorites-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,145px),1fr)); gap: 14px 12px; }
+.react-favorite-card { position: relative; min-width: 0; }
+.react-favorite-card a { display: flex; flex-direction: column; color: inherit; text-decoration: none; }
+.react-favorite-art { display: grid; place-items: center; aspect-ratio: 2/3; overflow: hidden; border: 1px solid var(--console-line); border-radius: 5px; color: var(--console-dim); background: var(--console-panel-raised); }
+.react-favorite-art img { width: 100%; height: 100%; object-fit: cover; }
+.react-favorite-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 7px 2px; }
+.react-favorite-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.react-favorite-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--console-muted); font-size: 10px; }
+.react-favorite-remove { position: absolute; z-index: 2; top: 5px; right: 5px; width: 29px; height: 29px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.15); border-radius: 50%; color: #fb7185; background: rgba(9,12,22,.82); cursor: pointer; }
+.react-page-auth-sections { max-width: 850px; }
+@keyframes react-page-spin { to { transform: rotate(360deg); } }
+@media(max-width:640px) {
+  .react-page-panel { padding: 13px 11px; }
+  .react-page-form { grid-template-columns: minmax(0,1fr); }
+  .react-page-field.full,.react-page-footer { grid-column: 1; }
+  .react-page-heading { align-items: flex-start; }
+  .react-page-stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .react-favorites-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px 10px; }
+}
+@media(prefers-reduced-motion:reduce) { .react-page-state[role="status"] svg { animation: none; } }

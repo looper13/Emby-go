@@ -36,7 +36,7 @@ test('embedded assets, old entries and protocol errors remain separate', async (
   expect(api.headers()['content-type']).toContain('application/json');
 });
 
-test('real login stays in Vue and reload reuses the stored token', async ({ page, live }, info) => {
+test('real login stays in React and reload reuses the stored token', async ({ page, live }, info) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${live.baseURL}/admin`);
@@ -59,7 +59,7 @@ test('real login stays in Vue and reload reuses the stored token', async ({ page
   }));
   expect(dimensions.document).toBeLessThanOrEqual(dimensions.width);
   expect(dimensions.body).toBeLessThanOrEqual(dimensions.width);
-  await page.screenshot({ path: info.outputPath('vue-overview.png'), fullPage: true, animations: 'disabled' });
+  await page.screenshot({ path: info.outputPath('react-overview.png'), fullPage: true, animations: 'disabled' });
   expect(errors).toEqual([]);
 });
 

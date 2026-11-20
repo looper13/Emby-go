@@ -88,7 +88,7 @@ func webUIHandler(files fs.FS) gin.HandlerFunc {
 		data, err := readWebUIFile(files, name)
 		if err != nil {
 			if entry {
-				writeWebUIData(c, http.StatusServiceUnavailable, "text/plain; charset=utf-8", []byte("Vue UI unavailable; build the frontend assets first.\n"))
+				writeWebUIData(c, http.StatusServiceUnavailable, "text/plain; charset=utf-8", []byte("Web UI unavailable; build the frontend assets first.\n"))
 			} else {
 				c.Status(http.StatusNotFound)
 			}

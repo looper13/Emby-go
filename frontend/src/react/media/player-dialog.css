@@ -1,0 +1,32 @@
+.react-player-overlay { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(4, 5, 8, .86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.react-player-shell { position: relative; width: min(1160px, 100%); max-height: calc(100dvh - 48px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; color: #f8f9fa; color-scheme: dark; background: #141517; box-shadow: 0 24px 64px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.08); }
+.react-player-head { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,.08); background: #18191d; }
+.react-player-title-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.react-player-title-wrap > svg { flex: 0 0 auto; color: #8a7cf6; }
+.react-player-title-wrap strong { overflow: hidden; color: #fff; font-size: 14px; font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.react-player-close { width: 32px; height: 32px; display: grid; flex: 0 0 32px; place-items: center; padding: 0; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; color: rgba(255,255,255,.75); background: rgba(255,255,255,.08); cursor: pointer; transition: color .15s ease, background-color .15s ease, border-color .15s ease, transform .12s ease; }
+.react-player-close:hover { transform: translateY(-1px); border-color: rgba(255,255,255,.28); color: #fff; background: rgba(255,255,255,.18); }
+.react-player-close:active { transform: none; }
+.react-player-loading { position: absolute; z-index: 10; top: 50%; left: 50%; display: flex; align-items: center; gap: 9px; padding: 10px 16px; transform: translate(-50%, -50%); border: 1px solid rgba(255,255,255,.12); border-radius: 6px; color: #fff; background: rgba(18,19,22,.9); box-shadow: 0 4px 20px rgba(0,0,0,.5); font-size: 12px; pointer-events: none; }
+.react-player-loading svg { color: #8a7cf6; animation: react-player-spin 1s linear infinite; }
+.react-player-stage { position: relative; flex: 0 0 auto; aspect-ratio: 16 / 9; max-height: calc(100dvh - 140px); overflow: hidden; background: #000; }
+.react-player-stage > div { width: 100%; height: 100%; }
+.react-player-track-toolbar { position: absolute; z-index: 30; top: 66px; left: 10px; right: 10px; display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; color: #f8f9fa; background: rgba(18,19,22,.9); backdrop-filter: blur(8px); box-shadow: 0 4px 18px rgba(0,0,0,.45); font-size: 11px; }
+.react-player-track-error { flex-basis: 100%; color: #ff8787; font-weight: 500; }
+.react-player-track-toolbar .react-player-track-seek { flex-basis: 100%; display: flex; align-items: center; gap: 7px; min-width: 0; white-space: nowrap; }
+.react-player-track-seek input { flex: 1; min-width: 30px; accent-color: #8a7cf6; }
+.react-player-track-seek span { white-space: nowrap; }
+body.player-open { overflow: hidden; }
+
+@keyframes react-player-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 720px) {
+  .react-player-overlay { padding: 10px; }
+  .react-player-shell { max-height: calc(100dvh - 20px); border-radius: 7px; }
+  .react-player-head { min-height: 48px; padding: 8px 10px; }
+  .react-player-title-wrap strong { font-size: 12px; }
+  .react-player-stage { max-height: calc(100dvh - 90px); }
+  .react-player-track-toolbar { top: 58px; left: 6px; right: 6px; padding: 8px; font-size: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) { .react-player-loading svg { animation: none; } }

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, createApiClient } from '../src/api/client';
 import { parseItemsTotal, parseLibraries, parseLogin, parseStatus } from '../src/api/contracts';
-import { createPageRequestScope } from '../src/composables/usePageRequest';
 import librariesFixture from './fixtures/json/libraries.json';
 import itemsFixture from './fixtures/json/items-wall.json';
 
@@ -158,31 +157,6 @@ describe('API client', () => {
     await expect(client.request('/api/auth/status', { auth: 'none', signal: controller.signal }))
       .rejects.toMatchObject({ name: 'AbortError' });
     expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
-  it('cancels explicit page reads without canceling writes or progress', async () => {
-    const response = deferred<Response>();
-    const fetcher = vi.fn<typeof fetch>().mockReturnValue(response.promise);
-    const client = createApiClient(fetcher);
-    client.setAuthHandlers({ getToken: () => 'token', onUnauthorized: vi.fn() });
-    const scope = createPageRequestScope();
-    const page = scope.begin();
-    const read = client.request('/api/admin/status', { auth: 'required', signal: page.signal });
-    const write = client.request('/api/admin/scan', { auth: 'required', method: 'POST' });
-    const progress = client.request('/api/admin/scan/progress', { auth: 'required' });
-    const next = scope.begin();
-    expect(page.signal.aborted).toBe(true);
-    expect(page.isCurrent()).toBe(false);
-    expect(next.isCurrent()).toBe(true);
-    expect(fetcher.mock.calls[1]?.[1]?.signal).toBeUndefined();
-    expect(fetcher.mock.calls[2]?.[1]?.signal).toBeUndefined();
-    response.resolve(new Response(null, { status: 204 }));
-    await expect(read).rejects.toMatchObject({ name: 'AbortError' });
-    await expect(write).resolves.toBeNull();
-    await expect(progress).resolves.toBeNull();
-    scope.dispose();
-    expect(next.isCurrent()).toBe(false);
-    expect(scope.begin().signal.aborted).toBe(true);
   });
 
   it('only times out when requested and cleans up timeout timers', async () => {

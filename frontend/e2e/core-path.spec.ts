@@ -41,7 +41,7 @@ test('300/250 history restores focus and position without duplicate or return pa
   await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.play)).toBe(id);
   expect(reads.length).toBe(initialReads);
   await expect(page.locator('.panel')).toHaveCSS('opacity', '1');
-  await page.screenshot({ path: info.outputPath('vue-wall-300-250.png'), animations: 'disabled',
+  await page.screenshot({ path: info.outputPath('react-wall-300-250.png'), animations: 'disabled',
     mask: [page.locator('.wall-path')], maskColor: '#262b31' });
   await info.attach('request-counts', { body: JSON.stringify({ pages: reads, returnPages: reads.length - initialReads, restoredCount: 300, focusOrdinal: 250, position }), contentType: 'application/json' });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

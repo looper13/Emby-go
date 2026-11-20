@@ -23,7 +23,7 @@ try {
   const television = process.argv.includes('--television')
     ? await (await import('../test-support/live-env/seed-television.mjs')).seedTelevision(live) : undefined;
   const url = vite.resolvedUrls.local[0];
-  console.log(JSON.stringify({ url, backend: `${live.baseURL}/admin-vue`, username: live.credentials.username, password: live.credentials.password, pid: process.pid, temporaryData: live.root, television }));
+  console.log(JSON.stringify({ url, backend: `${live.baseURL}/admin`, username: live.credentials.username, password: live.credentials.password, pid: process.pid, temporaryData: live.root, television }));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void stop().finally(() => process.exit()); });
 } catch (error) {
   await stop();

@@ -1,52 +1,40 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyMediaVisibility, initMediaVisibility, useMediaVisibility } from '../src/composables/useMediaVisibility';
+import { useReactPreferencesStore } from '../src/react/preferences-store';
 
 describe('media visibility system', () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.removeAttribute('data-hide-media');
     document.documentElement.className = '';
+    useReactPreferencesStore.setState({ hideImages: false });
   });
 
-  it('initializes with images visible (false) when no preference stored', () => {
-    applyMediaVisibility(false);
-    initMediaVisibility();
-    const { hideImages, isHidden } = useMediaVisibility();
-    expect(hideImages.value).toBe(false);
-    expect(isHidden()).toBe(false);
+  it('initializes with images visible when no preference is selected', () => {
+    useReactPreferencesStore.getState().initialize();
+    expect(useReactPreferencesStore.getState().hideImages).toBe(false);
     expect(document.documentElement.getAttribute('data-hide-media')).toBeNull();
     expect(document.documentElement.classList.contains('hide-media-images')).toBe(false);
   });
 
-  it('toggles media visibility between hidden and visible and syncs document and storage', () => {
-    applyMediaVisibility(false);
-    const { hideImages, toggleHideImages, isHidden } = useMediaVisibility();
-
-    toggleHideImages();
-    expect(hideImages.value).toBe(true);
-    expect(isHidden()).toBe(true);
+  it('toggles image visibility and syncs the document and storage', () => {
+    useReactPreferencesStore.getState().initialize();
+    useReactPreferencesStore.getState().toggleHideImages();
+    expect(useReactPreferencesStore.getState().hideImages).toBe(true);
     expect(document.documentElement.getAttribute('data-hide-media')).toBe('true');
     expect(document.documentElement.classList.contains('hide-media-images')).toBe(true);
     expect(localStorage.getItem('emby_hide_media_images')).toBe('true');
 
-    toggleHideImages();
-    expect(hideImages.value).toBe(false);
-    expect(isHidden()).toBe(false);
+    useReactPreferencesStore.getState().toggleHideImages();
+    expect(useReactPreferencesStore.getState().hideImages).toBe(false);
     expect(document.documentElement.getAttribute('data-hide-media')).toBeNull();
     expect(document.documentElement.classList.contains('hide-media-images')).toBe(false);
     expect(localStorage.getItem('emby_hide_media_images')).toBe('false');
   });
 
-  it('explicitly sets media visibility', () => {
-    const { hideImages, setHideImages } = useMediaVisibility();
-    setHideImages(true);
-    expect(hideImages.value).toBe(true);
+  it('restores a hidden-image preference during React application initialization', () => {
+    useReactPreferencesStore.setState({ hideImages: true });
+    useReactPreferencesStore.getState().initialize();
     expect(document.documentElement.getAttribute('data-hide-media')).toBe('true');
-    expect(localStorage.getItem('emby_hide_media_images')).toBe('true');
-
-    setHideImages(false);
-    expect(hideImages.value).toBe(false);
-    expect(document.documentElement.getAttribute('data-hide-media')).toBeNull();
-    expect(localStorage.getItem('emby_hide_media_images')).toBe('false');
+    expect(document.documentElement.classList.contains('hide-media-images')).toBe(true);
   });
 });

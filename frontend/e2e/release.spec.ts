@@ -36,7 +36,7 @@ test('P7 390/768/1280 layouts and player overlays do not overflow or cover their
   }
 });
 
-test('P7 previous binary can log in and browse the same isolated database, then return to Vue', async ({ page, live }, info) => {
+test('P7 previous binary can log in and browse the same isolated database, then return to React', async ({ page, live }, info) => {
   test.skip(!process.env.EMBY_E2E_ROLLBACK_BIN, 'Run verify-release.mjs and set EMBY_E2E_ROLLBACK_BIN');
   test.setTimeout(120_000);
   const current = path.join(live.root, 'current-before-rollback.exe');

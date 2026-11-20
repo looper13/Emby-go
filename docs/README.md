@@ -20,7 +20,7 @@
 
 ### 构建
 
-Vue 3 控制台已覆盖媒体墙、详情、播放器、管理、任务与刮削页面。`/`、`/web`、`/admin`、`/web/index.html` 返回 Vue 外壳；前两者认证成功后进入 `/admin`，旧 hash/query 书签仍可恢复。兼容入口 `/admin-vue` 重定向至 `/admin`，保留查询及 fragment。旧迁移工作区已退役，现行构建与测试以本文及 `frontend/` 脚本为准；[Vue 迁移开发计划](frontend-vue-migration-plan.md) 仅作历史设计参考。
+React 控制台是当前正式 UI，覆盖媒体墙、详情、播放器、管理、任务与刮削页面。`/`、`/web`、`/admin`、`/web/index.html` 返回控制台外壳；前两者认证成功后进入 `/admin`，旧 hash/query 书签仍可恢复。兼容入口 `/admin-vue` 重定向至 `/admin`，保留查询及 fragment。旧迁移工作区已退役，现行构建与测试以本文及 `frontend/` 脚本为准；[Vue 迁移开发计划](frontend-vue-migration-plan.md) 仅作历史设计参考。
 
 发行版必须使用 `embedui`，构建机器需要 Go 1.26+（模块指定工具链 **1.27.3**；保留默认 `GOTOOLCHAIN=auto` 可自动下载）、Node **24.14.1** 与 npm **11.11.0**，运行机器不需要 Node/npm：
 
@@ -36,7 +36,7 @@ Linux amd64 部署可直接执行 `bash build.sh`，产物为 `dist/emby-go-linu
 
 默认 `go build -o metatube ./cmd/metatube` 用于后端开发，不需要 Node；开发 UI 读取包目录中的 `web_dist` 真实构建产物。缺少资源时上述页面返回 503，业务 API 仍可用。旧 `internal/server/web/`、`web_test/` 暂作冻结比对基线保留，待 Linux 验收后完成移除；正式页面不加载旧脚本。
 
-本地热更新：`npm --prefix frontend run dev`，访问命令显示地址的 `/web/ui/` 路径。Go 默认代理目标为 `http://127.0.0.1:18080`，可通过 `EMBY_DEV_PROXY` 指向隔离测试服务。浏览器同源不同端口的登录状态不共享。`build.sh`、`build.bat` 和 release workflow 会先构建一次 Vue 再嵌入二进制；Vite 只清理 `frontend/dist`，不会清理旧 `web/`。
+本地热更新：`npm --prefix frontend run dev`，访问命令显示地址的 `/web/ui/` 路径。Go 默认代理目标为 `http://127.0.0.1:18080`，可通过 `EMBY_DEV_PROXY` 指向隔离测试服务。浏览器同源不同端口的登录状态不共享。`build.sh`、`build.bat` 和 release workflow 会先构建 React UI，再将资源嵌入二进制；Vite 只清理 `frontend/dist`，不会清理旧 `web/`。
 
 不连接现有库的预览：`npm --prefix frontend run dev:isolated`，自动建立临时 Go/Redis/媒体目录并打印一次性账号，Ctrl+C 后清理。浏览器集成：设置 `PW_CHANNEL=msedge`（本机 Edge）后执行 `npm --prefix frontend run test:e2e`；默认使用已安装的 Playwright Chromium。测试只访问临时实例。
 
@@ -246,7 +246,7 @@ library_monitor_mode: polling
 ### 运维接口与备份
 
 - `GET /api/version` 返回实际构建的版本、提交号和构建时间；未注入版本信息的开发构建返回 `dev`。
-- 管理员可调用 `GET /api/admin/metrics` 查看运行时间、内存、协程、索引数量与缓存统计；`GET /api/admin/logs?limit=200` 查看最近至多 500 条应用运行日志。接口不读取任意磁盘文件，普通账号无权访问。现有 Vue 页面未增加这两个面板。
+- 管理员可调用 `GET /api/admin/metrics` 查看运行时间、内存、协程、索引数量与缓存统计；`GET /api/admin/logs?limit=200` 查看最近至多 500 条应用运行日志。接口不读取任意磁盘文件，普通账号无权访问。现有管理界面未增加这两个面板。
 - `log_retention_days` 控制 `log/` 中 `app-YYYY-MM-DD.log`、`request-YYYY-MM-DD.log` 的保留天数，范围 0–3650，默认 **0（不自动删除）**，重启生效。大于 0 时启动与每日首次写入会清理窗口外的已识别日志，跳过当前打开文件、符号链接和其他文件；清理失败不会阻断正常日志。
 - 登录失败按直连 IP（20 次/10 分钟）及账号（10 次/15 分钟）限流，触发时返回 429 和 `Retry-After`。通用请求体上限 1 MiB，图片上传 32 MiB。反向代理后的 IP 限流按直连代理地址计算；账号限流仍独立生效。
 - SQLite 中持久会话改存 SHA-256 摘要。首次启动以事务迁移原有会话，保留客户端令牌、用户归属、创建时间与撤销规则，失败会回滚并拒绝启动。会话期限和 API Key 界面保持现有约定；**回退旧版时，旧版无法校验这些摘要化会话，需要重新登录**。升级前请保存数据库备份。
@@ -408,7 +408,7 @@ go vet -tags embedui ./...
 npm --prefix frontend run test:e2e
 ```
 
-Vue 回归使用 Vitest/Vue Test Utils 和真实 embedui 服务的 Playwright 场景。Windows PowerShell 设置 `$env:PW_CHANNEL='msedge'` 后运行浏览器测试。大库检查设置 `$env:EMBY_E2E_MEDIA_COUNT='8000'`，只运行 `performance.spec.ts`；常规全套默认使用 307 条夹具，明确跳过大库及未指定旧二进制的回滚场景。冻结旧版的 17 项基线仍可用 `node --test internal/server/web_test/app.test.cjs` 独立比对。
+React 行为回归使用 Vitest 与 React Testing Library；Playwright 场景连接隔离的 `embedui` 服务。Windows PowerShell 设置 `$env:PW_CHANNEL='msedge'` 后运行浏览器测试。大库检查设置 `$env:EMBY_E2E_MEDIA_COUNT='8000'`，只运行 `performance.spec.ts`；常规全套默认使用 307 条夹具，明确跳过大库及未指定旧二进制的回滚场景。冻结旧版的 17 项基线仍可用 `node --test internal/server/web_test/app.test.cjs` 独立比对。
 
 `npm --prefix frontend run test:release` 从当前源码建立不含依赖/生成资源的临时副本，执行 `npm ci` 后生成五平台 embedui 二进制及固定迁移前提交 `5c457893698e74928277d013931f55a2aafb1c84` 的旧版回滚二进制（可用 `EMBY_RELEASE_PREVIOUS_REF` 指定其他基准），结果位于忽略目录 `frontend/test-results/release/`。这是干净源码导出验证；提交后的真实干净检出仍待复验。用 `EMBY_E2E_BINARY` 指定生成的 Windows 发行二进制，`EMBY_E2E_ROLLBACK_BIN` 指定旧版，即可在同一临时数据库中验证回滚。交叉编译不代表 Linux/macOS 已运行。
 

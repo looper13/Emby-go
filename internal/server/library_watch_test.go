@@ -254,6 +254,7 @@ func TestLibraryWatchEndToEnd(t *testing.T) {
 		t.Fatalf("add library: %d", response.StatusCode)
 	}
 	awaitLibraryWatch(t, func() bool { _, found := find("New library"); return found })
+	awaitLibraryWatch(t, func() bool { return !app.scanning() && app.nfoBusyOwner() == "" })
 	request, err = http.NewRequest(http.MethodDelete, server.URL+"/api/admin/libraries/1", nil)
 	if err != nil {
 		t.Fatal(err)

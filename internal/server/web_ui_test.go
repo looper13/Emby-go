@@ -24,8 +24,8 @@ const webUITestScript = "assets/app-AbCd012_.js"
 func webUIFixture(t *testing.T) fstest.MapFS {
 	t.Helper()
 	files := fstest.MapFS{
-		"index.html":                        {Data: []byte(`<!doctype html><title>Vue fixture</title><script type="module" src="/web/ui/assets/app-AbCd012_.js"></script>`)},
-		webUITestScript:                     {Data: []byte(`document.title = "Vue fixture";`)},
+		"index.html":                        {Data: []byte(`<!doctype html><title>React fixture</title><script type="module" src="/web/ui/assets/app-AbCd012_.js"></script>`)},
+		webUITestScript:                     {Data: []byte(`document.title = "React fixture";`)},
 		"assets/main-a1b2c3d4.css":          {Data: []byte(`body { color: black; }`)},
 		"assets/module-BcDe_123.mjs":        {Data: []byte(`export const fixture = true;`)},
 		"assets/logo-12ab34cd.svg":          {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1H0z"/></svg>`)},

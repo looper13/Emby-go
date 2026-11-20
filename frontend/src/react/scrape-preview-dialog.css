@@ -1,0 +1,22 @@
+.react-scrape-placeholder {
+  display: grid !important;
+  place-items: center;
+  color: var(--dim);
+}
+
+.scrape-detail-head > .react-scrape-placeholder {
+  width: 120px;
+  aspect-ratio: 2 / 3;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.scrape-image > .react-scrape-placeholder {
+  width: 84px;
+  height: 118px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-2);
+}

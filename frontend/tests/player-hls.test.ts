@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPinia, disposePinia, setActivePinia } from 'pinia';
 import { createHlsPlayback } from '../src/lib/player-hls';
 import { loadPlayerFactory, managePlayer, playbackType } from '../src/lib/player';
-import { usePlayerStore } from '../src/stores/player';
+import { useReactPlayerStore } from '../src/react/player-store';
 import type { PlayerHandle } from '../src/lib/player';
 import type { TrackEngine } from '../src/lib/player-tracks';
 import movie from './fixtures/json/item-detail.json';
@@ -40,7 +39,7 @@ vi.mock('../src/vendor/artplayer.min.js', () => ({ default: class {
   constructor(options: { url: string }) { this.url = options.url; mocks.constructorOptions(options); }
 } }));
 
-beforeEach(() => { mocks.supported = true; mocks.engines.length = 0; });
+beforeEach(() => { mocks.supported = true; mocks.engines.length = 0; useReactPlayerStore.setState({ current: null }); });
 afterEach(() => vi.restoreAllMocks());
 
 function host() {
@@ -74,17 +73,14 @@ describe('HLS playback', () => {
     for (const value of ['', 'mp4', 'mkv', 'https://cdn.test/a.mp4?next=.m3u8']) expect(playbackType(value)).toBe('mp4');
   });
   it('selects HLS for movie and trailer entry points', () => {
-    const pinia = createPinia(); setActivePinia(pinia);
-    try {
-      const store = usePlayerStore();
-      store.media({ ...movie.movie, source_container: 'M3U8' });
-      expect(store.current).toMatchObject({ type: 'm3u8', proxyURL: '/Videos/5/proxy' });
-      store.trailer(movie.movie, 'https://cdn.test/trailer.m3u8?token=x');
-      expect(store.current).toMatchObject({ url: '/Videos/5/trailer', type: 'm3u8', itemId: '5' });
-      store.media({ ...movie.movie, source_container: 'webm' });
-      expect(store.current?.type).toBe('webm');
-      store.close();
-    } finally { disposePinia(pinia); }
+    const store = useReactPlayerStore.getState();
+    store.media({ ...movie.movie, source_container: 'M3U8' });
+    expect(useReactPlayerStore.getState().current).toMatchObject({ type: 'm3u8', proxyURL: '/Videos/5/proxy' });
+    store.trailer(movie.movie, 'https://cdn.test/trailer.m3u8?token=x');
+    expect(useReactPlayerStore.getState().current).toMatchObject({ url: '/Videos/5/trailer', type: 'm3u8', itemId: '5' });
+    store.media({ ...movie.movie, source_container: 'webm' });
+    expect(useReactPlayerStore.getState().current?.type).toBe('webm');
+    store.close();
   });
   it('registers the HLS custom type only when opening HLS', async () => {
     const options = { title: 'test', url: '/Videos/5/stream', type: 'm3u8' };

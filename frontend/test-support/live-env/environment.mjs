@@ -114,7 +114,7 @@ export async function startLiveEnvironment(options = {}) {
   assert(Number.isInteger(mediaCount) && mediaCount >= 307 && mediaCount <= 10000, 'Invalid media fixture count');
   assert(!faultAfter || ['root', 'redis', 'media', 'go', 'seed'].includes(faultAfter), 'Unknown fault stage');
   const parent = await fs.realpath(os.tmpdir());
-  const root = await fs.mkdtemp(path.join(parent, 'emby-go-vue-live-'));
+  const root = await fs.mkdtemp(path.join(parent, 'emby-go-react-live-'));
   const owner = randomBytes(24).toString('hex');
   const children = [];
   const ports = {};
@@ -170,7 +170,7 @@ export async function startLiveEnvironment(options = {}) {
       if (!errors.length) {
         const actual = await fs.realpath(root);
         assert.equal(path.dirname(actual), parent, 'Cleanup must stay inside its original temp parent');
-        assert(path.basename(actual).startsWith('emby-go-vue-live-'), 'Unexpected cleanup path');
+        assert(path.basename(actual).startsWith('emby-go-react-live-'), 'Unexpected cleanup path');
         assert(!(await fs.lstat(root)).isSymbolicLink(), 'Refuse symlink cleanup');
         if (marked) assert.equal(await fs.readFile(path.join(root, '.owner'), 'utf8'), owner, 'Ownership marker changed');
         await fs.rm(actual, { recursive: true, maxRetries: 5, retryDelay: 150 });
@@ -223,7 +223,7 @@ export async function startLiveEnvironment(options = {}) {
     ports.go = await unusedPort();
     assert.notEqual(ports.go, ports.redis);
     const serverID = randomBytes(16).toString('hex');
-    const config = { port: ports.go, db_path: path.join(root, 'emby-go.db'), server_name: 'Vue Live Fixture', server_id: serverID, debug: false, redis_addr: `127.0.0.1:${ports.redis}`, redis_password: redisPassword, redis_db: 0, disable_library_monitor: true, library_monitor_mode: 'polling', ffprobe_path: ffprobe, probe_timeout_seconds: 5, probe_concurrency: 1 };
+    const config = { port: ports.go, db_path: path.join(root, 'emby-go.db'), server_name: 'React Live Fixture', server_id: serverID, debug: false, redis_addr: `127.0.0.1:${ports.redis}`, redis_password: redisPassword, redis_db: 0, disable_library_monitor: true, library_monitor_mode: 'polling', ffprobe_path: ffprobe, probe_timeout_seconds: 5, probe_concurrency: 1 };
     const configPath = path.join(root, 'config.yaml');
     // JSON is a YAML subset; let the existing Go YAML parser consume it.
     await fs.writeFile(configPath, JSON.stringify(config, null, 2));

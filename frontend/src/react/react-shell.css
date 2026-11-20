@@ -1,0 +1,42 @@
+.react-page-loading,
+.react-error-page {
+  min-height: 50vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+}
+
+.react-page-loading {
+  color: var(--muted);
+}
+
+.react-page-loading svg {
+  animation: react-loading-spin 1s linear infinite;
+}
+
+.react-error-page {
+  flex-direction: column;
+  text-align: center;
+}
+
+.react-error-page h1,
+.react-error-page p {
+  margin: 0;
+}
+
+.react-error-page .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+@keyframes react-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-page-loading svg { animation: none; }
+}

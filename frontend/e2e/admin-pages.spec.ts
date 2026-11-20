@@ -17,7 +17,7 @@ test('management pages preserve layout, navigation, settings read-only and histo
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     if (name === 'settings') { await expect(page.locator('#content')).toContainText('Redis 在线'); expect(await page.locator('#content input, #content form').count()).toBe(0); }
     if (name === 'tasks') { await expect(page.locator('#content')).toContainText('增量扫描媒体库'); await page.locator('#task-refresh').click(); await expect(page.locator('#content')).toContainText('成功'); }
-    await page.screenshot({ path: info.outputPath(`vue-${name}.png`), fullPage: true, animations: 'disabled',
+    await page.screenshot({ path: info.outputPath(`react-${name}.png`), fullPage: true, animations: 'disabled',
       mask: [page.locator('input, textarea, [data-private-path], [data-secret], .lib-path')], maskColor: '#262b31' });
   }
   expect(errors).toEqual([]);

@@ -56,7 +56,7 @@ try {
     report.targets.push({ target: `${goos}/${goarch}`, size: (await stat(binary)).size, sha256: createHash('sha256').update(await readFile(binary)).digest('hex'), metadata, executed: false });
     console.log(`PASS ${goos}/${goarch}`);
   }
-  // Keep the pre-migration baseline stable after the Vue migration is committed.
+  // Keep the pre-migration baseline stable after the React migration is committed.
   const previousCommit = (await execute('git', ['rev-parse', '--verify', `${previousRef}^{commit}`], root)).trim();
   const previous = path.join(temporary, 'previous-source'); await mkdir(previous);
   const archive = path.join(temporary, 'previous.tar');

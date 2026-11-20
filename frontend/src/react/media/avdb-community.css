@@ -1,0 +1,75 @@
+.react-avdb-community { min-width: 0; }
+.react-avdb-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.react-avdb-heading h2 { min-width: 0; margin: 0; }
+.react-avdb-heading h2 svg { color: var(--accent); }
+.react-avdb-source { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; margin: 0 0 11px; }
+.react-avdb-source > .mono { min-height: 23px; display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--panel-2); font-size: 10px; }
+.react-avdb-source label { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 10px; }
+.react-avdb-source select { max-width: min(100%, 250px); min-width: 120px; height: 29px; padding: 0 25px 0 8px; font-size: 10px; }
+.react-avdb-detail-link { display: inline-flex; align-items: center; gap: 4px; min-height: 27px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--accent); background: var(--panel-2); font-size: 10px; text-decoration: none; }
+.react-avdb-detail-link:hover { border-color: var(--accent); }
+.react-avdb-muted,
+.react-avdb-help { color: var(--dim); font-size: 10px; }
+.react-avdb-help { margin: 9px 0; }
+.react-avdb-state,
+.react-avdb-error { margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--panel-2); font-size: 11px; line-height: 1.5; }
+.react-avdb-state p,
+.react-avdb-error p { margin: 0; }
+.react-avdb-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px; color: var(--danger); }
+.react-avdb-tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--line); }
+.react-avdb-tabs button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; color: var(--dim); background: transparent; font: 11px var(--font-sans); cursor: pointer; }
+.react-avdb-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); font-weight: 600; }
+.react-avdb-content { min-width: 0; padding-top: 10px; }
+.react-avdb-reviews { display: grid; gap: 7px; }
+.react-avdb-review { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+.react-avdb-review-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; color: var(--dim); font-size: 9px; }
+.react-avdb-review-meta strong { color: var(--text); font-size: 10px; }
+.react-avdb-review > p { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.react-avdb-pagination { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: 10px; color: var(--dim); font-size: 10px; }
+.react-avdb-pagination .react-detail-action { min-height: 29px; }
+.react-avdb-lists { display: grid; gap: 5px; }
+.react-avdb-list-row { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 6px; min-width: 0; }
+.react-avdb-list { min-width: 0; min-height: 48px; display: grid; grid-template-columns: 23px minmax(0, 1fr) 16px; align-items: center; gap: 8px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--panel-2); text-align: left; cursor: pointer; }
+.react-avdb-list:hover,
+.react-avdb-list.is-selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--text); background: var(--accent-soft); }
+.react-avdb-list > svg:first-child { color: var(--accent); }
+.react-avdb-list > span { display: grid; gap: 3px; min-width: 0; }
+.react-avdb-list strong,
+.react-avdb-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.react-avdb-list strong { font-size: 11px; }
+.react-avdb-list small { color: var(--dim); font-size: 9px; }
+.react-avdb-list .lucide-chevron-down { transition: transform .15s ease; }
+.react-avdb-list[aria-expanded="true"] .lucide-chevron-down { transform: rotate(180deg); }
+.react-avdb-list-favorite { width: 32px; height: 32px; flex-basis: 32px; align-self: center; }
+.react-avdb-movie-list { min-width: 0; margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
+.react-avdb-movie-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 9px; margin-bottom: 9px; }
+.react-avdb-movie-heading h3 { min-width: 0; margin: 0; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.react-avdb-movie-heading > span { color: var(--dim); font-size: 9px; }
+.react-avdb-movies { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 142px), 1fr)); gap: 9px; }
+.react-avdb-movie-card { display: grid; align-content: start; gap: 6px; min-width: 0; }
+.react-avdb-movie-link { display: grid; min-width: 0; color: inherit; text-decoration: none; }
+.react-avdb-cover { position: relative; display: grid; aspect-ratio: 2 / 3; overflow: hidden; place-items: center; border: 1px solid var(--line); border-radius: 5px; color: var(--dim); background: var(--panel); }
+.react-avdb-cover img { width: 100%; height: 100%; object-fit: cover; transition: transform .18s ease; }
+.react-avdb-movie-link:hover .react-avdb-cover img { transform: scale(1.025); }
+.react-avdb-local-badge { position: absolute; right: 5px; bottom: 5px; display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 10px); min-height: 20px; padding: 2px 6px; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 4px; color: #fff; background: rgba(16,20,29,.84); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; backdrop-filter: blur(7px); }
+.react-avdb-local-badge.is-local { color: #d6fff0; border-color: rgba(51,205,153,.44); background: rgba(14,88,68,.88); }
+.react-avdb-movie-copy { display: grid; gap: 3px; min-width: 0; }
+.react-avdb-movie-copy .mono { color: var(--dim); font-size: 9px; }
+.react-avdb-movie-copy h4 { display: -webkit-box; margin: 0; overflow: hidden; color: var(--text); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.react-avdb-local-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.react-avdb-local-actions .react-detail-action { min-height: 27px; padding-inline: 6px; font-size: 9px; }
+.react-avdb-community .react-tv-load-more { width: 100%; margin-top: 9px; }
+
+@media (max-width: 760px) {
+  .react-avdb-heading { align-items: flex-start; }
+  .react-avdb-heading h2 { font-size: 12px; }
+  .react-avdb-heading .react-detail-action { min-height: 28px; padding-inline: 7px; font-size: 9px; }
+  .react-avdb-movies { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .react-avdb-movie-list { padding: 8px; }
+  .react-avdb-local-actions .react-detail-action { width: 100%; justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-avdb-cover img,
+  .react-avdb-list .lucide-chevron-down { transition: none; }
+}

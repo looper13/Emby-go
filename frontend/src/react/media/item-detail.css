@@ -1,0 +1,179 @@
+.react-item-detail { display: grid; gap: 14px; min-width: 0; }
+.react-detail-loading { min-height: 260px; display: grid; align-content: center; justify-items: center; gap: 10px; padding: 24px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--panel); text-align: center; }
+.react-detail-loading p { margin: 0; }
+.react-item-hero { position: relative; isolation: isolate; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #0c101a; }
+.react-item-hero-image,
+.react-item-hero-scrim { position: absolute; z-index: -2; inset: 0; overflow: hidden; }
+.react-item-hero-image img { width: 100%; height: 100%; object-fit: cover; object-position: center 32%; filter: saturate(.85) brightness(.64); transform: scale(1.025); }
+.react-item-hero-scrim { z-index: -1; background: linear-gradient(90deg, rgba(8, 11, 18, .97) 0%, rgba(8, 11, 18, .87) 38%, rgba(8, 11, 18, .58) 72%, rgba(8, 11, 18, .42) 100%), linear-gradient(0deg, rgba(8, 11, 18, .86), transparent 72%); }
+[data-theme="light"] .react-item-hero-scrim { background: linear-gradient(90deg, rgba(17, 20, 29, .93), rgba(17, 20, 29, .75) 45%, rgba(17, 20, 29, .44)), linear-gradient(0deg, rgba(17, 20, 29, .56), transparent 72%); }
+.react-item-hero-topbar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 14px 0; }
+.react-item-navigation { display: inline-flex; gap: 6px; }
+.react-item-hero .react-detail-action { min-height: 31px; color: rgba(255,255,255,.9); border-color: rgba(255,255,255,.15); background: rgba(8,11,18,.45); backdrop-filter: blur(10px); }
+.react-item-hero .react-detail-action:hover:not(:disabled) { color: #fff; border-color: rgba(255,255,255,.3); background: rgba(8,11,18,.7); }
+.react-item-hero-body { display: grid; grid-template-columns: minmax(190px, 250px) minmax(0, 1fr); align-items: end; gap: 28px; min-height: 428px; padding: 10px 24px 24px; }
+.react-item-poster-wrap { width: 100%; aspect-ratio: 2 / 3; overflow: hidden; border: 1px solid rgba(255,255,255,.2); border-radius: 7px; background: rgba(255,255,255,.06); box-shadow: 0 12px 28px rgba(0,0,0,.42); }
+.react-item-poster { display: grid; width: 100%; height: 100%; object-fit: cover; }
+.react-item-poster.react-detail-image-placeholder { min-height: 0; place-items: center; }
+.react-item-hero-copy { display: grid; align-content: end; justify-items: start; gap: 9px; min-width: 0; color: #f4f4f6; }
+.react-item-eyebrow { margin: 0; color: #c5baff; font-size: 12px; font-weight: 600; }
+.react-item-title-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-width: 0; }
+.react-item-title-row h1 { min-width: 0; margin: 0; color: #fff; font-size: 30px; line-height: 1.2; overflow-wrap: anywhere; }
+.react-item-title-row .favorite-button { flex: 0 0 36px; color: #fff; border-color: rgba(255,255,255,.2); background: rgba(10,13,22,.4); }
+.react-item-title-row .favorite-button:hover,
+.react-item-title-row .favorite-button.selected { color: #ff8ba0; border-color: rgba(255,139,160,.55); }
+.react-item-original { margin: -3px 0 0; color: rgba(255,255,255,.68); font-size: 13px; overflow-wrap: anywhere; }
+.react-item-meta-pills,
+.react-item-tech-badges,
+.react-item-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.react-item-meta-pills > span { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 2px 7px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; color: rgba(255,255,255,.83); background: rgba(6,9,16,.34); font-size: 11px; }
+.react-item-meta-pills .react-item-rating { color: #f1c45c; border-color: rgba(241,196,92,.3); }
+.react-item-meta-pills .react-item-status { color: #fff; border-color: transparent; background: rgba(51,65,85,.85); }
+.react-item-meta-pills .status-success { background: rgba(16,126,95,.8); }
+.react-item-meta-pills .status-pending { background: rgba(166,107,22,.86); }
+.react-item-meta-pills .status-incompatible,
+.react-item-meta-pills .status-failed { background: rgba(153,47,57,.84); }
+.react-item-tech-badges > span { min-height: 21px; display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; color: #f0f2fa; background: rgba(10,13,22,.56); font: 600 10px/1.25 var(--font-mono, monospace); }
+.react-item-tags button { max-width: 100%; min-height: 22px; padding: 2px 7px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; color: rgba(255,255,255,.88); background: rgba(10,13,22,.44); font: 10px var(--font-sans); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.react-item-tags button:hover { color: #fff; border-color: var(--accent); }
+.react-item-plot-short { display: -webkit-box; max-width: 960px; margin: 0; overflow: hidden; color: rgba(255,255,255,.8); font-size: 12px; line-height: 1.65; white-space: pre-wrap; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.react-item-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 2px; }
+.react-item-actions .react-detail-play-button { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 15px; border: 1px solid var(--accent); border-radius: 6px; color: #fff; background: var(--accent); font: 600 12px var(--font-sans); cursor: pointer; }
+.react-item-actions .react-detail-play-button:hover { background: var(--accent-strong); }
+.react-item-actions .react-detail-action { min-height: 36px; }
+.react-item-unplayable { color: #ffc477; font-size: 11px; }
+.react-detail-version { display: grid; gap: 4px; width: min(360px, 100%); color: rgba(255,255,255,.72); font-size: 10px; }
+.react-detail-version select { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid rgba(255,255,255,.2); border-radius: 5px; color: #fff; background: rgba(10,13,22,.72); font: 11px var(--font-sans); }
+.react-item-sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.react-item-sections .detail-section { min-width: 0; padding: 15px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.react-item-sections .detail-section h3,
+.react-avdb-community h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 11px; color: var(--text); font-size: 14px; line-height: 1.35; letter-spacing: 0; text-transform: none; }
+.react-item-sections .detail-section h3::before { width: 4px; height: 16px; flex: 0 0 4px; border-radius: 3px; background: var(--accent); content: ''; }
+.react-item-sections .detail-section h3 small { color: var(--dim); font-size: 11px; font-weight: 400; }
+.react-detail-plot { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.react-detail-plot.is-clamped { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 5; }
+.react-detail-text-button,
+.react-avdb-text-button { min-height: 28px; margin-top: 6px; padding: 0; border: 0; color: var(--accent); background: transparent; font: 600 11px var(--font-sans); cursor: pointer; }
+.react-detail-trailer { position: relative; display: block; width: min(460px, 100%); aspect-ratio: 16 / 9; overflow: hidden; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); cursor: pointer; }
+.react-detail-trailer img { width: 100%; height: 100%; object-fit: cover; }
+.react-detail-trailer > span { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(0,0,0,.18); }
+.react-detail-trailer > span svg { filter: drop-shadow(0 2px 8px #000); }
+.react-detail-artwork-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 9px; }
+.react-detail-artwork-thumb { display: block; min-width: 0; overflow: hidden; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); cursor: zoom-in; }
+.react-detail-artwork-thumb img,
+.react-detail-artwork-thumb > .react-detail-image-placeholder { display: grid; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.react-detail-artwork-thumb:hover,
+.react-detail-artwork-thumb:focus-visible { border-color: var(--accent); outline: 0; }
+.react-detail-actors { display: flex; gap: 13px; overflow-x: auto; padding: 3px 2px 9px; scrollbar-width: thin; }
+.react-detail-actor { display: grid; flex: 0 0 76px; justify-items: center; gap: 7px; min-width: 0; }
+.react-detail-actor > button:first-child { display: grid; justify-items: center; gap: 6px; width: 100%; min-width: 0; padding: 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; }
+.react-detail-actor img,
+.react-detail-avatar-fallback { display: grid; width: 58px; height: 58px; place-items: center; border: 1px solid var(--line); border-radius: 50%; object-fit: cover; color: var(--dim); background: var(--panel-2); font-size: 20px; }
+.react-detail-actor small { width: 100%; overflow: hidden; color: var(--muted); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.react-detail-actor .favorite-button { width: 26px; height: 26px; flex-basis: 26px; }
+.react-detail-actor .favorite-button svg { width: 13px; height: 13px; }
+.react-detail-muted { margin: 0; color: var(--dim); font-size: 11px; }
+.react-detail-similar-heading { min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+.react-detail-similar-heading h3 { margin: 0 !important; }
+.react-detail-similar-nav { display: flex; flex: 0 0 auto; gap: 5px; }
+.react-detail-similar-nav .react-icon-button { width: 30px; height: 30px; }
+.react-detail-similar-row { display: grid; grid-auto-columns: minmax(108px, 142px); grid-auto-flow: column; gap: 10px; overflow-x: auto; padding: 2px 0 6px; scroll-snap-type: x proximity; }
+.react-detail-similar { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 0; border: 0; color: var(--text); background: transparent; text-align: left; cursor: pointer; scroll-snap-align: start; }
+.react-detail-similar-poster { display: grid; width: 100%; aspect-ratio: 2 / 3; overflow: hidden; place-items: center; border: 1px solid var(--line); border-radius: 5px; color: var(--dim); background: var(--panel-2); }
+.react-detail-similar-poster img { width: 100%; height: 100%; object-fit: cover; }
+.react-detail-similar strong,
+.react-detail-similar small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.react-detail-similar strong { font-size: 10px; }
+.react-detail-similar small { color: var(--dim); font-size: 9px; }
+.react-detail-metadata { display: grid; gap: 0; margin: 0; }
+.react-detail-meta-row { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.react-detail-meta-row:last-child { border-bottom: 0; }
+.react-detail-meta-row dt { color: var(--dim); font-size: 11px; }
+.react-detail-meta-row dd { display: flex; flex-wrap: wrap; gap: 5px 8px; min-width: 0; margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.react-detail-meta-row dd button { padding: 0; border: 0; color: var(--accent); background: transparent; font: inherit; cursor: pointer; }
+.react-detail-meta-row dd button:hover { text-decoration: underline; text-underline-offset: 2px; }
+.react-detail-file { min-width: 0; margin: 0 0 9px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+.react-detail-file:last-child { margin-bottom: 0; }
+.react-detail-file-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; margin-bottom: 8px; }
+.react-detail-file-head strong { font-size: 11px; }
+.react-detail-file-head .mono { flex: 1 1 220px; min-width: 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.react-detail-file-head small { color: var(--dim); font-size: 10px; }
+.react-detail-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 5px; }
+.react-detail-table-wrap table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.react-detail-table-wrap th,
+.react-detail-table-wrap td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.react-detail-table-wrap th { color: var(--dim); background: var(--panel); font-weight: 500; white-space: nowrap; }
+.react-detail-table-wrap tr:last-child td { border-bottom: 0; }
+.react-detail-path-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; }
+.react-detail-path-row p { flex: 1; min-width: 0; margin: 0; color: var(--dim); font-size: 10px; overflow-wrap: anywhere; }
+.react-detail-file-timeline summary { min-height: 20px; color: var(--muted); font-size: 11px; cursor: pointer; }
+.react-detail-file-timeline[open] summary { margin-bottom: 10px; }
+.react-detail-image-placeholder { display: grid; place-items: center; color: var(--dim); background: var(--panel-2); }
+.react-detail-image-placeholder svg { opacity: .65; }
+.react-artwork-overlay { position: fixed; z-index: 85; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2,4,9,.88); }
+.react-artwork-shell { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1180px, 100%); height: min(860px, 100%); min-height: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 7px; background: #07090f; }
+.react-artwork-head { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 10px 0 14px; border-bottom: 1px solid rgba(255,255,255,.12); color: #fff; font-size: 11px; }
+.react-artwork-head .react-icon-button { color: #fff; }
+.react-artwork-stage { position: relative; display: grid; min-height: 0; place-items: center; }
+.react-artwork-image { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.react-artwork-nav { position: absolute; z-index: 2; top: 50%; width: 40px; height: 48px; display: grid; place-items: center; transform: translateY(-50%); border: 1px solid rgba(255,255,255,.16); border-radius: 5px; color: #fff; background: rgba(0,0,0,.52); cursor: pointer; }
+.react-artwork-nav:hover { background: rgba(0,0,0,.8); }
+.react-artwork-nav.is-prev { left: 10px; }
+.react-artwork-nav.is-next { right: 10px; }
+.react-artwork-preload { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+
+@media (max-width: 760px) {
+  .react-item-detail { gap: 10px; }
+  .react-item-hero-topbar { min-height: 40px; padding: 7px 8px 0; }
+  .react-item-hero .react-detail-action { min-height: 28px; padding-inline: 7px; font-size: 10px; }
+  .react-item-hero-body { grid-template-columns: 94px minmax(0, 1fr); align-items: center; gap: 10px; min-height: 210px; padding: 8px 9px 11px; }
+  .react-item-poster-wrap { align-self: center; }
+  .react-item-hero-copy { gap: 6px; }
+  .react-item-title-row { align-items: flex-start; gap: 5px; }
+  .react-item-title-row h1 { font-size: 17px; line-height: 1.23; }
+  .react-item-title-row .favorite-button { width: 30px; height: 30px; flex-basis: 30px; }
+  .react-item-original { margin: 0; font-size: 10px; }
+  .react-item-meta-pills { gap: 3px; }
+  .react-item-meta-pills > span { min-height: 19px; padding: 1px 4px; font-size: 9px; }
+  .react-item-tech-badges { gap: 3px; }
+  .react-item-tech-badges > span { min-height: 18px; padding: 1px 4px; font-size: 8px; }
+  .react-item-tags { display: none; }
+  .react-item-plot-short { font-size: 9px; line-height: 1.4; -webkit-line-clamp: 2; }
+  .react-item-actions { gap: 4px; margin-top: 0; }
+  .react-item-actions .react-detail-play-button { min-height: 32px; gap: 4px; padding-inline: 9px; font-size: 10px; }
+  .react-item-actions .react-detail-action { width: 30px; min-height: 30px; justify-content: center; padding: 0; }
+  .react-item-actions .react-detail-action span { display: none; }
+  .react-item-unplayable { font-size: 9px; }
+  .react-detail-version { grid-column: 1 / -1; width: 100%; }
+  .react-detail-playback { grid-column: 1 / -1; margin: 0; }
+  .react-detail-track-fields { align-items: stretch; gap: 5px; }
+  .react-detail-track-fields label { flex-basis: calc(50% - 4px); font-size: 9px; }
+  .react-detail-track-fields select { height: 30px; font-size: 10px; }
+  .react-detail-track-fields .react-external-player { width: 100%; }
+  .react-detail-track-fields .react-external-player > button { width: 100%; min-height: 30px; justify-content: center; }
+  .react-item-sections { gap: 9px; }
+  .react-item-sections .detail-section { padding: 12px; }
+  .react-item-sections .detail-section h3,
+  .react-avdb-community h2 { margin-bottom: 9px; font-size: 13px; }
+  .react-detail-artwork-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .react-detail-actors { gap: 11px; }
+  .react-detail-similar-row { grid-auto-columns: minmax(98px, 29vw); gap: 7px; }
+  .react-detail-meta-row { grid-template-columns: 62px minmax(0, 1fr); gap: 6px; padding: 7px 0; }
+  .react-detail-table-wrap { max-width: calc(100vw - 54px); }
+  .react-detail-file-head { align-items: flex-start; }
+  .react-artwork-overlay { padding: 8px; }
+  .react-artwork-shell { width: 100%; height: min(78dvh, 800px); }
+  .react-artwork-nav { width: 34px; height: 40px; }
+}
+
+@media (max-width: 380px) {
+  .react-item-hero-body { grid-template-columns: 82px minmax(0, 1fr); gap: 8px; min-height: 195px; padding-inline: 7px; }
+  .react-item-title-row h1 { font-size: 15px; }
+  .react-item-meta-pills > span { font-size: 8px; }
+  .react-item-actions .react-detail-play-button { min-height: 29px; padding-inline: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-item-hero-image img { transform: none; }
+  .react-detail-similar-row { scroll-behavior: auto; }
+}
